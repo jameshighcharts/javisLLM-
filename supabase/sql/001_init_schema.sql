@@ -122,18 +122,18 @@ for select to anon, authenticated using (true);
 -- Service role bypasses RLS for server-side sync scripts.
 drop policy if exists prompt_queries_write_auth on public.prompt_queries;
 drop policy if exists prompt_queries_write_public on public.prompt_queries;
-create policy prompt_queries_write_public on public.prompt_queries
-for all to anon, authenticated using (true) with check (true);
+create policy prompt_queries_write_auth on public.prompt_queries
+for all to authenticated using (true) with check (true);
 
 drop policy if exists competitors_write_auth on public.competitors;
 drop policy if exists competitors_write_public on public.competitors;
-create policy competitors_write_public on public.competitors
-for all to anon, authenticated using (true) with check (true);
+create policy competitors_write_auth on public.competitors
+for all to authenticated using (true) with check (true);
 
 drop policy if exists competitor_aliases_write_auth on public.competitor_aliases;
 drop policy if exists competitor_aliases_write_public on public.competitor_aliases;
-create policy competitor_aliases_write_public on public.competitor_aliases
-for all to anon, authenticated using (true) with check (true);
+create policy competitor_aliases_write_auth on public.competitor_aliases
+for all to authenticated using (true) with check (true);
 
 drop policy if exists benchmark_runs_write_auth on public.benchmark_runs;
 create policy benchmark_runs_write_auth on public.benchmark_runs

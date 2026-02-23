@@ -42,6 +42,21 @@ const toggleSchema = z.object({
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
+const isProduction = process.env.NODE_ENV === "production";
+
+function sendApiError(
+  res: express.Response,
+  statusCode: number,
+  message: string,
+  error: unknown,
+) {
+  console.error(`[ui-api] ${message}`, error);
+  const payload: Record<string, unknown> = { error: message };
+  if (!isProduction) {
+    payload.details = String(error);
+  }
+  res.status(statusCode).json(payload);
+}
 
 function uniqueNonEmpty(values: string[]): string[] {
   const normalized = values.map((value) => value.trim()).filter(Boolean);
@@ -161,7 +176,7 @@ function inferWindowFromJsonl(rows: Array<Record<string, unknown>>): {
 }
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, repoRoot });
+  res.json({ ok: true, service: "ui-api", repoRoot: "ui-api" });
 });
 
 app.get("/api/config", async (_req, res) => {
@@ -170,17 +185,14 @@ app.get("/api/config", async (_req, res) => {
     res.json({
       config,
       meta: {
-        path: configPath,
+        source: "config/benchmark_config.json",
         updatedAt: stats.mtime.toISOString(),
         queries: config.queries.length,
         competitors: config.competitors.length,
       },
     });
   } catch (error) {
-    res.status(500).json({
-      error: "Unable to load benchmark config.",
-      details: String(error),
-    });
+    sendApiError(res, 500, "Unable to load benchmark config.", error);
   }
 });
 
@@ -193,7 +205,7 @@ app.put("/api/config", async (req, res) => {
     res.json({
       config: normalized,
       meta: {
-        path: configPath,
+        source: "config/benchmark_config.json",
         updatedAt: stats.mtime.toISOString(),
       },
     });
@@ -206,10 +218,7 @@ app.put("/api/config", async (req, res) => {
       return;
     }
 
-    res.status(400).json({
-      error: "Could not save config.",
-      details: String(error),
-    });
+    sendApiError(res, 500, "Could not save config.", error);
   }
 });
 
@@ -233,7 +242,7 @@ app.patch("/api/prompts/toggle", async (req, res) => {
       res.status(400).json({ error: "Invalid payload.", issues: error.issues });
       return;
     }
-    res.status(500).json({ error: "Failed to toggle prompt.", details: String(error) });
+    sendApiError(res, 500, "Failed to toggle prompt.", error);
   }
 });
 
@@ -342,10 +351,7 @@ app.get("/api/dashboard", async (_req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({
-      error: "Unable to build dashboard response.",
-      details: String(error),
-    });
+    sendApiError(res, 500, "Unable to build dashboard response.", error);
   }
 });
 
@@ -409,7 +415,7 @@ app.get("/api/timeseries", async (_req, res) => {
 
     res.json({ ok: true, competitors: config.competitors, points });
   } catch (error) {
-    res.status(500).json({ error: "Failed to build time series.", details: String(error) });
+    sendApiError(res, 500, "Failed to build time series.", error);
   }
 });
 

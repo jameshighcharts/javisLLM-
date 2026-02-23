@@ -39,9 +39,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       PYTHONUNBUFFERED: "1"
     steps:
       - name: Checkout
@@ -59,8 +56,9 @@ jobs:
 
       - name: Build run metadata
         id: meta
+        env:
+          RUN_MONTH_INPUT: ${{ github.event.inputs.run_month }}
         run: |
-          RUN_MONTH_INPUT="${{ github.event.inputs.run_month }}"
           if [[ -n "${RUN_MONTH_INPUT}" ]]; then
             RUN_MONTH="${RUN_MONTH_INPUT}"
           else
@@ -73,18 +71,22 @@ jobs:
           echo "RUN_ID=${RUN_ID}" >> "$GITHUB_ENV"
 
       - name: Pull live config from Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           python scripts/pull_config_from_supabase.py \
             --output config/benchmark_config.json
 
       - name: Run prompt benchmark
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          RUNS_INPUT: ${{ github.event.inputs.runs }}
+          TEMP_INPUT: ${{ github.event.inputs.temperature }}
+          OUR_TERMS_INPUT: ${{ github.event.inputs.our_terms }}
+          MODEL_INPUT: ${{ github.event.inputs.model }}
+          WEB_SEARCH_INPUT: ${{ github.event.inputs.web_search }}
         run: |
-          RUNS_INPUT="${{ github.event.inputs.runs }}"
-          TEMP_INPUT="${{ github.event.inputs.temperature }}"
-          OUR_TERMS_INPUT="${{ github.event.inputs.our_terms }}"
-          MODEL_INPUT="${{ github.event.inputs.model }}"
-          WEB_SEARCH_INPUT="${{ github.event.inputs.web_search }}"
-
           CMD=(
             python llm_mention_benchmark.py
             --our-terms "${OUR_TERMS_INPUT}"
@@ -107,6 +109,9 @@ jobs:
             --run-id "${RUN_ID}"
 
       - name: Sync config + run data to Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           python scripts/push_to_supabase.py \
             --config config/benchmark_config.json \

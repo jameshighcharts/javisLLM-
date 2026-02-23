@@ -1,9 +1,12 @@
 const {
   dispatchWorkflow,
+  enforceRateLimit,
   enforceTriggerToken,
   getGitHubConfig,
   listWorkflowRuns,
 } = require('../_github')
+
+const DEFAULT_MODEL = 'gpt-4o-mini'
 
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode
@@ -37,6 +40,31 @@ function normalizeNumber(value, fallback, min, max) {
   return bounded
 }
 
+function getAllowedModels() {
+  const raw = process.env.BENCHMARK_ALLOWED_MODELS || ''
+  const configured = String(raw)
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)
+
+  return configured.length > 0 ? configured : [DEFAULT_MODEL]
+}
+
+function resolveModel(modelInput, allowedModels) {
+  const normalizedMap = new Map(
+    allowedModels.map((name) => [name.toLowerCase(), name]),
+  )
+  const resolved = normalizedMap.get(modelInput.toLowerCase())
+  if (!resolved) {
+    const error = new Error(
+      `Unsupported model "${modelInput}". Allowed models: ${allowedModels.join(', ')}`,
+    )
+    error.statusCode = 400
+    throw error
+  }
+  return resolved
+}
+
 function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms)
@@ -61,15 +89,34 @@ module.exports = async (req, res) => {
       return sendJson(res, 405, { error: 'Method not allowed. Use POST.' })
     }
 
+    const rateLimitMax = Math.round(
+      normalizeNumber(process.env.BENCHMARK_TRIGGER_RATE_MAX, 5, 1, 100),
+    )
+    const rateLimitWindowMs = Math.round(
+      normalizeNumber(
+        process.env.BENCHMARK_TRIGGER_RATE_WINDOW_MS,
+        60 * 1000,
+        15 * 1000,
+        60 * 60 * 1000,
+      ),
+    )
+    enforceRateLimit(req, {
+      bucket: 'benchmark-trigger',
+      max: rateLimitMax,
+      windowMs: rateLimitWindowMs,
+    })
+
     enforceTriggerToken(req)
     const config = getGitHubConfig()
     const body = parseBody(req)
     const triggerId = `ui-${Date.now()}`
+    const allowedModels = getAllowedModels()
 
-    const model =
+    const requestedModel =
       typeof body.model === 'string' && body.model.trim()
         ? body.model.trim()
-        : 'gpt-4o-mini'
+        : DEFAULT_MODEL
+    const model = resolveModel(requestedModel, allowedModels)
     const ourTerms =
       typeof body.ourTerms === 'string' && body.ourTerms.trim()
         ? body.ourTerms.trim()
@@ -110,6 +157,13 @@ module.exports = async (req, res) => {
       typeof error === 'object' && error !== null && Number(error.statusCode)
         ? Number(error.statusCode)
         : 500
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      Number(error.retryAfterSeconds)
+    ) {
+      res.setHeader('Retry-After', String(Math.round(Number(error.retryAfterSeconds))))
+    }
     return sendJson(res, statusCode, {
       error: error instanceof Error ? error.message : String(error),
     })

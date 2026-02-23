@@ -80,15 +80,15 @@ export default function Runs() {
   const [showAdvanced, setShowAdvanced] = useState(false)
 
   useEffect(() => {
-    const saved = window.localStorage.getItem('benchmark_trigger_token')
+    const saved = window.sessionStorage.getItem('benchmark_trigger_token')
     if (saved) setTriggerToken(saved)
   }, [])
 
   useEffect(() => {
     if (triggerToken.trim()) {
-      window.localStorage.setItem('benchmark_trigger_token', triggerToken.trim())
+      window.sessionStorage.setItem('benchmark_trigger_token', triggerToken.trim())
     } else {
-      window.localStorage.removeItem('benchmark_trigger_token')
+      window.sessionStorage.removeItem('benchmark_trigger_token')
     }
   }, [triggerToken])
 
@@ -280,14 +280,14 @@ export default function Runs() {
                     />
                   </label>
                   <label className="space-y-1">
-                    <span className="text-xs font-medium" style={{ color: '#7A8E7C' }}>Trigger token (optional)</span>
+                    <span className="text-xs font-medium" style={{ color: '#7A8E7C' }}>Trigger token</span>
                     <input
                       type="password"
                       value={triggerToken}
                       onChange={(e) => setTriggerToken(e.target.value)}
                       className="w-full px-3 py-2 rounded-lg text-sm"
                       style={inputStyle}
-                      placeholder="If BENCHMARK_TRIGGER_TOKEN is enabled"
+                      placeholder="Required by /api/benchmark endpoints"
                     />
                   </label>
                 </div>

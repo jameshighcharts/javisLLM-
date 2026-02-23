@@ -66,16 +66,18 @@ export interface BenchmarkConfig {
 export interface ConfigResponse {
   config: BenchmarkConfig
   meta: {
-    path: string
+    path?: string
+    source?: string
     updatedAt: string
-    queries: number
-    competitors: number
+    queries?: number
+    competitors?: number
   }
 }
 
 export interface HealthResponse {
   ok: boolean
-  repoRoot: string
+  service?: string
+  repoRoot?: string
 }
 
 export type DiagnosticsStatus = 'pass' | 'warn' | 'fail'

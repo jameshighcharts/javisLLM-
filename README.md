@@ -49,9 +49,15 @@ In Vercel Project Settings -> Environment Variables, set:
 - `GITHUB_TOKEN` (PAT with `repo` + `workflow` access to this repo)
 - `GITHUB_OWNER` (e.g. `jameshighcharts`)
 - `GITHUB_REPO` (e.g. `javisLLM-`)
+- `BENCHMARK_TRIGGER_TOKEN` (required; bearer token for `/api/benchmark/*`)
 - Optional: `GITHUB_WORKFLOW_FILE` (default: `run-benchmark.yml`)
 - Optional: `GITHUB_WORKFLOW_REF` (default: `main`)
-- Optional hardening: `BENCHMARK_TRIGGER_TOKEN`
+- Optional hardening:
+  - `BENCHMARK_ALLOWED_MODELS` (comma-separated model allowlist; default `gpt-4o-mini`)
+  - `BENCHMARK_TRIGGER_RATE_MAX` (default `5` requests)
+  - `BENCHMARK_TRIGGER_RATE_WINDOW_MS` (default `60000` ms)
+  - `BENCHMARK_RUNS_RATE_MAX` (default `30` requests)
+  - `BENCHMARK_RUNS_RATE_WINDOW_MS` (default `60000` ms)
 
 Without these vars, the deployed frontend may fail at runtime because `/api` fallback is local-only.
 
@@ -158,7 +164,7 @@ See `/Users/jamesm/projects/easy_llm_benchmarker/docs/monthly_automation.md`.
 
 Schema SQL:
 - `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/001_init_schema.sql`
-- Optional policy patch (frontend anon writes for config tables):
+- Policy hardening patch (authenticated-only writes for config tables):
   - `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/002_allow_anon_config_writes.sql`
 
 Environment variables:
