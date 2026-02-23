@@ -1,7 +1,7 @@
 query,runs,web_search_enabled,our_brand_yes,our_brand_count,our_brand_rate,d3_js_yes,d3_js_count,d3_js_rate,highcharts_yes,highcharts_count,highcharts_rate,chart_js_yes,chart_js_count,chart_js_rate,echarts_yes,echarts_count,echarts_rate,amcharts_yes,amcharts_count,amcharts_rate,ag_grid_yes,ag_grid_count,ag_grid_rate,ag_chart_yes,ag_chart_count,ag_chart_rate,recharts_yes,recharts_count,recharts_rate,citation_count,viability_index_count,viability_index_rate
-javascript charting libraries,3,yes,yes,3,1.0,yes,3,1.0,yes,3,1.0,yes,3,1.0,yes,3,1.0,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,0,12,0.5
-data visualization library,3,yes,no,0,0.0,yes,3,1.0,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,0,3,0.125
-React graph visualization library,3,yes,no,0,0.0,yes,3,1.0,no,0,0.0,yes,2,0.6667,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,yes,3,1.0,0,8,0.3333
-accessibility charting library,3,yes,yes,3,1.0,yes,3,1.0,yes,3,1.0,yes,3,1.0,yes,2,0.6667,no,0,0.0,no,0,0.0,no,0,0.0,yes,1,0.3333,0,12,0.5
-best charting library only give 1 answer,3,yes,no,0,0.0,no,0,0.0,no,0,0.0,yes,3,1.0,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,0,3,0.125
-OVERALL,15,yes,yes,6,0.4,yes,12,0.8,yes,6,0.4,yes,11,0.7333,yes,5,0.3333,no,0,0.0,no,0,0.0,no,0,0.0,yes,4,0.2667,0,38,0.3167
+javascript charting libraries,1,yes,yes,1,1.0,yes,1,1.0,yes,1,1.0,yes,1,1.0,yes,1,1.0,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,0,4,0.5
+data visualization library,1,yes,no,0,0.0,yes,1,1.0,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,0,1,0.125
+React graph visualization library,1,yes,no,0,0.0,yes,1,1.0,no,0,0.0,yes,1,1.0,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,yes,1,1.0,0,3,0.375
+accessibility charting library,1,yes,yes,1,1.0,yes,1,1.0,yes,1,1.0,yes,1,1.0,yes,1,1.0,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,0,4,0.5
+best charting library only give 1 answer,1,yes,no,0,0.0,no,0,0.0,no,0,0.0,yes,1,1.0,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,no,0,0.0,0,1,0.125
+OVERALL,5,yes,yes,2,0.4,yes,4,0.8,yes,2,0.4,yes,4,0.8,yes,2,0.4,no,0,0.0,no,0,0.0,no,0,0.0,yes,1,0.2,0,13,0.325

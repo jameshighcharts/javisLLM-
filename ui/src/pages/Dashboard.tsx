@@ -190,6 +190,14 @@ function VisibilityChart({
   const hcSeries = competitorSeries.find((s) => s.isHighcharts)
   const rivals = competitorSeries.filter((s) => !s.isHighcharts)
   const rivalIndexMap = new Map(rivals.map((s, i) => [s.entity, i]))
+  const pointTimestamp = (point: TimeSeriesPoint) => {
+    const source = point.timestamp ?? `${point.date}T12:00:00Z`
+    const parsed = Date.parse(source)
+    if (Number.isFinite(parsed)) {
+      return parsed
+    }
+    return Date.parse(`${point.date}T12:00:00Z`)
+  }
 
   if (points.length === 0) {
     return (
@@ -228,7 +236,7 @@ function VisibilityChart({
       zIndex: 2,
       marker: { enabled: points.length <= 3, radius: 4 },
       data: points.map((p) => [
-        Date.parse(p.date + 'T12:00:00Z'),
+        pointTimestamp(p),
         p.rates[hcSeries.entity] ?? 0,
       ]),
     })
@@ -246,7 +254,7 @@ function VisibilityChart({
       zIndex: 1,
       marker: { enabled: points.length <= 3, radius: 3 },
       data: points.map((p) => [
-        Date.parse(p.date + 'T12:00:00Z'),
+        pointTimestamp(p),
         p.rates[rival.entity] ?? 0,
       ]),
     })
@@ -541,7 +549,8 @@ export default function Dashboard() {
     queryKey: ['timeseries'],
     queryFn: api.timeseries,
     retry: false,
-    staleTime: 5 * 60_000,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
   })
 
   const s = data?.summary
@@ -579,20 +588,15 @@ export default function Dashboard() {
     })
   }
 
-  // Build time series points: use JSONL-derived data if available, else derive from competitorSeries
+  // Use only real historical points (Supabase or API).
   const timeseriesPoints = useMemo((): TimeSeriesPoint[] => {
-    if (tsData?.points && tsData.points.length > 0) return tsData.points
-    if (competitorSeries.length === 0) return []
-    // Single synthetic "current" point derived from overall rates
-    const today = new Date().toISOString().split('T')[0]
-    return [
-      {
-        date: today,
-        total: s?.totalResponses ?? 1,
-        rates: Object.fromEntries(competitorSeries.map((cs) => [cs.entity, cs.mentionRatePct])),
-      },
-    ]
-  }, [tsData, competitorSeries, s])
+    if (!tsData?.points?.length) return []
+    return [...tsData.points].sort((left, right) => {
+      const leftSource = left.timestamp ?? `${left.date}T12:00:00Z`
+      const rightSource = right.timestamp ?? `${right.date}T12:00:00Z`
+      return Date.parse(leftSource) - Date.parse(rightSource)
+    })
+  }, [tsData])
 
   if (isError) {
     return (

@@ -60,6 +60,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/dashboard': 'Dashboard',
   '/runs': 'Run Benchmarks',
   '/prompts': 'Prompts',
+  '/prompts/drilldown': 'Prompt Drilldown',
   '/competitors': 'Competitors',
   '/diagnostics': 'Diagnostics',
   '/tests': 'Diagnostics',
@@ -111,7 +112,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             style={{ background: '#4A6B4E', border: '1px solid rgba(255,255,255,0.12)', overflow: 'hidden' }}
           >
             <img
-              src="/rayquaza.png"
+              src="/app-icon.jpg"
               alt="App icon"
               className="w-full h-full object-cover"
             />

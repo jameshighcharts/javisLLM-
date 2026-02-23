@@ -96,6 +96,7 @@ export interface DiagnosticsResponse {
 
 export interface TimeSeriesPoint {
   date: string
+  timestamp?: string
   total: number
   rates: Record<string, number>
 }
@@ -104,6 +105,67 @@ export interface TimeSeriesResponse {
   ok: boolean
   competitors: string[]
   points: TimeSeriesPoint[]
+}
+
+export interface PromptDrilldownCompetitor {
+  id: string
+  entity: string
+  entityKey: string
+  isHighcharts: boolean
+  isActive: boolean
+  mentionCount: number
+  mentionRatePct: number
+}
+
+export interface PromptDrilldownRunPoint {
+  runId: string
+  runMonth: string | null
+  timestamp: string
+  date: string
+  totalResponses: number
+  highchartsRatePct: number
+  viabilityRatePct: number
+  topCompetitor: { entity: string; ratePct: number } | null
+  rates: Record<string, number>
+}
+
+export interface PromptDrilldownResponseItem {
+  id: number
+  runId: string
+  runMonth: string | null
+  runCreatedAt: string | null
+  createdAt: string | null
+  runIteration: number
+  model: string
+  webSearchEnabled: boolean
+  error: string | null
+  responseText: string
+  citations: string[]
+  mentions: string[]
+}
+
+export interface PromptDrilldownResponse {
+  generatedAt: string
+  prompt: {
+    id: string
+    query: string
+    sortOrder: number
+    isPaused: boolean
+    createdAt: string | null
+    updatedAt: string | null
+  }
+  summary: {
+    totalResponses: number
+    trackedRuns: number
+    highchartsRatePct: number
+    viabilityRatePct: number
+    leadPct: number
+    topCompetitor: { entity: string; ratePct: number } | null
+    lastRunAt: string | null
+  }
+  competitors: PromptDrilldownCompetitor[]
+  runPoints: PromptDrilldownRunPoint[]
+  responses: PromptDrilldownResponseItem[]
 }
 
 export interface BenchmarkWorkflowRun {

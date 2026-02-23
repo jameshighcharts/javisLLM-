@@ -1,15 +1,15 @@
 query,entity,mentions_count,mentions_rate,mentioned_yes
-javascript charting libraries,our_brand,3,1.0,yes
-javascript charting libraries,d3.js,3,1.0,yes
-javascript charting libraries,Highcharts,3,1.0,yes
-javascript charting libraries,chart.js,3,1.0,yes
-javascript charting libraries,echarts,3,1.0,yes
+javascript charting libraries,our_brand,1,1.0,yes
+javascript charting libraries,d3.js,1,1.0,yes
+javascript charting libraries,Highcharts,1,1.0,yes
+javascript charting libraries,chart.js,1,1.0,yes
+javascript charting libraries,echarts,1,1.0,yes
 javascript charting libraries,amcharts,0,0.0,no
 javascript charting libraries,AG Grid,0,0.0,no
 javascript charting libraries,AG Chart,0,0.0,no
 javascript charting libraries,Recharts,0,0.0,no
 data visualization library,our_brand,0,0.0,no
-data visualization library,d3.js,3,1.0,yes
+data visualization library,d3.js,1,1.0,yes
 data visualization library,Highcharts,0,0.0,no
 data visualization library,chart.js,0,0.0,no
 data visualization library,echarts,0,0.0,no
@@ -18,38 +18,38 @@ data visualization library,AG Grid,0,0.0,no
 data visualization library,AG Chart,0,0.0,no
 data visualization library,Recharts,0,0.0,no
 React graph visualization library,our_brand,0,0.0,no
-React graph visualization library,d3.js,3,1.0,yes
+React graph visualization library,d3.js,1,1.0,yes
 React graph visualization library,Highcharts,0,0.0,no
-React graph visualization library,chart.js,2,0.6667,yes
+React graph visualization library,chart.js,1,1.0,yes
 React graph visualization library,echarts,0,0.0,no
 React graph visualization library,amcharts,0,0.0,no
 React graph visualization library,AG Grid,0,0.0,no
 React graph visualization library,AG Chart,0,0.0,no
-React graph visualization library,Recharts,3,1.0,yes
-accessibility charting library,our_brand,3,1.0,yes
-accessibility charting library,d3.js,3,1.0,yes
-accessibility charting library,Highcharts,3,1.0,yes
-accessibility charting library,chart.js,3,1.0,yes
-accessibility charting library,echarts,2,0.6667,yes
+React graph visualization library,Recharts,1,1.0,yes
+accessibility charting library,our_brand,1,1.0,yes
+accessibility charting library,d3.js,1,1.0,yes
+accessibility charting library,Highcharts,1,1.0,yes
+accessibility charting library,chart.js,1,1.0,yes
+accessibility charting library,echarts,1,1.0,yes
 accessibility charting library,amcharts,0,0.0,no
 accessibility charting library,AG Grid,0,0.0,no
 accessibility charting library,AG Chart,0,0.0,no
-accessibility charting library,Recharts,1,0.3333,yes
+accessibility charting library,Recharts,0,0.0,no
 best charting library only give 1 answer,our_brand,0,0.0,no
 best charting library only give 1 answer,d3.js,0,0.0,no
 best charting library only give 1 answer,Highcharts,0,0.0,no
-best charting library only give 1 answer,chart.js,3,1.0,yes
+best charting library only give 1 answer,chart.js,1,1.0,yes
 best charting library only give 1 answer,echarts,0,0.0,no
 best charting library only give 1 answer,amcharts,0,0.0,no
 best charting library only give 1 answer,AG Grid,0,0.0,no
 best charting library only give 1 answer,AG Chart,0,0.0,no
 best charting library only give 1 answer,Recharts,0,0.0,no
-OVERALL,our_brand,6,0.4,yes
-OVERALL,d3.js,12,0.8,yes
-OVERALL,Highcharts,6,0.4,yes
-OVERALL,chart.js,11,0.7333,yes
-OVERALL,echarts,5,0.3333,yes
+OVERALL,our_brand,2,0.4,yes
+OVERALL,d3.js,4,0.8,yes
+OVERALL,Highcharts,2,0.4,yes
+OVERALL,chart.js,4,0.8,yes
+OVERALL,echarts,2,0.4,yes
 OVERALL,amcharts,0,0.0,no
 OVERALL,AG Grid,0,0.0,no
 OVERALL,AG Chart,0,0.0,no
-OVERALL,Recharts,4,0.2667,yes
+OVERALL,Recharts,1,0.2,yes

@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
 import Competitors from './pages/Competitors'
 import Dashboard from './pages/Dashboard'
+import PromptDrilldown from './pages/PromptDrilldown'
 import Prompts from './pages/Prompts'
 import Runs from './pages/Runs'
 import Tests from './pages/Tests'
@@ -15,6 +16,7 @@ export default function App() {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/runs" element={<Runs />} />
           <Route path="/prompts" element={<Prompts />} />
+          <Route path="/prompts/drilldown" element={<PromptDrilldown />} />
           <Route path="/competitors" element={<Competitors />} />
           <Route path="/diagnostics" element={<Tests />} />
           <Route path="/tests" element={<Tests />} />

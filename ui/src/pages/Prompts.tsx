@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../api'
 import type { BenchmarkConfig, DashboardResponse, PromptStatus } from '../types'
 
@@ -441,6 +442,12 @@ export default function Prompts() {
         className="rounded-xl border shadow-sm overflow-hidden"
         style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
       >
+        <div
+          className="px-4 py-2.5 text-xs"
+          style={{ color: '#9AAE9C', background: '#FDFCF8', borderBottom: '1px solid #F2EDE6' }}
+        >
+          Click a query to open its drilldown dashboard.
+        </div>
         <table className="w-full border-collapse">
           <thead>
             <tr style={{ borderBottom: '1px solid #F2EDE6', background: '#FDFCF8' }}>
@@ -496,8 +503,21 @@ export default function Prompts() {
                           disabled={isPending}
                         />
                       </td>
-                      <td className="px-4 py-3 text-sm font-medium" style={{ color: paused ? '#9AAE9C' : '#2A3A2C' }}>
-                        {p.query}
+                      <td className="px-4 py-3 text-sm font-medium">
+                        <Link
+                          to={`/prompts/drilldown?query=${encodeURIComponent(p.query)}`}
+                          className="inline-flex items-center gap-1.5"
+                          style={{ color: paused ? '#9AAE9C' : '#2A3A2C' }}
+                        >
+                          <span>{p.query}</span>
+                          <span
+                            className="text-xs"
+                            style={{ color: paused ? '#C8D0C8' : '#8FBB93' }}
+                            aria-hidden
+                          >
+                            ↗
+                          </span>
+                        </Link>
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge status={p.status} isPaused={paused} />
