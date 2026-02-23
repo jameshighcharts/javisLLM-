@@ -257,6 +257,14 @@ function asYesNo(value: unknown): "yes" | "no" {
   return String(value ?? "").toLowerCase() === "yes" ? "yes" : "no";
 }
 
+function isTruthyFlag(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
 function splitCsvish(value: string): string[] {
   return value
     .split(",")
@@ -633,6 +641,7 @@ app.get("/api/timeseries", async (req, res) => {
       patterns: uniqueNonEmpty([name, ...(config.aliases[name] ?? [])]).map((a) =>
         a.toLowerCase(),
       ),
+      mentionKeys: uniqueNonEmpty([slugifyEntity(name)]),
     }));
 
     type DayBucket = { total: number; mentions: Record<string, number> };
@@ -657,16 +666,31 @@ app.get("/api/timeseries", async (req, res) => {
       const date = ts.length >= 10 ? ts.slice(0, 10) : null;
       if (!date) continue;
 
+      const mentionMap =
+        typeof row.mentions === "object" && row.mentions !== null && !Array.isArray(row.mentions)
+          ? (row.mentions as Record<string, unknown>)
+          : null;
+
       // Try various field names for the raw LLM response text
       const responseText = String(
-        row.response ?? row.text ?? row.content ?? row.completion ?? row.output ?? "",
+        row.response_text ??
+          row.response ??
+          row.text ??
+          row.content ??
+          row.completion ??
+          row.output ??
+          "",
       ).toLowerCase();
 
       const entry = byDate.get(date) ?? { total: 0, mentions: {} };
       entry.total++;
 
-      for (const { name, patterns } of competitorPatterns) {
-        if (patterns.some((p) => responseText.includes(p))) {
+      for (const { name, patterns, mentionKeys } of competitorPatterns) {
+        const mentionedFromMap = mentionMap
+          ? mentionKeys.some((key) => isTruthyFlag(mentionMap[key]))
+          : false;
+        const mentionedFromText = patterns.some((p) => responseText.includes(p));
+        if (mentionedFromMap || (!mentionMap && mentionedFromText)) {
           entry.mentions[name] = (entry.mentions[name] ?? 0) + 1;
         }
       }

@@ -123,10 +123,12 @@ function HeaderLabel({
           style={{
             top: 'calc(100% + 6px)',
             width: 230,
+            maxWidth: 'min(230px, calc(100vw - 32px))',
             background: '#FFFFFF',
             borderColor: '#DDD0BC',
             color: '#2A3A2C',
             boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+            whiteSpace: 'normal',
             ...(align === 'right' ? { right: 0 } : { left: 0 }),
           }}
         >

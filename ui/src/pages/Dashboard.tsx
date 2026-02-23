@@ -837,10 +837,20 @@ function SnapshotTrendCard({
             i
           </button>
           <div
-            className="pointer-events-none absolute right-0 top-5 z-20 w-52 rounded-md border px-2 py-1.5 text-[10px] leading-snug opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+            className="pointer-events-none absolute right-0 top-5 z-20 w-72 rounded-md border px-2 py-1.5 text-[10px] leading-snug opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
             style={{ background: '#FFFFFF', borderColor: '#DDD0BC', color: '#6E8472' }}
           >
-            Trend of official AI Visibility score by run. Dashed line is COMBVI.
+            <div>Trend of official AI Visibility score by run. Dashed line is COMBVI.</div>
+            <div className="mt-1">
+              COMBVI = <strong>Competitor Mention Viability Index</strong>.
+            </div>
+            <div className="mt-1">
+              Formula: <code>COMBVI% = (rival mentions / (responses × rival competitors)) × 100</code>.
+            </div>
+            <div className="mt-1">Higher COMBVI means stronger competitor presence (excluding Highcharts).</div>
+            <div className="mt-1">
+              Net Advantage = <code>AI Visibility - COMBVI</code>. Positive values mean Highcharts is ahead.
+            </div>
           </div>
         </div>
       </div>
@@ -1653,10 +1663,12 @@ function ColumnInfoBadge({
         style={{
           top: 'calc(100% + 6px)',
           width: 230,
+          maxWidth: 'min(230px, calc(100vw - 32px))',
           background: '#FFFFFF',
           borderColor: '#DDD0BC',
           color: '#2A3A2C',
           boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+          whiteSpace: 'normal',
           ...(align === 'right' ? { right: 0 } : { left: 0 }),
         }}
       >
@@ -1688,16 +1700,16 @@ function PStatusBadge({ status, isPaused }: { status: PromptStatus['status']; is
 }
 
 function PMiniBar({
-  pct, color = '#8FBB93', muted, hoverLabel,
+  pct, color = '#8FBB93', muted, hoverLabel, trackMinWidth = 64,
 }: {
-  pct: number; color?: string; muted?: boolean; hoverLabel?: string
+  pct: number; color?: string; muted?: boolean; hoverLabel?: string; trackMinWidth?: number
 }) {
   return (
     <div
       className="flex items-center gap-2.5"
       title={hoverLabel ? `${hoverLabel}: ${pct.toFixed(1)}%` : undefined}
     >
-      <div className="flex-1 rounded-full overflow-hidden" style={{ background: '#E5DDD0', height: 4, minWidth: 64 }}>
+      <div className="flex-1 rounded-full overflow-hidden" style={{ background: '#E5DDD0', height: 4, minWidth: trackMinWidth }}>
         <div className="h-full rounded-full"
           style={{ width: `${Math.min(pct, 100)}%`, background: muted ? '#DDD0BC' : color }} />
       </div>
@@ -1733,10 +1745,10 @@ function PromptTagChips({ tags, muted }: { tags: string[]; muted?: boolean }) {
 }
 
 function PSortTh({
-  label, col, current, dir, align = 'left', width, onSort, info,
+  label, col, current, dir, align = 'left', width, onSort, info, infoAlign,
 }: {
   label: string; col: SortKey; current: SortKey | null; dir: 'asc' | 'desc'
-  align?: 'left' | 'right'; width?: string; onSort: (k: SortKey) => void; info?: string
+  align?: 'left' | 'right'; width?: string; onSort: (k: SortKey) => void; info?: string; infoAlign?: 'left' | 'right'
 }) {
   const active = current === col
   return (
@@ -1745,7 +1757,7 @@ function PSortTh({
       onClick={() => onSort(col)}>
       <span className="inline-flex items-center gap-1">
         {label}
-        {info && <ColumnInfoBadge text={info} align={align === 'right' ? 'right' : 'left'} />}
+        {info && <ColumnInfoBadge text={info} align={infoAlign ?? (align === 'right' ? 'right' : 'left')} />}
         <span style={{ fontSize: 9, color: active ? '#8FBB93' : '#DDD0BC', fontWeight: 700 }}>
           {active ? (dir === 'asc' ? '▲' : '▼') : '⬍'}
         </span>
@@ -1901,8 +1913,8 @@ function PromptStatusTable({
               <PSortTh label="Tags" col="tags" current={sortKey} dir={sortDir} onSort={handleSort} width="160px" />
               <PSortTh label="Status" col="status" current={sortKey} dir={sortDir} onSort={handleSort} width="130px" />
               <PSortTh
-                label="Highcharts Mention Rate" col="highchartsRatePct" current={sortKey} dir={sortDir}
-                onSort={handleSort} width="190px"
+                label="HC mention Rate" col="highchartsRatePct" current={sortKey} dir={sortDir}
+                onSort={handleSort} width="172px" infoAlign="right"
                 info="The share of LLM responses for this prompt that explicitly mention Highcharts. Bar = mention rate %."
               />
               <PSortTh
@@ -1975,7 +1987,7 @@ function PromptStatusTable({
                     <td className="px-4 py-3"><PStatusBadge status={p.status} isPaused={paused} /></td>
                     <td className="px-4 py-3">
                       {p.status === 'tracked'
-                        ? <PMiniBar pct={p.highchartsRatePct} muted={paused} hoverLabel="Mention rate" />
+                        ? <PMiniBar pct={p.highchartsRatePct} muted={paused} hoverLabel="Mention rate" trackMinWidth={46} />
                         : <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>}
                     </td>
                     <td

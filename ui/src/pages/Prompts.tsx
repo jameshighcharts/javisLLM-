@@ -462,10 +462,12 @@ function HeaderInfoBadge({
         style={{
           top: 'calc(100% + 6px)',
           width: 230,
+          maxWidth: 'min(230px, calc(100vw - 32px))',
           background: '#FFFFFF',
           borderColor: '#DDD0BC',
           color: '#2A3A2C',
           boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+          whiteSpace: 'normal',
           ...(align === 'right' ? { right: 0 } : { left: 0 }),
         }}
       >
@@ -483,6 +485,7 @@ function SortTh({
   align = 'left',
   width,
   info,
+  infoAlign,
   onSort,
 }: {
   label: string
@@ -492,6 +495,7 @@ function SortTh({
   align?: 'left' | 'right'
   width?: string
   info?: string
+  infoAlign?: 'left' | 'right'
   onSort: (k: SortKey) => void
 }) {
   const active = current === col
@@ -510,7 +514,7 @@ function SortTh({
     >
       <span className="inline-flex items-center gap-1">
         {label}
-        {info && <HeaderInfoBadge text={info} align={align === 'right' ? 'right' : 'left'} />}
+        {info && <HeaderInfoBadge text={info} align={infoAlign ?? (align === 'right' ? 'right' : 'left')} />}
         <span style={{ fontSize: 9, color: active ? '#8FBB93' : '#DDD0BC', fontWeight: 700 }}>
           {active ? (dir === 'asc' ? '▲' : '▼') : '⬍'}
         </span>
@@ -854,10 +858,10 @@ export default function Prompts() {
               <div className="flex items-center justify-between p-5 pb-0">
                 <div>
                   <div className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>
-                    Competitors
+                    Entities
                   </div>
                   <div className="text-xs mt-0.5" style={{ color: '#7A8E7C' }}>
-                    Entities detected in LLM responses
+                    Companies, libraries or tools
                   </div>
                 </div>
                 <span
@@ -1021,6 +1025,7 @@ export default function Prompts() {
                 dir={sortDir}
                 onSort={handleSort}
                 width="148px"
+                infoAlign="right"
                 info="Share of responses for this prompt that mention Highcharts."
               />
               <SortTh

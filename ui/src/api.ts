@@ -15,6 +15,8 @@ import type {
 } from './types'
 
 const BASE = '/api'
+const SUPABASE_PAGE_SIZE = 1000
+const SUPABASE_IN_CLAUSE_CHUNK_SIZE = 500
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const SUPABASE_ANON_KEY =
@@ -778,19 +780,38 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
 
   const historicalRunsByQuery = new Map<string, Set<string>>()
   if (queryRows.length > 0) {
-    const historyResult = await supabase
-      .from('benchmark_responses')
-      .select('query_id,run_id')
-      .in('query_id', queryRows.map((row) => row.id))
+    const historyRows: Array<{ query_id: string; run_id: string }> = []
+    const queryIds = queryRows.map((row) => row.id)
+    let historyOffset = 0
 
-    if (historyResult.error) {
-      if (isMissingRelation(historyResult.error)) {
-        return emptyDashboard(config)
+    while (true) {
+      const historyResult = await supabase
+        .from('benchmark_responses')
+        .select('query_id,run_id')
+        .in('query_id', queryIds)
+        .order('id', { ascending: true })
+        .range(historyOffset, historyOffset + SUPABASE_PAGE_SIZE - 1)
+
+      if (historyResult.error) {
+        if (isMissingRelation(historyResult.error)) {
+          return emptyDashboard(config)
+        }
+        throw asError(historyResult.error, 'Failed to load historical benchmark_responses')
       }
-      throw asError(historyResult.error, 'Failed to load historical benchmark_responses')
+
+      const pageRows = (historyResult.data ?? []) as Array<{ query_id: string; run_id: string }>
+      if (pageRows.length === 0) {
+        break
+      }
+
+      historyRows.push(...pageRows)
+      if (pageRows.length < SUPABASE_PAGE_SIZE) {
+        break
+      }
+      historyOffset += SUPABASE_PAGE_SIZE
     }
 
-    for (const row of (historyResult.data ?? []) as Array<{ query_id: string; run_id: string }>) {
+    for (const row of historyRows) {
       let runSet = historicalRunsByQuery.get(row.query_id)
       if (!runSet) {
         runSet = new Set<string>()
@@ -835,22 +856,37 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
 
   const mentionRows: ResponseMentionRow[] = []
   if (responseIds.length > 0) {
-    const chunkSize = 500
-    for (let index = 0; index < responseIds.length; index += chunkSize) {
-      const chunk = responseIds.slice(index, index + chunkSize)
-      const mentionResult = await supabase
-        .from('response_mentions')
-        .select('response_id,competitor_id,mentioned')
-        .in('response_id', chunk)
+    for (let index = 0; index < responseIds.length; index += SUPABASE_IN_CLAUSE_CHUNK_SIZE) {
+      const chunk = responseIds.slice(index, index + SUPABASE_IN_CLAUSE_CHUNK_SIZE)
+      let mentionOffset = 0
 
-      if (mentionResult.error) {
-        if (isMissingRelation(mentionResult.error)) {
-          return emptyDashboard(config)
+      while (true) {
+        const mentionResult = await supabase
+          .from('response_mentions')
+          .select('response_id,competitor_id,mentioned')
+          .in('response_id', chunk)
+          .order('response_id', { ascending: true })
+          .order('competitor_id', { ascending: true })
+          .range(mentionOffset, mentionOffset + SUPABASE_PAGE_SIZE - 1)
+
+        if (mentionResult.error) {
+          if (isMissingRelation(mentionResult.error)) {
+            return emptyDashboard(config)
+          }
+          throw asError(mentionResult.error, 'Failed to load response_mentions from Supabase')
         }
-        throw asError(mentionResult.error, 'Failed to load response_mentions from Supabase')
-      }
 
-      mentionRows.push(...((mentionResult.data ?? []) as ResponseMentionRow[]))
+        const pageRows = (mentionResult.data ?? []) as ResponseMentionRow[]
+        if (pageRows.length === 0) {
+          break
+        }
+
+        mentionRows.push(...pageRows)
+        if (pageRows.length < SUPABASE_PAGE_SIZE) {
+          break
+        }
+        mentionOffset += SUPABASE_PAGE_SIZE
+      }
     }
   }
 
@@ -1112,26 +1148,42 @@ async function fetchTimeseriesFromSupabase(
 
   for (let index = 0; index < runIds.length; index += runChunkSize) {
     const runIdChunk = runIds.slice(index, index + runChunkSize)
-    const responseResult = await supabase
-      .from('benchmark_responses')
-      .select('id,run_id,query_id')
-      .in('run_id', runIdChunk)
+    let responseOffset = 0
 
-    if (responseResult.error) {
-      if (isMissingRelation(responseResult.error)) {
-        return { ok: true, competitors, points: [] }
-      }
-      throw asError(responseResult.error, 'Failed to load benchmark_responses for time series')
-    }
+    while (true) {
+      const responseResult = await supabase
+        .from('benchmark_responses')
+        .select('id,run_id,query_id')
+        .in('run_id', runIdChunk)
+        .order('id', { ascending: true })
+        .range(responseOffset, responseOffset + SUPABASE_PAGE_SIZE - 1)
 
-    for (const response of (responseResult.data ?? []) as TimeSeriesResponseRow[]) {
-      if (shouldFilterByTags) {
-        const promptTags = tagsByPromptId.get(response.query_id)
-        if (!promptTags || !promptMatchesTagFilter(promptTags, selectedTagSet, tagFilterMode)) {
-          continue
+      if (responseResult.error) {
+        if (isMissingRelation(responseResult.error)) {
+          return { ok: true, competitors, points: [] }
         }
+        throw asError(responseResult.error, 'Failed to load benchmark_responses for time series')
       }
-      responseRows.push(response)
+
+      const pageRows = (responseResult.data ?? []) as TimeSeriesResponseRow[]
+      if (pageRows.length === 0) {
+        break
+      }
+
+      for (const response of pageRows) {
+        if (shouldFilterByTags) {
+          const promptTags = tagsByPromptId.get(response.query_id)
+          if (!promptTags || !promptMatchesTagFilter(promptTags, selectedTagSet, tagFilterMode)) {
+            continue
+          }
+        }
+        responseRows.push(response)
+      }
+
+      if (pageRows.length < SUPABASE_PAGE_SIZE) {
+        break
+      }
+      responseOffset += SUPABASE_PAGE_SIZE
     }
   }
 
@@ -1149,22 +1201,38 @@ async function fetchTimeseriesFromSupabase(
   }
 
   const mentionRows: ResponseMentionRow[] = []
-  const responseChunkSize = 500
+  const responseChunkSize = SUPABASE_IN_CLAUSE_CHUNK_SIZE
   for (let index = 0; index < responseIds.length; index += responseChunkSize) {
     const responseChunk = responseIds.slice(index, index + responseChunkSize)
-    const mentionResult = await supabase
-      .from('response_mentions')
-      .select('response_id,competitor_id,mentioned')
-      .in('response_id', responseChunk)
+    let mentionOffset = 0
 
-    if (mentionResult.error) {
-      if (isMissingRelation(mentionResult.error)) {
-        return { ok: true, competitors, points: [] }
+    while (true) {
+      const mentionResult = await supabase
+        .from('response_mentions')
+        .select('response_id,competitor_id,mentioned')
+        .in('response_id', responseChunk)
+        .order('response_id', { ascending: true })
+        .order('competitor_id', { ascending: true })
+        .range(mentionOffset, mentionOffset + SUPABASE_PAGE_SIZE - 1)
+
+      if (mentionResult.error) {
+        if (isMissingRelation(mentionResult.error)) {
+          return { ok: true, competitors, points: [] }
+        }
+        throw asError(mentionResult.error, 'Failed to load response_mentions for time series')
       }
-      throw asError(mentionResult.error, 'Failed to load response_mentions for time series')
-    }
 
-    mentionRows.push(...((mentionResult.data ?? []) as ResponseMentionRow[]))
+      const pageRows = (mentionResult.data ?? []) as ResponseMentionRow[]
+      if (pageRows.length === 0) {
+        break
+      }
+
+      mentionRows.push(...pageRows)
+      if (pageRows.length < SUPABASE_PAGE_SIZE) {
+        break
+      }
+      mentionOffset += SUPABASE_PAGE_SIZE
+    }
   }
 
   const activeCompetitorIds = new Set(competitorRows.map((row) => row.id))
@@ -1376,22 +1444,42 @@ async function fetchPromptDrilldownFromSupabase(
 
   const mentionRows: ResponseMentionRow[] = []
   if (responseIds.length > 0) {
-    const chunkSize = 500
-    for (let index = 0; index < responseIds.length; index += chunkSize) {
-      const chunk = responseIds.slice(index, index + chunkSize)
-      const mentionResult = await supabase
-        .from('response_mentions')
-        .select('response_id,competitor_id,mentioned')
-        .in('response_id', chunk)
+    let mentionsTableMissing = false
+    for (let index = 0; index < responseIds.length; index += SUPABASE_IN_CLAUSE_CHUNK_SIZE) {
+      if (mentionsTableMissing) {
+        break
+      }
+      const chunk = responseIds.slice(index, index + SUPABASE_IN_CLAUSE_CHUNK_SIZE)
+      let mentionOffset = 0
 
-      if (mentionResult.error) {
-        if (isMissingRelation(mentionResult.error)) {
+      while (true) {
+        const mentionResult = await supabase
+          .from('response_mentions')
+          .select('response_id,competitor_id,mentioned')
+          .in('response_id', chunk)
+          .order('response_id', { ascending: true })
+          .order('competitor_id', { ascending: true })
+          .range(mentionOffset, mentionOffset + SUPABASE_PAGE_SIZE - 1)
+
+        if (mentionResult.error) {
+          if (isMissingRelation(mentionResult.error)) {
+            mentionsTableMissing = true
+            break
+          }
+          throw asError(mentionResult.error, 'Failed to load prompt mentions from Supabase')
+        }
+
+        const pageRows = (mentionResult.data ?? []) as ResponseMentionRow[]
+        if (pageRows.length === 0) {
           break
         }
-        throw asError(mentionResult.error, 'Failed to load prompt mentions from Supabase')
-      }
 
-      mentionRows.push(...((mentionResult.data ?? []) as ResponseMentionRow[]))
+        mentionRows.push(...pageRows)
+        if (pageRows.length < SUPABASE_PAGE_SIZE) {
+          break
+        }
+        mentionOffset += SUPABASE_PAGE_SIZE
+      }
     }
   }
 
