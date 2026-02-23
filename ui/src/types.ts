@@ -33,6 +33,7 @@ export interface CompetitorSeries {
 
 export interface PromptStatus {
   query: string
+  isPaused: boolean
   status: 'tracked' | 'awaiting_run'
   runs: number
   highchartsRatePct: number
@@ -59,6 +60,7 @@ export interface BenchmarkConfig {
   queries: string[]
   competitors: string[]
   aliases: Record<string, string[]>
+  pausedQueries?: string[]
 }
 
 export interface ConfigResponse {
@@ -90,4 +92,34 @@ export interface DiagnosticsResponse {
   generatedAt: string
   source: 'supabase' | 'api'
   checks: DiagnosticsCheck[]
+}
+
+export interface BenchmarkWorkflowRun {
+  id: number
+  runNumber: number
+  status: string
+  conclusion: string | null
+  htmlUrl: string
+  createdAt: string
+  updatedAt: string
+  headBranch: string
+  title: string
+  actor: string
+}
+
+export interface BenchmarkTriggerResponse {
+  ok: boolean
+  triggerId: string
+  workflow: string
+  repo: string
+  ref: string
+  run: BenchmarkWorkflowRun | null
+  message: string
+}
+
+export interface BenchmarkRunsResponse {
+  ok: boolean
+  workflow: string
+  repo: string
+  runs: BenchmarkWorkflowRun[]
 }

@@ -26,6 +26,16 @@ const NAV = [
     ),
   },
   {
+    to: '/runs',
+    label: 'Runs',
+    icon: (
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M13 4L21 12L13 20" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 12H21" />
+      </svg>
+    ),
+  },
+  {
     to: '/competitors',
     label: 'Competitors',
     icon: (
@@ -35,8 +45,8 @@ const NAV = [
     ),
   },
   {
-    to: '/tests',
-    label: 'Tests',
+    to: '/diagnostics',
+    label: 'Diagnostics',
     icon: (
       <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M9 11l3 3L22 4" />
@@ -58,9 +68,11 @@ const NAV = [
 
 const PAGE_TITLES: Record<string, string> = {
   '/dashboard': 'Dashboard',
+  '/runs': 'Run Benchmarks',
   '/prompts': 'Prompts',
   '/competitors': 'Competitors',
-  '/tests': 'System Tests',
+  '/diagnostics': 'Diagnostics',
+  '/tests': 'Diagnostics',
   '/config': 'Configuration',
 }
 

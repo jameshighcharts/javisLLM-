@@ -46,16 +46,38 @@ This repo includes root `/Users/jamesm/projects/easy_llm_benchmarker/vercel.json
 In Vercel Project Settings -> Environment Variables, set:
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
+- `GITHUB_TOKEN` (PAT with `repo` + `workflow` access to this repo)
+- `GITHUB_OWNER` (e.g. `jameshighcharts`)
+- `GITHUB_REPO` (e.g. `javisLLM-`)
+- Optional: `GITHUB_WORKFLOW_FILE` (default: `run-benchmark.yml`)
+- Optional: `GITHUB_WORKFLOW_REF` (default: `main`)
+- Optional hardening: `BENCHMARK_TRIGGER_TOKEN`
 
 Without these vars, the deployed frontend may fail at runtime because `/api` fallback is local-only.
 
-After deploy, open `/tests` in the app to run runtime diagnostics from Vercel:
+After deploy, open `/diagnostics` in the app to run runtime diagnostics from Vercel:
 - Supabase connectivity
 - Required table checks (`prompt_queries`, `competitors`, `competitor_aliases`, `benchmark_runs`, `benchmark_responses`, `response_mentions`)
 - Highcharts primary-competitor check
 - Latest run readiness check
 
-Note: `/tests` runs app-level diagnostics, not `pytest` execution.
+Note: `/diagnostics` runs app-level diagnostics, not `pytest` execution.
+
+To run real prompt/scoring runs from the app, open `/runs`:
+- Trigger benchmark workflow from UI
+- Monitor run state (queued/running/success/failure)
+- Open GitHub Actions logs directly
+- Dashboard updates after workflow syncs to Supabase
+
+### GitHub Actions secrets (required for `/runs`)
+
+In GitHub repo settings -> Secrets and variables -> Actions, add:
+- `OPENAI_API_KEY`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+
+Workflow file used by `/runs` trigger:
+- `/Users/jamesm/projects/easy_llm_benchmarker/.github/workflows/run-benchmark.yml`
 
 ## Configure inputs (no code edits needed)
 

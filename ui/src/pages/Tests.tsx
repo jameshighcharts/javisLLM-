@@ -66,10 +66,10 @@ export default function Tests() {
       <div className="flex items-end justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold tracking-tight" style={{ color: '#2A3A2C' }}>
-            System Tests
+            System Diagnostics
           </h2>
           <p className="text-sm mt-0.5" style={{ color: '#7A8E7C' }}>
-            Run production checks for Supabase tables, prompts, and benchmark data.
+            Run production health checks for Supabase tables, prompts, and benchmark data.
           </p>
         </div>
         <button

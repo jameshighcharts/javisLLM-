@@ -1,5 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import type {
+  BenchmarkRunsResponse,
+  BenchmarkTriggerResponse,
   BenchmarkConfig,
   ConfigResponse,
   DiagnosticsCheck,
@@ -163,6 +165,7 @@ function emptyDashboard(config: BenchmarkConfig): DashboardResponse {
     })),
     promptStatus: config.queries.map((query) => ({
       query,
+      isPaused: false,
       status: 'awaiting_run',
       runs: 0,
       highchartsRatePct: 0,
@@ -180,15 +183,29 @@ function emptyDashboard(config: BenchmarkConfig): DashboardResponse {
 }
 
 async function json<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers ?? {})
+  if (!headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...init,
+    headers,
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`)
   }
   return res.json() as Promise<T>
+}
+
+function withOptionalTriggerToken(
+  triggerToken?: string,
+): Record<string, string> | undefined {
+  const trimmed = triggerToken?.trim()
+  if (!trimmed) {
+    return undefined
+  }
+  return { Authorization: `Bearer ${trimmed}` }
 }
 
 async function fetchSupabaseConfigRows(): Promise<{
@@ -432,6 +449,15 @@ async function updateConfigInSupabase(config: BenchmarkConfig): Promise<ConfigRe
   return fetchConfigFromSupabase()
 }
 
+async function togglePromptInSupabase(query: string, active: boolean): Promise<void> {
+  if (!supabase) throw new Error('Supabase is not configured.')
+  const { error } = await supabase
+    .from('prompt_queries')
+    .update({ is_active: active })
+    .eq('query_text', query)
+  if (error) throw asError(error, 'Failed to toggle prompt active state')
+}
+
 async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
   if (!supabase) {
     throw new Error('Supabase is not configured.')
@@ -440,10 +466,10 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
   const configResponse = await fetchConfigFromSupabase()
   const config = configResponse.config
 
+  // Fetch ALL queries (active and paused) so we can show isPaused state in the grid
   const activeQueryRows = await supabase
     .from('prompt_queries')
-    .select('id,query_text,sort_order')
-    .eq('is_active', true)
+    .select('id,query_text,sort_order,is_active')
     .order('sort_order', { ascending: true })
 
   if (activeQueryRows.error) {
@@ -464,6 +490,7 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
     id: string
     query_text: string
     sort_order: number
+    is_active: boolean
   }>
   const competitorRows = (activeCompetitorRows.data ?? []) as Array<{
     id: string
@@ -616,6 +643,7 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
 
     return {
       query: queryRow.query_text,
+      isPaused: !queryRow.is_active,
       status: (runs > 0 ? 'tracked' : 'awaiting_run') as 'tracked' | 'awaiting_run',
       runs,
       highchartsRatePct: Number(highchartsRatePct.toFixed(2)),
@@ -1026,6 +1054,31 @@ export const api = {
     return diagnosticsViaApi()
   },
 
+  async benchmarkRuns(triggerToken?: string) {
+    return json<BenchmarkRunsResponse>('/benchmark/runs', {
+      method: 'GET',
+      headers: withOptionalTriggerToken(triggerToken),
+    })
+  },
+
+  async triggerBenchmark(
+    data: {
+      model: string
+      runs: number
+      temperature: number
+      webSearch: boolean
+      ourTerms: string
+      runMonth?: string
+    },
+    triggerToken?: string,
+  ) {
+    return json<BenchmarkTriggerResponse>('/benchmark/trigger', {
+      method: 'POST',
+      headers: withOptionalTriggerToken(triggerToken),
+      body: JSON.stringify(data),
+    })
+  },
+
   async dashboard() {
     if (hasSupabaseConfig()) {
       try {
@@ -1054,6 +1107,27 @@ export const api = {
       }
     }
     return json<ConfigResponse>('/config')
+  },
+
+  async togglePromptActive(query: string, active: boolean) {
+    if (hasSupabaseConfig()) {
+      try {
+        return await togglePromptInSupabase(query, active)
+      } catch (primaryError) {
+        try {
+          return await json<{ ok: boolean }>('/prompts/toggle', {
+            method: 'PATCH',
+            body: JSON.stringify({ query, active }),
+          })
+        } catch {
+          throw asError(primaryError, 'Failed to toggle prompt active state')
+        }
+      }
+    }
+    return json<{ ok: boolean }>('/prompts/toggle', {
+      method: 'PATCH',
+      body: JSON.stringify({ query, active }),
+    })
   },
 
   async updateConfig(data: BenchmarkConfig) {

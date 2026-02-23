@@ -1,0 +1,135 @@
+name: Run LLM Benchmark
+run-name: "LLM benchmark (${{ inputs.trigger_id || 'manual' }})"
+
+on:
+  workflow_dispatch:
+    inputs:
+      trigger_id:
+        description: "UI trigger id"
+        required: false
+        default: ""
+        type: string
+      our_terms:
+        description: "Brand terms (comma-separated)"
+        required: false
+        default: "Highcharts"
+        type: string
+      model:
+        description: "OpenAI model"
+        required: false
+        default: "gpt-4o-mini"
+        type: string
+      runs:
+        description: "Runs per prompt (1-10)"
+        required: false
+        default: "3"
+        type: string
+      temperature:
+        description: "Sampling temperature (0-2)"
+        required: false
+        default: "0.7"
+        type: string
+      web_search:
+        description: "Enable web search"
+        required: false
+        default: "true"
+        type: string
+      run_month:
+        description: "Optional override (YYYY-MM)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Build run metadata
+        id: meta
+        run: |
+          if [[ -n "${{ inputs.run_month }}" ]]; then
+            RUN_MONTH="${{ inputs.run_month }}"
+          else
+            RUN_MONTH="$(date +%Y-%m)"
+          fi
+          RUN_ID="$(python - <<'PY'
+import uuid
+print(uuid.uuid4())
+PY
+)"
+          echo "run_month=${RUN_MONTH}" >> "$GITHUB_OUTPUT"
+          echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "RUN_MONTH=${RUN_MONTH}" >> "$GITHUB_ENV"
+          echo "RUN_ID=${RUN_ID}" >> "$GITHUB_ENV"
+
+      - name: Run prompt benchmark
+        run: |
+          RUNS_INPUT="${{ inputs.runs }}"
+          TEMP_INPUT="${{ inputs.temperature }}"
+          OUR_TERMS_INPUT="${{ inputs.our_terms }}"
+          MODEL_INPUT="${{ inputs.model }}"
+          WEB_SEARCH_INPUT="${{ inputs.web_search }}"
+
+          CMD=(
+            python llm_mention_benchmark.py
+            --our-terms "${OUR_TERMS_INPUT}"
+            --model "${MODEL_INPUT}"
+            --runs "${RUNS_INPUT}"
+            --temperature "${TEMP_INPUT}"
+            --output-dir output
+            --config config/benchmark_config.json
+          )
+          if [[ "${WEB_SEARCH_INPUT}" == "true" ]]; then
+            CMD+=(--web-search)
+          fi
+          "${CMD[@]}"
+
+      - name: Build scoring datasets
+        run: |
+          python scripts/build_looker_dataset.py \
+            --output-dir output \
+            --run-month "${RUN_MONTH}" \
+            --run-id "${RUN_ID}"
+
+      - name: Sync config + run data to Supabase
+        run: |
+          python scripts/push_to_supabase.py \
+            --config config/benchmark_config.json \
+            --output-dir output \
+            --run-month "${RUN_MONTH}" \
+            --run-id "${RUN_ID}"
+
+      - name: Upload output artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ env.RUN_MONTH }}-${{ env.RUN_ID }}
+          path: |
+            output/llm_outputs.jsonl
+            output/comparison_table.csv
+            output/viability_index.csv
+            output/looker_studio_table_paste.csv
+            output/looker_kpi.csv
+            output/looker_competitor_chart.csv
+          if-no-files-found: warn
