@@ -39,6 +39,16 @@ cd /Users/jamesm/projects/easy_llm_benchmarker/ui
 npm run sync:data
 ```
 
+### Vercel (GitHub deploy) setup
+
+This repo includes root `/Users/jamesm/projects/easy_llm_benchmarker/vercel.json` so Vercel builds `ui/` automatically.
+
+In Vercel Project Settings -> Environment Variables, set:
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+
+Without these vars, the deployed frontend may fail at runtime because `/api` fallback is local-only.
+
 ## Configure inputs (no code edits needed)
 
 Edit `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark_config.json`:
