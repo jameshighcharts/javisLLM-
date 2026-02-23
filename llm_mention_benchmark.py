@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -721,6 +722,15 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
     print(f"Successful calls: {successful_calls}/{total_calls}")
     if failed_calls:
         print(f"Failed calls: {failed_calls}/{total_calls}", file=sys.stderr)
+        error_messages = [
+            str(record.get("error") or "").strip()
+            for record in records
+            if record.get("error")
+        ]
+        if error_messages:
+            print("Top API errors:", file=sys.stderr)
+            for message, count in Counter(error_messages).most_common(3):
+                print(f"- {count}x {message}", file=sys.stderr)
 
     return 0 if successful_calls > 0 else 1
 
