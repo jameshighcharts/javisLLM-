@@ -133,6 +133,73 @@ function truncate(value: string, limit: number) {
   return `${value.slice(0, limit)}…`
 }
 
+type OutputTagMap = Record<string, string>
+
+function normalizeOutputTagValue(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => normalizeOutputTagValue(item))
+      .filter(Boolean)
+      .join(' ')
+      .trim()
+  }
+  if (typeof value === 'object') {
+    return JSON.stringify(value)
+  }
+  return ''
+}
+
+function extractOutputTags(responseText: string): OutputTagMap {
+  const extractRecord = (value: unknown): Record<string, unknown> | null => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    return value as Record<string, unknown>
+  }
+
+  const parseJson = (raw: string): Record<string, unknown> | null => {
+    const candidates: string[] = [raw.trim()]
+    const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)
+    if (fenced?.[1]) {
+      candidates.push(fenced[1].trim())
+    }
+
+    for (const candidate of candidates) {
+      if (!candidate) continue
+      try {
+        const parsed = JSON.parse(candidate) as unknown
+        const record = extractRecord(parsed)
+        if (record) return record
+      } catch {
+        continue
+      }
+    }
+
+    return null
+  }
+
+  const tags: OutputTagMap = {}
+  const parsed = parseJson(responseText)
+  for (const [rawKey, value] of Object.entries(parsed ?? {})) {
+    const key = rawKey.trim().toLowerCase()
+    if (!key) continue
+    const normalizedValue = normalizeOutputTagValue(value)
+    if (normalizedValue) {
+      tags[key] = normalizedValue
+    }
+  }
+
+  const fallbackText = responseText.toLowerCase()
+  for (const fallbackTag of ['rtargs', 'keywords', 'esearch']) {
+    if (!tags[fallbackTag] && fallbackText.includes(fallbackTag)) {
+      tags[fallbackTag] = fallbackTag
+    }
+  }
+
+  return tags
+}
+
 function rivalColor(index: number) {
   return RIVAL_COLORS[index % RIVAL_COLORS.length]
 }
@@ -498,17 +565,67 @@ function ResponseExplorer({
   runOptions: PromptDrilldownRunPoint[]
 }) {
   const [selectedRunId, setSelectedRunId] = useState<string>('all')
+  const [selectedTag, setSelectedTag] = useState<string>('all')
+  const [searchTerm, setSearchTerm] = useState('')
   const [expandedResponseIds, setExpandedResponseIds] = useState<Set<number>>(new Set())
+
+  const responseSearchRows = useMemo(
+    () =>
+      responses.map((response) => {
+        const tags = extractOutputTags(response.responseText)
+        return {
+          response,
+          tags,
+          allText: [
+            response.responseText,
+            response.mentions.join(' '),
+            response.citations.join(' '),
+            response.error ?? '',
+            response.model,
+            response.webSearchEnabled ? 'web on' : 'web off',
+            ...Object.entries(tags).flatMap(([key, value]) => [key, value]),
+          ]
+            .join('\n')
+            .toLowerCase(),
+        }
+      }),
+    [responses],
+  )
 
   const effectiveRunId =
     selectedRunId === 'all' || runOptions.some((run) => run.runId === selectedRunId)
       ? selectedRunId
       : 'all'
 
+  const availableTags = useMemo(() => {
+    return [...new Set(responseSearchRows.flatMap((row) => Object.keys(row.tags)).filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right))
+  }, [responseSearchRows])
+
+  const effectiveTag = selectedTag === 'all' || availableTags.includes(selectedTag)
+    ? selectedTag
+    : 'all'
+
   const filteredResponses = useMemo(() => {
-    if (effectiveRunId === 'all') return responses
-    return responses.filter((response) => response.runId === effectiveRunId)
-  }, [responses, effectiveRunId])
+    const term = searchTerm.trim().toLowerCase()
+
+    return responseSearchRows
+      .filter((row) => effectiveRunId === 'all' || row.response.runId === effectiveRunId)
+      .filter((row) => {
+        const tagValue = effectiveTag === 'all' ? '' : row.tags[effectiveTag] ?? ''
+
+        if (effectiveTag !== 'all' && !tagValue) return false
+        if (!term) return true
+
+        const haystack =
+          effectiveTag === 'all'
+            ? row.allText
+            : tagValue.toLowerCase()
+
+        return haystack.includes(term)
+      })
+      .map((row) => row.response)
+  }, [responseSearchRows, effectiveRunId, effectiveTag, searchTerm])
 
   if (responses.length === 0) {
     return (
@@ -524,28 +641,65 @@ function ResponseExplorer({
         <div className="text-xs font-medium" style={{ color: '#7A8E7C' }}>
           Showing {filteredResponses.length} of {responses.length} outputs
         </div>
-        <label className="inline-flex items-center gap-2 text-xs" style={{ color: '#7A8E7C' }}>
-          Run filter
-          <select
-            value={effectiveRunId}
-            onChange={(event) => setSelectedRunId(event.target.value)}
-            className="px-2.5 py-1.5 rounded-lg text-xs"
-            style={{ border: '1px solid #DDD0BC', background: '#FFFFFF', color: '#2A3A2C' }}
-          >
-            <option value="all">All runs</option>
-            {runOptions
-              .slice()
-              .sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp))
-              .map((run) => (
-                <option key={run.runId} value={run.runId}>
-                  {run.runMonth ?? shortRunId(run.runId)} · {new Date(run.timestamp).toLocaleDateString()}
+        <div className="flex items-center gap-2 flex-wrap">
+          <label className="inline-flex items-center gap-2 text-xs" style={{ color: '#7A8E7C' }}>
+            Run filter
+            <select
+              value={effectiveRunId}
+              onChange={(event) => setSelectedRunId(event.target.value)}
+              className="px-2.5 py-1.5 rounded-lg text-xs"
+              style={{ border: '1px solid #DDD0BC', background: '#FFFFFF', color: '#2A3A2C' }}
+            >
+              <option value="all">All runs</option>
+              {runOptions
+                .slice()
+                .sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp))
+                .map((run) => (
+                  <option key={run.runId} value={run.runId}>
+                    {run.runMonth ?? shortRunId(run.runId)} · {new Date(run.timestamp).toLocaleDateString()}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label className="inline-flex items-center gap-2 text-xs" style={{ color: '#7A8E7C' }}>
+            Tags
+            <select
+              value={effectiveTag}
+              onChange={(event) => setSelectedTag(event.target.value)}
+              className="px-2.5 py-1.5 rounded-lg text-xs"
+              style={{ border: '1px solid #DDD0BC', background: '#FFFFFF', color: '#2A3A2C' }}
+            >
+              <option value="all">All tags</option>
+              {availableTags.map((tag) => (
+                <option key={tag} value={tag}>
+                  {tag}
                 </option>
               ))}
-          </select>
-        </label>
+            </select>
+          </label>
+          <label className="inline-flex items-center gap-2 text-xs" style={{ color: '#7A8E7C' }}>
+            Search
+            <input
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder={effectiveTag === 'all' ? 'Find text in outputs' : `Find text in ${effectiveTag}`}
+              className="px-2.5 py-1.5 rounded-lg text-xs min-w-[220px]"
+              style={{ border: '1px solid #DDD0BC', background: '#FFFFFF', color: '#2A3A2C' }}
+            />
+          </label>
+        </div>
       </div>
 
       <div className="space-y-3 max-h-[680px] overflow-y-auto pr-1">
+        {filteredResponses.length === 0 && (
+          <div
+            className="rounded-xl border border-dashed px-4 py-8 text-sm text-center"
+            style={{ borderColor: '#DDD0BC', color: '#9AAE9C', background: '#FDFCF8' }}
+          >
+            No outputs match the current filters.
+          </div>
+        )}
+
         {filteredResponses.map((response) => {
           const isExpanded = expandedResponseIds.has(response.id)
           const output = isExpanded
