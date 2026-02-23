@@ -163,15 +163,33 @@ export default function Runs() {
                 type="button"
                 onClick={() => triggerMutation.mutate()}
                 disabled={!canRun}
-                className="px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all"
                 style={{
-                  background: canRun ? '#8FBB93' : '#E8E0D2',
+                  background: canRun ? '#2A6032' : '#E8E0D2',
                   color: canRun ? '#FFFFFF' : '#9AAE9C',
                   cursor: canRun ? 'pointer' : 'not-allowed',
+                  boxShadow: canRun ? '0 1px 8px rgba(42,96,50,0.28)' : 'none',
+                  border: `1.5px solid ${canRun ? '#1E4A26' : 'transparent'}`,
                 }}
               >
-                {triggerMutation.isPending ? 'Queueing…' : 'Run Benchmark'}
+                {triggerMutation.isPending ? (
+                  <>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"
+                      style={{ animation: 'spin 0.9s linear infinite' }}>
+                      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                    </svg>
+                    Queueing…
+                  </>
+                ) : (
+                  <>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill={canRun ? 'white' : '#9AAE9C'} stroke="none">
+                      <polygon points="5,3 19,12 5,21" />
+                    </svg>
+                    Run Benchmark
+                  </>
+                )}
               </button>
+              <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
               <button
                 type="button"
