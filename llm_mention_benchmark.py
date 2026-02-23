@@ -315,6 +315,17 @@ def create_openai_client(api_key: str) -> Any:
     return OpenAI(api_key=api_key)
 
 
+def normalize_api_key(raw_value: str | None) -> str:
+    value = (raw_value or "").strip()
+    # Guard against accidental quote wrapping in CI secrets.
+    if len(value) >= 2 and (
+        (value.startswith('"') and value.endswith('"'))
+        or (value.startswith("'") and value.endswith("'"))
+    ):
+        value = value[1:-1].strip()
+    return value
+
+
 def is_transient_error(exc: Exception) -> bool:
     class_name = exc.__class__.__name__.lower()
     if any(
@@ -608,7 +619,7 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
         print("--runs must be >= 1", file=sys.stderr)
         return 2
 
-    api_key = os.getenv(args.api_key_env)
+    api_key = normalize_api_key(os.getenv(args.api_key_env))
     if not api_key:
         print(
             f'Missing API key env var "{args.api_key_env}". '
@@ -731,6 +742,18 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
             print("Top API errors:", file=sys.stderr)
             for message, count in Counter(error_messages).most_common(3):
                 print(f"- {count}x {message}", file=sys.stderr)
+            all_connection_errors = all(
+                "connection error" in message.lower()
+                or "apiconnectionerror" in message.lower()
+                for message in error_messages
+            )
+            if all_connection_errors:
+                print(
+                    "Hint: all calls failed with connection errors. "
+                    "Verify OPENAI_API_KEY in GitHub Secrets has no quotes/newlines, "
+                    "and that the runner can reach api.openai.com.",
+                    file=sys.stderr,
+                )
 
     return 0 if successful_calls > 0 else 1
 
