@@ -1,6 +1,4 @@
 name: Run LLM Benchmark
-run-name: "LLM benchmark (${{ inputs.trigger_id || 'manual' }})"
-
 on:
   workflow_dispatch:
     inputs:
@@ -8,37 +6,30 @@ on:
         description: "UI trigger id"
         required: false
         default: ""
-        type: string
       our_terms:
         description: "Brand terms (comma-separated)"
         required: false
         default: "Highcharts"
-        type: string
       model:
         description: "OpenAI model"
         required: false
         default: "gpt-4o-mini"
-        type: string
       runs:
         description: "Runs per prompt (1-10)"
         required: false
         default: "3"
-        type: string
       temperature:
         description: "Sampling temperature (0-2)"
         required: false
         default: "0.7"
-        type: string
       web_search:
         description: "Enable web search"
         required: false
         default: "true"
-        type: string
       run_month:
         description: "Optional override (YYYY-MM)"
         required: false
         default: ""
-        type: string
 
 permissions:
   contents: read
@@ -69,8 +60,9 @@ jobs:
       - name: Build run metadata
         id: meta
         run: |
-          if [[ -n "${{ inputs.run_month }}" ]]; then
-            RUN_MONTH="${{ inputs.run_month }}"
+          RUN_MONTH_INPUT="${{ github.event.inputs.run_month }}"
+          if [[ -n "${RUN_MONTH_INPUT}" ]]; then
+            RUN_MONTH="${RUN_MONTH_INPUT}"
           else
             RUN_MONTH="$(date +%Y-%m)"
           fi
@@ -86,11 +78,11 @@ PY
 
       - name: Run prompt benchmark
         run: |
-          RUNS_INPUT="${{ inputs.runs }}"
-          TEMP_INPUT="${{ inputs.temperature }}"
-          OUR_TERMS_INPUT="${{ inputs.our_terms }}"
-          MODEL_INPUT="${{ inputs.model }}"
-          WEB_SEARCH_INPUT="${{ inputs.web_search }}"
+          RUNS_INPUT="${{ github.event.inputs.runs }}"
+          TEMP_INPUT="${{ github.event.inputs.temperature }}"
+          OUR_TERMS_INPUT="${{ github.event.inputs.our_terms }}"
+          MODEL_INPUT="${{ github.event.inputs.model }}"
+          WEB_SEARCH_INPUT="${{ github.event.inputs.web_search }}"
 
           CMD=(
             python llm_mention_benchmark.py
