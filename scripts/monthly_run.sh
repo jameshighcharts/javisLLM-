@@ -26,6 +26,7 @@ WEB_SEARCH="${WEB_SEARCH:-1}"
 GSHEET_TAB_NAME="${GSHEET_TAB_NAME:-Sheet1}"
 GSHEET_COMPETITOR_TAB_NAME="${GSHEET_COMPETITOR_TAB_NAME:-CompetitorMetrics}"
 BENCHMARK_CONFIG_PATH="${BENCHMARK_CONFIG_PATH:-${ROOT_DIR}/config/benchmark_config.json}"
+SUPABASE_SYNC="${SUPABASE_SYNC:-0}"
 
 mkdir -p "${OUTPUT_DIR}" "${LOG_DIR}"
 
@@ -86,5 +87,17 @@ python3 "${ROOT_DIR}/scripts/push_to_sheets_webapp.py" \
   --secret "${GSHEET_WEBAPP_SECRET}" \
   --run-month "${RUN_MONTH}" \
   --run-id "${RUN_ID}"
+
+if [[ "${SUPABASE_SYNC}" == "1" || "${SUPABASE_SYNC}" == "true" || "${SUPABASE_SYNC}" == "yes" ]]; then
+  : "${SUPABASE_URL:?SUPABASE_URL is required when SUPABASE_SYNC=1}"
+  : "${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required when SUPABASE_SYNC=1}"
+
+  echo "Syncing config + run artifacts to Supabase..."
+  python3 "${ROOT_DIR}/scripts/push_to_supabase.py" \
+    --config "${BENCHMARK_CONFIG_PATH}" \
+    --output-dir "${OUTPUT_DIR}" \
+    --run-month "${RUN_MONTH}" \
+    --run-id "${RUN_ID}"
+fi
 
 echo "Monthly run completed successfully."

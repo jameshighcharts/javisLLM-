@@ -110,3 +110,27 @@ Outputs:
 ## Monthly automation
 
 See `/Users/jamesm/projects/easy_llm_benchmarker/docs/monthly_automation.md`.
+
+## Supabase (optional backend)
+
+Schema SQL:
+- `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/001_init_schema.sql`
+- Optional policy patch (frontend anon writes for config tables):
+  - `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/002_allow_anon_config_writes.sql`
+
+Environment variables:
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_SYNC=1` (optional: auto-sync after monthly run)
+
+Manual sync to Supabase:
+```bash
+cd /Users/jamesm/projects/easy_llm_benchmarker
+python3 -m pip install -r requirements.txt
+python3 /Users/jamesm/projects/easy_llm_benchmarker/scripts/push_to_supabase.py
+```
+
+Frontend local env (for direct Supabase reads/writes in UI):
+- `/Users/jamesm/projects/easy_llm_benchmarker/ui/.env.local`
+  - `VITE_SUPABASE_URL`
+  - `VITE_SUPABASE_ANON_KEY` (or `VITE_SUPABASE_PUBLISHABLE_KEY`)

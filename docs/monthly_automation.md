@@ -13,6 +13,9 @@ Update `/Users/jamesm/projects/easy_llm_benchmarker/.env.monthly` with real valu
 - `GSHEET_TAB_NAME`
 - `GSHEET_COMPETITOR_TAB_NAME` (tab for competitor mention-rate/share-of-voice dataset)
 - `BENCHMARK_CONFIG_PATH` (optional, defaults to `config/benchmark_config.json`)
+- `SUPABASE_URL` (optional)
+- `SUPABASE_SERVICE_ROLE_KEY` (optional)
+- `SUPABASE_SYNC=1` to push each monthly run to Supabase
 
 Benchmark inputs now live in:
 - `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark_config.json`
@@ -47,6 +50,11 @@ python3 /Users/jamesm/projects/easy_llm_benchmarker/scripts/push_to_sheets_webap
 Expected push status:
 - `appended` for each new run (append-only)
 - `skipped_duplicate` only if the same `run_id` is pushed again
+
+Optional Supabase sync only (manual):
+```bash
+python3 /Users/jamesm/projects/easy_llm_benchmarker/scripts/push_to_supabase.py
+```
 
 ## 5) Install monthly scheduler (day 1, 09:00 local)
 ```bash
