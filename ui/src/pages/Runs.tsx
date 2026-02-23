@@ -301,9 +301,9 @@ export default function Runs() {
                     <input
                       type="number"
                       min={1}
-                      max={10}
+                      max={3}
                       value={runs}
-                      onChange={(e) => setRuns(Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
+                      onChange={(e) => setRuns(Math.max(1, Math.min(3, Number(e.target.value) || 1)))}
                       className="w-full px-3 py-2 rounded-lg text-sm"
                       style={inputStyle}
                     />
