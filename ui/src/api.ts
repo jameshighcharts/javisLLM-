@@ -79,6 +79,7 @@ type TimeSeriesRunRow = {
   id: string
   created_at: string | null
   run_month: string | null
+  overall_score: number | null
 }
 
 type TimeSeriesResponseRow = {
@@ -837,7 +838,7 @@ async function fetchTimeseriesFromSupabase(): Promise<TimeSeriesResponse> {
 
   const competitorResult = await supabase
     .from('competitors')
-    .select('id,name,sort_order')
+    .select('id,name,slug,is_primary,sort_order')
     .eq('is_active', true)
     .order('sort_order', { ascending: true })
 
@@ -848,6 +849,8 @@ async function fetchTimeseriesFromSupabase(): Promise<TimeSeriesResponse> {
   const competitorRows = (competitorResult.data ?? []) as Array<{
     id: string
     name: string
+    slug: string
+    is_primary: boolean
     sort_order: number
   }>
   const competitors = competitorRows.map((row) => row.name)
@@ -857,7 +860,7 @@ async function fetchTimeseriesFromSupabase(): Promise<TimeSeriesResponse> {
 
   const runResult = await supabase
     .from('benchmark_runs')
-    .select('id,created_at,run_month')
+    .select('id,created_at,run_month,overall_score')
     .order('created_at', { ascending: true })
     .limit(500)
 
@@ -948,6 +951,14 @@ async function fetchTimeseriesFromSupabase(): Promise<TimeSeriesResponse> {
     )
   }
 
+  const highchartsCompetitor =
+    competitorRows.find((row) => row.is_primary) ??
+    competitorRows.find((row) => row.slug === 'highcharts') ??
+    null
+  const rivalCompetitors = competitorRows.filter(
+    (row) => row.id !== highchartsCompetitor?.id,
+  )
+
   const points = runRows
     .map((run) => {
       const total = totalsByRun.get(run.id) ?? 0
@@ -962,10 +973,41 @@ async function fetchTimeseriesFromSupabase(): Promise<TimeSeriesResponse> {
       const timestamp = run.created_at ?? `${fallbackDate}T12:00:00Z`
       const runMentions = mentionsByRun.get(run.id)
 
+      const highchartsMentions = highchartsCompetitor
+        ? runMentions?.get(highchartsCompetitor.id) ?? 0
+        : 0
+      const highchartsRatePct = total > 0 ? (highchartsMentions / total) * 100 : 0
+      const totalMentionsAcrossEntities = competitorRows.reduce(
+        (sum, competitor) => sum + (runMentions?.get(competitor.id) ?? 0),
+        0,
+      )
+      const highchartsSovPct =
+        totalMentionsAcrossEntities > 0
+          ? (highchartsMentions / totalMentionsAcrossEntities) * 100
+          : 0
+
+      const derivedAiVisibility = 0.7 * highchartsRatePct + 0.3 * highchartsSovPct
+      const storedAiVisibility =
+        typeof run.overall_score === 'number' && Number.isFinite(run.overall_score)
+          ? run.overall_score
+          : null
+
+      const rivalMentionCount = rivalCompetitors.reduce(
+        (sum, competitor) => sum + (runMentions?.get(competitor.id) ?? 0),
+        0,
+      )
+      const combviDenominator = total * rivalCompetitors.length
+      const combviPct =
+        combviDenominator > 0 ? (rivalMentionCount / combviDenominator) * 100 : 0
+
       return {
         date: timestamp.slice(0, 10),
         timestamp,
         total,
+        aiVisibilityScore: Number(
+          (storedAiVisibility ?? derivedAiVisibility).toFixed(2),
+        ),
+        combviPct: Number(combviPct.toFixed(2)),
         rates: Object.fromEntries(
           competitorRows.map((competitor) => {
             const mentions = runMentions?.get(competitor.id) ?? 0

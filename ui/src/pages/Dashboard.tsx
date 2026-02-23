@@ -10,6 +10,44 @@ import type { CompetitorSeries, DashboardResponse, PromptStatus, TimeSeriesPoint
 // ── Palette ─────────────────────────────────────────────────────────────────
 
 const HC_COLOR = '#8FBB93'
+
+// ── Brand logos ──────────────────────────────────────────────────────────────
+
+const ENTITY_LOGOS: Record<string, string> = {
+  'chart.js':   '/chartjs.png',
+  'chartjs':    '/chartjs.png',
+  'd3.js':      '/d3.png',
+  'd3':         '/d3.png',
+  'highcharts': '/highcharts%20(1).svg',
+  'echarts':    '/echarts.png',
+  'ag grid':    '/aggrid.png',
+  'aggrid':     '/aggrid.png',
+  'ag chart':   '/aggrid.png',
+  'amcharts':   '/amcharts.png',
+}
+
+// Some PNGs have heavy transparent padding — zoom crops away the whitespace
+const LOGO_ZOOM: Record<string, number> = {
+  '/echarts.png': 1.9,
+  '/aggrid.png':  2.2,
+  '/amcharts.png':1.8,
+}
+
+function getEntityLogo(entity: string): string | null {
+  return ENTITY_LOGOS[entity.toLowerCase()] ?? null
+}
+
+function EntityLogo({ entity, size = 16 }: { entity: string; size?: number }) {
+  const src = getEntityLogo(entity)
+  if (!src) return null
+  const zoom = LOGO_ZOOM[src] ?? 1
+  const inner = Math.round(size * zoom)
+  return (
+    <div style={{ width: size, height: size, overflow: 'hidden', borderRadius: 3, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <img src={src} width={inner} height={inner} style={{ objectFit: 'contain', flexShrink: 0 }} alt={entity} />
+    </div>
+  )
+}
 const RIVAL_COLORS = ['#C8A87A', '#A89CB8', '#D49880', '#C8B858', '#7AABB8', '#C89878', '#90A878']
 
 function rivalColor(indexAmongRivals: number) {
@@ -309,15 +347,28 @@ function SnapshotTrendCard({
           const rivalRates = entries
             .filter(([name]) => (hcKey ? name !== hcKey : true))
             .map(([, rate]) => Math.max(0, rate))
-          const combviPct =
+          const derivedCombviPct =
             rivalRates.length > 0
               ? rivalRates.reduce((sum, rate) => sum + rate, 0) / rivalRates.length
               : 0
+          const derivedAiVisibilityPct = 0.7 * hcRatePct + 0.3 * shareOfVoicePct
 
           return {
             x: timestampMs,
-            aiVisibilityPct: Number((0.7 * hcRatePct + 0.3 * shareOfVoicePct).toFixed(2)),
-            combviPct: Number(combviPct.toFixed(2)),
+            aiVisibilityPct: Number(
+              (
+                typeof point.aiVisibilityScore === 'number'
+                  ? point.aiVisibilityScore
+                  : derivedAiVisibilityPct
+              ).toFixed(2),
+            ),
+            combviPct: Number(
+              (
+                typeof point.combviPct === 'number'
+                  ? point.combviPct
+                  : derivedCombviPct
+              ).toFixed(2),
+            ),
           }
         })
         .filter((point): point is NonNullable<typeof point> => point !== null),
@@ -767,10 +818,10 @@ function CompetitorRanking({ data }: { data: CompetitorSeries[] }) {
             >
               {i + 1}
             </span>
-            <span
-              className="w-2 h-2 rounded-full flex-shrink-0"
-              style={{ background: dotColor }}
-            />
+            {getEntityLogo(item.entity)
+              ? <EntityLogo entity={item.entity} size={18} />
+              : <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: dotColor }} />
+            }
             <div className="flex-1 min-w-0">
               <div
                 className="text-sm font-medium truncate"
@@ -1023,39 +1074,58 @@ function MentionVsViabilityChart({ data }: { data: PromptStatus[] }) {
   return <HighchartsReact highcharts={Highcharts} options={options} />
 }
 
-// ── Prompts Table (shared with Prompts page) ──────────────────────────────────
+// ── Prompts Table ─────────────────────────────────────────────────────────────
 
-type SortKey = 'query' | 'status' | 'runs' | 'highchartsRatePct' | 'viabilityRatePct' | 'lead' | 'isPaused'
+type SortKey = 'query' | 'status' | 'runs' | 'highchartsRatePct' | 'viabilityRatePct'
 
-function ToggleSwitch({
-  active,
-  onChange,
-  disabled,
-}: {
-  active: boolean
-  onChange: (v: boolean) => void
-  disabled?: boolean
-}) {
+// Clickable ⓘ badge that reveals a description popover
+function ColumnInfoBadge({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
   return (
-    <button
-      type="button"
-      onClick={() => !disabled && onChange(!active)}
-      disabled={disabled}
-      style={{
-        width: 30, height: 17, borderRadius: 9, border: 'none', padding: 0,
-        background: active ? '#8FBB93' : '#DDD0BC',
-        position: 'relative', cursor: disabled ? 'not-allowed' : 'pointer',
-        transition: 'background 0.15s', flexShrink: 0, outline: 'none',
-        opacity: disabled ? 0.5 : 1,
-      }}
-      aria-label={active ? 'Pause prompt' : 'Resume prompt'}
-    >
-      <span style={{
-        position: 'absolute', top: 2, left: active ? 13 : 2,
-        width: 13, height: 13, borderRadius: '50%', background: '#fff',
-        transition: 'left 0.15s', display: 'block', boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
-      }} />
-    </button>
+    <span className="relative inline-flex items-center" style={{ verticalAlign: 'middle' }}>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v) }}
+        className="inline-flex items-center justify-center rounded-full text-[9px] font-bold leading-none ml-1"
+        style={{
+          width: 14, height: 14,
+          background: open ? '#8FBB93' : '#DDD0BC',
+          color: open ? '#fff' : '#7A8E7C',
+          cursor: 'pointer', border: 'none', flexShrink: 0,
+          transition: 'background 0.15s',
+        }}
+        aria-label="Column info"
+      >
+        i
+      </button>
+      {open && (
+        <>
+          <div
+            className="fixed inset-0"
+            style={{ zIndex: 40 }}
+            onClick={() => setOpen(false)}
+          />
+          <div
+            className="absolute z-50 rounded-lg shadow-xl border text-xs leading-relaxed p-3"
+            style={{
+              top: '100%', left: '50%', transform: 'translateX(-50%)',
+              marginTop: 6, width: 220,
+              background: '#FFFFFF', borderColor: '#DDD0BC', color: '#2A3A2C',
+              boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+            }}
+          >
+            <div
+              className="absolute w-2 h-2 border-l border-t"
+              style={{
+                top: -5, left: '50%', transform: 'translateX(-50%) rotate(45deg)',
+                background: '#FFFFFF', borderColor: '#DDD0BC',
+              }}
+            />
+            {text}
+          </div>
+        </>
+      )}
+    </span>
   )
 }
 
@@ -1080,9 +1150,16 @@ function PStatusBadge({ status, isPaused }: { status: PromptStatus['status']; is
   )
 }
 
-function PMiniBar({ pct, color = '#8FBB93', muted }: { pct: number; color?: string; muted?: boolean }) {
+function PMiniBar({
+  pct, color = '#8FBB93', muted, hoverLabel,
+}: {
+  pct: number; color?: string; muted?: boolean; hoverLabel?: string
+}) {
   return (
-    <div className="flex items-center gap-2.5">
+    <div
+      className="flex items-center gap-2.5"
+      title={hoverLabel ? `${hoverLabel}: ${pct.toFixed(1)}%` : undefined}
+    >
       <div className="flex-1 rounded-full overflow-hidden" style={{ background: '#E5DDD0', height: 4, minWidth: 64 }}>
         <div className="h-full rounded-full"
           style={{ width: `${Math.min(pct, 100)}%`, background: muted ? '#DDD0BC' : color }} />
@@ -1095,29 +1172,11 @@ function PMiniBar({ pct, color = '#8FBB93', muted }: { pct: number; color?: stri
   )
 }
 
-function PLeadBadge({ delta, muted }: { delta: number; muted?: boolean }) {
-  const neutral = Math.abs(delta) < 1
-  const positive = delta >= 1
-  if (muted) return (
-    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold"
-      style={{ background: '#F2EDE6', color: '#9AAE9C' }}>–</span>
-  )
-  return (
-    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold tabular-nums"
-      style={{
-        background: neutral ? '#F2EDE6' : positive ? '#dcfce7' : '#fef2f2',
-        color: neutral ? '#7A8E7C' : positive ? '#15803d' : '#dc2626',
-      }}>
-      {neutral ? '≈ 0%' : `${positive ? '+' : ''}${delta.toFixed(0)}%`}
-    </span>
-  )
-}
-
 function PSortTh({
-  label, col, current, dir, align = 'left', width, onSort,
+  label, col, current, dir, align = 'left', width, onSort, info,
 }: {
   label: string; col: SortKey; current: SortKey | null; dir: 'asc' | 'desc'
-  align?: 'left' | 'right'; width?: string; onSort: (k: SortKey) => void
+  align?: 'left' | 'right'; width?: string; onSort: (k: SortKey) => void; info?: string
 }) {
   const active = current === col
   return (
@@ -1126,6 +1185,7 @@ function PSortTh({
       onClick={() => onSort(col)}>
       <span className="inline-flex items-center gap-1">
         {label}
+        {info && <ColumnInfoBadge text={info} />}
         <span style={{ fontSize: 9, color: active ? '#8FBB93' : '#DDD0BC', fontWeight: 700 }}>
           {active ? (dir === 'asc' ? '▲' : '▼') : '⬍'}
         </span>
@@ -1135,24 +1195,8 @@ function PSortTh({
 }
 
 function PromptStatusTable({ data, isLoading }: { data: PromptStatus[]; isLoading: boolean }) {
-  const qc = useQueryClient()
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-
-  const toggleMutation = useMutation({
-    mutationFn: ({ query, active }: { query: string; active: boolean }) =>
-      api.togglePromptActive(query, active),
-    onMutate: async ({ query, active }) => {
-      await qc.cancelQueries({ queryKey: ['dashboard'] })
-      const prev = qc.getQueryData<DashboardResponse>(['dashboard'])
-      qc.setQueryData<DashboardResponse>(['dashboard'], (old) =>
-        old ? { ...old, promptStatus: old.promptStatus.map((p) => p.query === query ? { ...p, isPaused: !active } : p) } : old,
-      )
-      return { prev }
-    },
-    onError: (_err, _vars, ctx) => { if (ctx?.prev) qc.setQueryData(['dashboard'], ctx.prev) },
-    onSettled: () => qc.invalidateQueries({ queryKey: ['dashboard'] }),
-  })
 
   function handleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -1162,16 +1206,12 @@ function PromptStatusTable({ data, isLoading }: { data: PromptStatus[]; isLoadin
   const sorted = useMemo(() => {
     if (!sortKey) return data
     return [...data].sort((a, b) => {
-      let av: string | number | boolean = sortKey === 'lead'
-        ? a.highchartsRatePct - (a.topCompetitor?.ratePct ?? 0)
-        : a[sortKey] as string | number | boolean
-      let bv: string | number | boolean = sortKey === 'lead'
-        ? b.highchartsRatePct - (b.topCompetitor?.ratePct ?? 0)
-        : b[sortKey] as string | number | boolean
-      if (typeof av === 'string') av = av.toLowerCase()
-      if (typeof bv === 'string') bv = bv.toLowerCase()
-      if (av < bv) return sortDir === 'asc' ? -1 : 1
-      if (av > bv) return sortDir === 'asc' ? 1 : -1
+      const av = a[sortKey] as string | number | boolean
+      const bv = b[sortKey] as string | number | boolean
+      const al = typeof av === 'string' ? av.toLowerCase() : av
+      const bl = typeof bv === 'string' ? bv.toLowerCase() : bv
+      if (al < bl) return sortDir === 'asc' ? -1 : 1
+      if (al > bl) return sortDir === 'asc' ? 1 : -1
       return 0
     })
   }, [data, sortKey, sortDir])
@@ -1193,29 +1233,35 @@ function PromptStatusTable({ data, isLoading }: { data: PromptStatus[]; isLoadin
       <table className="w-full border-collapse">
         <thead>
           <tr style={{ borderBottom: '1px solid #F2EDE6', background: '#FDFCF8' }}>
-            <th className="px-4 py-3" style={{ width: 48 }} />
             <PSortTh label="Query" col="query" current={sortKey} dir={sortDir} onSort={handleSort} />
             <PSortTh label="Status" col="status" current={sortKey} dir={sortDir} onSort={handleSort} width="130px" />
+            <PSortTh
+              label="Highcharts Mention Rate" col="highchartsRatePct" current={sortKey} dir={sortDir}
+              onSort={handleSort} width="190px"
+              info="The share of LLM responses for this prompt that explicitly mention Highcharts. Bar = mention rate %."
+            />
             <PSortTh label="Runs" col="runs" current={sortKey} dir={sortDir} align="right" onSort={handleSort} width="60px" />
-            <PSortTh label="Highcharts %" col="highchartsRatePct" current={sortKey} dir={sortDir} onSort={handleSort} width="148px" />
-            <PSortTh label="Viability %" col="viabilityRatePct" current={sortKey} dir={sortDir} onSort={handleSort} width="148px" />
-            <PSortTh label="Lead" col="lead" current={sortKey} dir={sortDir} onSort={handleSort} width="80px" />
-            <th className="px-4 py-3 text-xs font-medium" style={{ color: '#7A8E7C', textAlign: 'left' }}>Top rival</th>
+            <PSortTh
+              label="Viability" col="viabilityRatePct" current={sortKey} dir={sortDir}
+              onSort={handleSort} width="160px"
+              info="Average mention rate of competitor brands for this prompt. High viability means strong competitive pressure."
+            />
+            <th className="px-4 py-3 text-xs font-medium" style={{ color: '#7A8E7C', textAlign: 'left', whiteSpace: 'nowrap' }}>
+              Top rival
+            </th>
           </tr>
         </thead>
         <tbody>
           {isLoading
             ? Array.from({ length: 4 }).map((_, i) => (
                 <tr key={i} style={{ borderBottom: '1px solid #F2EDE6' }}>
-                  {Array.from({ length: 8 }).map((__, j) => (
+                  {Array.from({ length: 6 }).map((__, j) => (
                     <td key={j} className="px-4 py-4"><Skeleton className="h-4" /></td>
                   ))}
                 </tr>
               ))
             : sorted.map((p, i) => {
                 const paused = p.isPaused
-                const delta = p.highchartsRatePct - (p.topCompetitor?.ratePct ?? 0)
-                const isPending = toggleMutation.isPending && toggleMutation.variables?.query === p.query
                 return (
                   <tr key={p.query}
                     style={{
@@ -1226,13 +1272,6 @@ function PromptStatusTable({ data, isLoading }: { data: PromptStatus[]; isLoadin
                     }}
                     onMouseEnter={(e) => { if (!paused) (e.currentTarget as HTMLTableRowElement).style.background = '#F7F3EE' }}
                     onMouseLeave={(e) => { (e.currentTarget as HTMLTableRowElement).style.background = paused ? '#FDFCF8' : 'transparent' }}>
-                    <td className="px-4 py-3">
-                      <ToggleSwitch
-                        active={!paused}
-                        onChange={(v) => toggleMutation.mutate({ query: p.query, active: v })}
-                        disabled={isPending}
-                      />
-                    </td>
                     <td className="px-4 py-3 text-sm font-medium">
                       <Link to={`/prompts/drilldown?query=${encodeURIComponent(p.query)}`}
                         className="inline-flex items-center gap-1.5"
@@ -1242,24 +1281,30 @@ function PromptStatusTable({ data, isLoading }: { data: PromptStatus[]; isLoadin
                       </Link>
                     </td>
                     <td className="px-4 py-3"><PStatusBadge status={p.status} isPaused={paused} /></td>
+                    <td className="px-4 py-3">
+                      {p.status === 'tracked'
+                        ? <PMiniBar pct={p.highchartsRatePct} muted={paused} hoverLabel="Mention rate" />
+                        : <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>}
+                    </td>
                     <td className="px-4 py-3 text-right text-sm font-medium tabular-nums"
                       style={{ color: p.runs > 0 && !paused ? '#2A3A2C' : '#E5DDD0' }}>
                       {p.runs > 0 ? p.runs : '–'}
                     </td>
                     <td className="px-4 py-3">
-                      {p.status === 'tracked' ? <PMiniBar pct={p.highchartsRatePct} muted={paused} /> : <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>}
-                    </td>
-                    <td className="px-4 py-3">
-                      {p.status === 'tracked' ? <PMiniBar pct={p.viabilityRatePct} color="#C8A87A" muted={paused} /> : <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>}
-                    </td>
-                    <td className="px-4 py-3">
-                      {p.status === 'tracked' ? <PLeadBadge delta={delta} muted={paused} /> : <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>}
+                      {p.status === 'tracked'
+                        ? <PMiniBar pct={p.viabilityRatePct} color="#C8A87A" muted={paused} hoverLabel="Viability rate" />
+                        : <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>}
                     </td>
                     <td className="px-4 py-3">
                       {p.topCompetitor ? (
                         <div className="space-y-1">
-                          <div className="text-sm font-medium" style={{ color: paused ? '#9AAE9C' : '#2A3A2C' }}>{p.topCompetitor.entity}</div>
-                          <PMiniBar pct={p.topCompetitor.ratePct} color="#C8A87A" muted={paused} />
+                          <div className="flex items-center gap-1.5">
+                            {getEntityLogo(p.topCompetitor.entity) && (
+                              <EntityLogo entity={p.topCompetitor.entity} size={14} />
+                            )}
+                            <span className="text-sm font-medium" style={{ color: paused ? '#9AAE9C' : '#2A3A2C' }}>{p.topCompetitor.entity}</span>
+                          </div>
+                          <PMiniBar pct={p.topCompetitor.ratePct} color="#C8A87A" muted={paused} hoverLabel="Mention rate" />
                         </div>
                       ) : <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>}
                     </td>

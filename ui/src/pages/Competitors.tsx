@@ -8,6 +8,66 @@ import type { CompetitorSeries } from '../types'
 const HC_COLOR = '#3D7A45'
 const COMPETITOR_COLORS = ['#DDD0BC', '#D4836A', '#9B8CB5', '#D4C05A', '#9AAE9C', '#C4836A', '#6A8E6E', '#B5A898']
 
+// Brand logo map — Recharts and AG Chart have no logo so they fall back to text
+const ENTITY_LOGOS: Record<string, string> = {
+  'chart.js':   '/chartjs.png',
+  'chartjs':    '/chartjs.png',
+  'd3.js':      '/d3.png',
+  'd3':         '/d3.png',
+  'highcharts': '/highcharts%20(1).svg',
+  'echarts':    '/echarts.png',
+  'ag grid':    '/aggrid.png',
+  'aggrid':     '/aggrid.png',
+  'ag chart':   '/aggrid.png',
+  'amcharts':   '/amcharts.png',
+}
+
+// Some PNGs have heavy transparent padding — zoom crops away the whitespace
+const LOGO_ZOOM: Record<string, number> = {
+  '/echarts.png': 1.9,
+  '/aggrid.png':  2.2,
+  '/amcharts.png':1.8,
+}
+
+function getEntityLogo(entity: string): string | null {
+  return ENTITY_LOGOS[entity.toLowerCase()] ?? null
+}
+
+function EntityLogo({ entity, size = 16 }: { entity: string; size?: number }) {
+  const src = getEntityLogo(entity)
+  if (!src) return null
+  const zoom = LOGO_ZOOM[src] ?? 1
+  const inner = Math.round(size * zoom)
+  return (
+    <div style={{ width: size, height: size, overflow: 'hidden', borderRadius: 3, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <img src={src} width={inner} height={inner} style={{ objectFit: 'contain', flexShrink: 0 }} alt={entity} />
+    </div>
+  )
+}
+
+function logoLabel(entity: string, opts?: { size?: number; color?: string; fontSize?: string; fontWeight?: string }) {
+  const logo = getEntityLogo(entity)
+  const size = opts?.size ?? 14
+  const color = opts?.color ?? '#607860'
+  const fontSize = opts?.fontSize ?? '12px'
+  const fontWeight = opts?.fontWeight ?? '500'
+  if (logo) {
+    const zoom = LOGO_ZOOM[logo] ?? 1
+    const inner = Math.round(size * zoom)
+    const imgHtml =
+      `<span style="display:inline-flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;overflow:hidden;border-radius:2px;flex-shrink:0;vertical-align:middle">` +
+      `<img src="${logo}" width="${inner}" height="${inner}" style="object-fit:contain;flex-shrink:0" />` +
+      `</span>`
+    return (
+      `<span style="display:inline-flex;align-items:center;gap:4px">` +
+      imgHtml +
+      `<span style="color:${color};font-size:${fontSize};font-weight:${fontWeight}">${entity}</span>` +
+      `</span>`
+    )
+  }
+  return `<span style="color:${color};font-size:${fontSize};font-weight:${fontWeight}">${entity}</span>`
+}
+
 function getColor(s: CompetitorSeries, i: number) {
   if (s.isHighcharts) return HC_COLOR
   return COMPETITOR_COLORS[(i % COMPETITOR_COLORS.length)]
@@ -83,7 +143,13 @@ function MentionRateChart({ data }: { data: CompetitorSeries[] }) {
       categories: sorted.map((s) => s.entity),
       lineWidth: 0,
       tickWidth: 0,
-      labels: { style: { color: '#607860', fontSize: '12px', fontWeight: '500' } },
+      labels: {
+        useHTML: true,
+        style: { color: '#607860', fontSize: '12px', fontWeight: '500' },
+        formatter: function () {
+          return logoLabel(String(this.value), { size: 14 })
+        },
+      },
       title: { text: null },
     },
     yAxis: {
@@ -156,6 +222,7 @@ function ShareOfVoiceChart({ data }: { data: CompetitorSeries[] }) {
         borderColor: '#FFFFFF',
         dataLabels: {
           enabled: true,
+          useHTML: true,
           style: {
             fontSize: '11px',
             color: '#607860',
@@ -166,7 +233,19 @@ function ShareOfVoiceChart({ data }: { data: CompetitorSeries[] }) {
           formatter: function () {
             const isHC = (this.point as { isHighcharts?: boolean }).isHighcharts
             const color = isHC ? HC_COLOR : '#607860'
-            return `<span style="color:${color}">${this.point.name}: <b>${(this.y ?? 0).toFixed(1)}%</b></span>`
+            const logo = getEntityLogo(this.point.name ?? '')
+            const pSize = 12
+            const pZoom = LOGO_ZOOM[logo ?? ''] ?? 1
+            const pInner = Math.round(pSize * pZoom)
+            const nameSpan = logo
+              ? `<span style="display:inline-flex;align-items:center;gap:3px">` +
+                `<span style="display:inline-flex;align-items:center;justify-content:center;width:${pSize}px;height:${pSize}px;overflow:hidden;border-radius:2px;flex-shrink:0;vertical-align:middle">` +
+                `<img src="${logo}" width="${pInner}" height="${pInner}" style="object-fit:contain;flex-shrink:0" />` +
+                `</span>` +
+                `<span style="color:${color}">${this.point.name}</span>` +
+                `</span>`
+              : `<span style="color:${color}">${this.point.name}</span>`
+            return `${nameSpan}: <b style="color:${color}">${(this.y ?? 0).toFixed(1)}%</b>`
           },
         },
       },
@@ -341,13 +420,13 @@ export default function Competitors() {
                       {/* Entity */}
                       <td className="px-5 py-3.5">
                         <div className="flex items-center gap-2.5">
-                          <div
-                            className="w-2 h-2 rounded-full flex-shrink-0"
-                            style={{
-                              background: color,
-                              boxShadow: isHC ? `0 0 0 3px #C4DCC6` : 'none',
-                            }}
-                          />
+                          {getEntityLogo(s.entity)
+                            ? <EntityLogo entity={s.entity} size={18} />
+                            : <div
+                                className="w-2 h-2 rounded-full flex-shrink-0"
+                                style={{ background: color, boxShadow: isHC ? `0 0 0 3px #C4DCC6` : 'none' }}
+                              />
+                          }
                           <span
                             className="text-sm font-medium"
                             style={{ color: isHC ? '#2A4A2C' : '#2A3A2C' }}

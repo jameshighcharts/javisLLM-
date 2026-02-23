@@ -101,6 +101,8 @@ export interface TimeSeriesPoint {
   timestamp?: string
   total: number
   rates: Record<string, number>
+  aiVisibilityScore?: number
+  combviPct?: number
 }
 
 export interface TimeSeriesResponse {
