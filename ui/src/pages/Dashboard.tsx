@@ -547,7 +547,7 @@ function ScoreStatCard({ score, isLoading }: { score: number; isLoading: boolean
       <div className="flex items-center justify-between px-5 pt-4 pb-0">
         <span
           className="text-[10px] font-semibold uppercase tracking-widest"
-          style={{ color: '#A8BEA9' }}
+          style={{ color: '#6B8470' }}
         >
           AI Visibility Score
         </span>
@@ -556,7 +556,7 @@ function ScoreStatCard({ score, isLoading }: { score: number; isLoading: boolean
           height="13"
           fill="none"
           viewBox="0 0 24 24"
-          stroke="#B8CAB9"
+          stroke="#7E9882"
           strokeWidth="2"
         >
           <circle cx="12" cy="12" r="10" />
@@ -577,7 +577,7 @@ function ScoreStatCard({ score, isLoading }: { score: number; isLoading: boolean
               {pct.toFixed(1)}
             </span>
             <div className="flex flex-col gap-1.5">
-              <span className="text-base font-medium leading-none" style={{ color: '#C8D4C0' }}>
+              <span className="text-base font-medium leading-none" style={{ color: '#8A9E8E' }}>
                 / 100
               </span>
               <span
@@ -587,7 +587,7 @@ function ScoreStatCard({ score, isLoading }: { score: number; isLoading: boolean
                 {tier.label}
               </span>
               {toTarget > 0 && (
-                <span className="text-[10px]" style={{ color: '#B8CAB9' }}>
+                <span className="text-[10px]" style={{ color: '#7E9882' }}>
                   +{toTarget.toFixed(1)} to goal
                 </span>
               )}
@@ -651,13 +651,13 @@ function ScoreStatCard({ score, isLoading }: { score: number; isLoading: boolean
         {/* Scale ticks */}
         <div className="flex justify-between mt-3">
           {[0, 25, 50, 75, 100].map((v) => (
-            <span key={v} className="text-[10px] tabular-nums" style={{ color: '#C0CCBF' }}>
+            <span key={v} className="text-[10px] tabular-nums" style={{ color: '#8A9E90' }}>
               {v}
             </span>
           ))}
         </div>
 
-        <p className="mt-2.5 text-[11px]" style={{ color: '#A8BEA9' }}>
+        <p className="mt-2.5 text-[11px]" style={{ color: '#6B8470' }}>
           70% presence · 30% share of voice
         </p>
       </div>
@@ -823,7 +823,7 @@ function SnapshotTrendCard({
       <div className="px-5 pt-4 pb-0 flex items-center justify-between">
         <span
           className="text-[10px] font-semibold uppercase tracking-widest"
-          style={{ color: '#A8BEA9' }}
+          style={{ color: '#6B8470' }}
         >
           AI Visibility Score Over Time
         </span>
@@ -831,7 +831,7 @@ function SnapshotTrendCard({
           <button
             type="button"
             className="w-4 h-4 rounded-full text-[10px] font-semibold border flex items-center justify-center"
-            style={{ color: '#A8BEA9', borderColor: '#D8CEC0', background: '#FEFCF9' }}
+            style={{ color: '#6B8470', borderColor: '#D8CEC0', background: '#FEFCF9' }}
             aria-label="About AI Visibility Score Over Time"
           >
             i
@@ -855,7 +855,7 @@ function SnapshotTrendCard({
         ) : (
           <>
             <div className="flex flex-col">
-              <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#A8BEA9' }}>
+              <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#6B8470' }}>
                 AI Visibility
               </span>
               <div className="flex items-baseline gap-1.5">
@@ -873,7 +873,7 @@ function SnapshotTrendCard({
               </div>
             </div>
             <div className="flex flex-col">
-              <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#A8BEA9' }}>
+              <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#6B8470' }}>
                 COMBVI
               </span>
               <div className="flex items-baseline gap-1.5">
@@ -911,7 +911,7 @@ function SnapshotTrendCard({
       </div>
 
       {/* Footer */}
-      <div className="px-5 pb-4 text-[10px]" style={{ color: '#A8BEA9' }}>
+      <div className="px-5 pb-4 text-[10px]" style={{ color: '#6B8470' }}>
         AI Visibility + COMBVI snapshots · run history
       </div>
     </div>
@@ -939,7 +939,7 @@ function StatCard({
       style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
     >
       <div className="flex flex-row items-center justify-between px-4 pt-3 pb-2">
-        <div className="text-sm font-medium" style={{ color: '#7A8E7C' }}>
+        <div className="text-sm font-medium" style={{ color: '#516554' }}>
           {label}
         </div>
       </div>
@@ -954,7 +954,7 @@ function StatCard({
             {value}
           </div>
         )}
-        <p className="text-xs mt-1" style={{ color: '#9AAE9C' }}>
+        <p className="text-xs mt-1" style={{ color: '#6B7E6F' }}>
           {sub}
         </p>
       </div>
@@ -978,10 +978,8 @@ function SovCard({ sov, isLoading }: { sov: number; isLoading: boolean }) {
       className="rounded-xl border shadow-sm h-full flex flex-col overflow-hidden"
       style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
     >
-      <div style={{ height: 3, background: 'linear-gradient(90deg, #8FBB93, #52B256)' }} />
-
       <div className="px-4 pt-3">
-        <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#A8BEA9' }}>
+        <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6B8470' }}>
           Share of Voice
         </span>
       </div>
@@ -1008,7 +1006,7 @@ function SovCard({ sov, isLoading }: { sov: number; isLoading: boolean }) {
               <span className="text-2xl font-black leading-none tracking-tight" style={{ color: '#1C2B1E' }}>
                 {pct.toFixed(1)}%
               </span>
-              <span className="text-[9px] font-medium uppercase tracking-wide" style={{ color: '#A8BEA9' }}>of mentions</span>
+              <span className="text-[9px] font-medium uppercase tracking-wide" style={{ color: '#6B8470' }}>of mentions</span>
             </div>
           </div>
         )}
@@ -1036,12 +1034,10 @@ function PromptHcAvgCard() {
         el.style.boxShadow = ''
       }}
     >
-      <div style={{ height: 3, background: 'linear-gradient(90deg, #8FBB93, #52B256)' }} />
-
       <div className="flex-1 flex flex-col justify-between px-4 pt-4 pb-4">
         <div className="flex items-start justify-between">
           <div>
-            <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#A8BEA9' }}>
+            <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6B8470' }}>
               Prompts
             </span>
             <p className="text-sm font-semibold mt-1.5 leading-snug" style={{ color: '#2A3A2C' }}>
