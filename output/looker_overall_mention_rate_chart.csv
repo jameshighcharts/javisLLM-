@@ -1,0 +1,9 @@
+entity,entity_key,chart_sort,is_highcharts,overall_runs,overall_mentions_count,overall_mention_rate,overall_mention_rate_pct,overall_mention_rate_label,color_hex
+Highcharts,highcharts,1,yes,9,3,0.3333,33.33,33%,#00788c
+d3.js,d3_js,2,no,9,9,1.0,100.0,100%,#0f4c81
+chart.js,chart_js,3,no,9,7,0.7778,77.78,78%,#5f0f40
+echarts,echarts,4,no,9,3,0.3333,33.33,33%,#1282a2
+amcharts,amcharts,5,no,9,0,0.0,0.0,0%,#7f5539
+AG Grid,ag_grid,6,no,9,0,0.0,0.0,0%,#4361ee
+AG Chart,ag_chart,7,no,9,0,0.0,0.0,0%,#2a9d8f
+Recharts,recharts,8,no,9,3,0.3333,33.33,33%,#ef476f

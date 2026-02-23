@@ -1,0 +1,37 @@
+query,entity,entity_key,is_highcharts,is_competitor_excl_highcharts,is_overall_row,query_runs,mentions_count,mentions_rate,mentioned_yes,query_citation_count,query_viability_raw_count,query_viability_raw_rate,query_viability_excl_highcharts_count,query_viability_excl_highcharts_rate,window_start_utc,window_end_utc,models,web_search_enabled
+javascript charting libraries,our_brand,our_brand,no,no,no,3,0,0.0,no,0,12,0.5,9,0.428571,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+javascript charting libraries,d3.js,d3_js,no,yes,no,3,3,1.0,yes,0,12,0.5,9,0.428571,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+javascript charting libraries,Highcharts,highcharts,yes,no,no,3,3,1.0,yes,0,12,0.5,9,0.428571,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+javascript charting libraries,chart.js,chart_js,no,yes,no,3,3,1.0,yes,0,12,0.5,9,0.428571,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+javascript charting libraries,echarts,echarts,no,yes,no,3,3,1.0,yes,0,12,0.5,9,0.428571,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+javascript charting libraries,amcharts,amcharts,no,yes,no,3,0,0.0,no,0,12,0.5,9,0.428571,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+javascript charting libraries,AG Grid,ag_grid,no,yes,no,3,0,0.0,no,0,12,0.5,9,0.428571,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+javascript charting libraries,AG Chart,ag_chart,no,yes,no,3,0,0.0,no,0,12,0.5,9,0.428571,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+javascript charting libraries,Recharts,recharts,no,yes,no,3,0,0.0,no,0,12,0.5,9,0.428571,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+data visualization library,our_brand,our_brand,no,no,no,3,0,0.0,no,0,5,0.2083,5,0.238095,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+data visualization library,d3.js,d3_js,no,yes,no,3,3,1.0,yes,0,5,0.2083,5,0.238095,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+data visualization library,Highcharts,highcharts,yes,no,no,3,0,0.0,no,0,5,0.2083,5,0.238095,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+data visualization library,chart.js,chart_js,no,yes,no,3,2,0.6667,yes,0,5,0.2083,5,0.238095,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+data visualization library,echarts,echarts,no,yes,no,3,0,0.0,no,0,5,0.2083,5,0.238095,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+data visualization library,amcharts,amcharts,no,yes,no,3,0,0.0,no,0,5,0.2083,5,0.238095,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+data visualization library,AG Grid,ag_grid,no,yes,no,3,0,0.0,no,0,5,0.2083,5,0.238095,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+data visualization library,AG Chart,ag_chart,no,yes,no,3,0,0.0,no,0,5,0.2083,5,0.238095,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+data visualization library,Recharts,recharts,no,yes,no,3,0,0.0,no,0,5,0.2083,5,0.238095,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+React graph visualization library,our_brand,our_brand,no,no,no,3,0,0.0,no,0,8,0.3333,8,0.380952,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+React graph visualization library,d3.js,d3_js,no,yes,no,3,3,1.0,yes,0,8,0.3333,8,0.380952,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+React graph visualization library,Highcharts,highcharts,yes,no,no,3,0,0.0,no,0,8,0.3333,8,0.380952,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+React graph visualization library,chart.js,chart_js,no,yes,no,3,2,0.6667,yes,0,8,0.3333,8,0.380952,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+React graph visualization library,echarts,echarts,no,yes,no,3,0,0.0,no,0,8,0.3333,8,0.380952,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+React graph visualization library,amcharts,amcharts,no,yes,no,3,0,0.0,no,0,8,0.3333,8,0.380952,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+React graph visualization library,AG Grid,ag_grid,no,yes,no,3,0,0.0,no,0,8,0.3333,8,0.380952,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+React graph visualization library,AG Chart,ag_chart,no,yes,no,3,0,0.0,no,0,8,0.3333,8,0.380952,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+React graph visualization library,Recharts,recharts,no,yes,no,3,3,1.0,yes,0,8,0.3333,8,0.380952,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+OVERALL,our_brand,our_brand,no,no,yes,9,0,0.0,no,0,25,0.3472,22,0.349206,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+OVERALL,d3.js,d3_js,no,yes,yes,9,9,1.0,yes,0,25,0.3472,22,0.349206,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+OVERALL,Highcharts,highcharts,yes,no,yes,9,3,0.3333,yes,0,25,0.3472,22,0.349206,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+OVERALL,chart.js,chart_js,no,yes,yes,9,7,0.7778,yes,0,25,0.3472,22,0.349206,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+OVERALL,echarts,echarts,no,yes,yes,9,3,0.3333,yes,0,25,0.3472,22,0.349206,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+OVERALL,amcharts,amcharts,no,yes,yes,9,0,0.0,no,0,25,0.3472,22,0.349206,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+OVERALL,AG Grid,ag_grid,no,yes,yes,9,0,0.0,no,0,25,0.3472,22,0.349206,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+OVERALL,AG Chart,ag_chart,no,yes,yes,9,0,0.0,no,0,25,0.3472,22,0.349206,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes
+OVERALL,Recharts,recharts,no,yes,yes,9,3,0.3333,yes,0,25,0.3472,22,0.349206,2026-02-13T13:21:22.883179+00:00,2026-02-13T13:22:26.033414+00:00,gpt-4o-mini,yes

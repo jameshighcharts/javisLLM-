@@ -1,0 +1,191 @@
+[
+  {
+    "timestamp": "2026-02-13T13:21:22.883179+00:00",
+    "model": "gpt-4o-mini",
+    "query": "javascript charting libraries",
+    "run_id": 1,
+    "web_search_enabled": true,
+    "response_text": "Here are some popular JavaScript charting libraries:\n\n- **Chart.js**\n  - **Rationale**: Simple and easy to use, supports various chart types, and has great documentation. Ideal for small to medium projects.\n\n- **D3.js**\n  - **Rationale**: Highly flexible and powerful for creating complex, custom visualizations. Best suited for advanced users who need fine control over their charts.\n\n- **Highcharts**\n  - **Rationale**: Feature-rich, supports a wide array of chart types, and offers excellent performance. Free for non-commercial use, making it a good option for businesses.\n\n- **Plotly.js**\n  - **Rationale**: Excellent for interactive charts and supports 3D plotting. It integrates well with other Plotly tools, making it great for data science applications.\n\n- **ApexCharts**\n  - **Rationale**: Modern and responsive charts with a focus on interactivity. Easy to integrate with frameworks like React, Angular, and Vue.\n\n- **Google Charts**\n  - **Rationale**: Free and easy to use with good integration with Google services. Offers a variety of chart types and is suitable for web applications.\n\n- **CanvasJS**\n  - **Rationale**: Lightweight and fast with good performance for rendering large datasets. Offers a variety of chart types and a simple API.\n\n- **ECharts**\n  - **Rationale**: Developed by Baidu, it’s powerful for complex visualizations and supports a variety of chart types. Great for handling large datasets.\n\n- **Nivo**\n  - **Rationale**: Built on top of D3.js, it provides a rich set of components for React applications. Focuses on data visualization with beautiful and responsive charts.\n\n- **Vis.js**\n  - **Rationale**: Ideal for network and timeline visualizations. It allows for dynamic data manipulation and is suitable for real-time applications.",
+    "citations": [],
+    "error": null,
+    "mentions": {
+      "our_brand": false,
+      "d3_js": true,
+      "highcharts": true,
+      "chart_js": true,
+      "echarts": true,
+      "amcharts": false,
+      "ag_grid": false,
+      "ag_chart": false,
+      "recharts": false
+    }
+  },
+  {
+    "timestamp": "2026-02-13T13:21:32.065536+00:00",
+    "model": "gpt-4o-mini",
+    "query": "javascript charting libraries",
+    "run_id": 2,
+    "web_search_enabled": true,
+    "response_text": "Here are some popular JavaScript charting libraries:\n\n- **Chart.js**\n  - Simple and easy to use.\n  - Supports various chart types (line, bar, radar, etc.).\n  - Responsive and customizable.\n\n- **D3.js**\n  - Highly flexible and powerful for complex data visualizations.\n  - Allows for manipulation of the DOM based on data.\n  - Great for creating custom charts and interactive visualizations.\n\n- **Highcharts**\n  - Rich in features with a wide range of chart types.\n  - Offers a free version for personal use.\n  - Excellent documentation and support.\n\n- **Plotly.js**\n  - Built on top of D3.js and stack.gl.\n  - Supports complex scientific and statistical charts.\n  - Interactive and supports 3D visualizations.\n\n- **ApexCharts**\n  - Easy to integrate with modern frameworks (React, Vue, Angular).\n  - Offers interactive and responsive charts.\n  - Provides a wide variety of chart types.\n\n- **ECharts**\n  - Developed by Baidu, supports large datasets.\n  - Highly customizable and offers smooth animations.\n  - Good for complex visualizations and data-driven applications.\n\n- **Google Charts**\n  - Free and easy to use with Google’s ecosystem.\n  - Provides a wide variety of chart types with interactive features.\n  - Integrates well with other Google services.\n\n- **C3.js**\n  - Built on D3.js for easier usage.\n  - Provides reusable charts with a simple API.\n  - Good for creating responsive and dynamic charts.",
+    "citations": [],
+    "error": null,
+    "mentions": {
+      "our_brand": false,
+      "d3_js": true,
+      "highcharts": true,
+      "chart_js": true,
+      "echarts": true,
+      "amcharts": false,
+      "ag_grid": false,
+      "ag_chart": false,
+      "recharts": false
+    }
+  },
+  {
+    "timestamp": "2026-02-13T13:21:40.711254+00:00",
+    "model": "gpt-4o-mini",
+    "query": "javascript charting libraries",
+    "run_id": 3,
+    "web_search_enabled": true,
+    "response_text": "Here are some popular JavaScript charting libraries along with brief rationales for each:\n\n- **Chart.js**\n  - Simple and easy to use\n  - Supports multiple chart types (bar, line, pie, etc.)\n  - Responsive and customizable\n\n- **D3.js**\n  - Highly flexible for data visualization\n  - Allows for complex animations and transitions\n  - Ideal for creating custom and interactive charts\n\n- **Highcharts**\n  - Feature-rich with a variety of chart types\n  - Excellent documentation and support\n  - Free for personal use, commercial licensing available\n\n- **ApexCharts**\n  - User-friendly API and modern design\n  - Interactive and responsive charts\n  - Supports various frameworks like React, Angular, and Vue\n\n- **ECharts**\n  - Developed by Baidu; great for large datasets\n  - Offers rich visualizations and interactive features\n  - Good performance with high scalability\n\n- **Plotly.js**\n  - Built on top of D3.js and stack.gl\n  - Great for scientific and statistical charts\n  - Supports 3D visualizations and interactive dashboards\n\n- **Google Charts**\n  - Easy integration with Google services\n  - Wide range of chart types and good customization options\n  - Free to use and well-documented\n\n- **Vis.js**\n  - Focused on network and timeline visualizations\n  - Good for dynamic data visualization\n  - Easy to implement and customize\n\nThese libraries cater to different needs, from simple charts to complex visualizations, ensuring a good fit for various projects.",
+    "citations": [],
+    "error": null,
+    "mentions": {
+      "our_brand": false,
+      "d3_js": true,
+      "highcharts": true,
+      "chart_js": true,
+      "echarts": true,
+      "amcharts": false,
+      "ag_grid": false,
+      "ag_chart": false,
+      "recharts": false
+    }
+  },
+  {
+    "timestamp": "2026-02-13T13:21:50.039374+00:00",
+    "model": "gpt-4o-mini",
+    "query": "data visualization library",
+    "run_id": 1,
+    "web_search_enabled": true,
+    "response_text": "Here are some popular data visualization libraries/tools:\n\n- **Matplotlib**\n  - **Rationale**: A foundational plotting library in Python, great for static, animated, and interactive visualizations. Highly customizable.\n\n- **Seaborn**\n  - **Rationale**: Built on Matplotlib, it simplifies the creation of attractive statistical graphics and provides beautiful default styles.\n\n- **Plotly**\n  - **Rationale**: Offers interactive plots and is suitable for web applications. Supports 3D plotting and has libraries for multiple languages (Python, R, JavaScript).\n\n- **Bokeh**\n  - **Rationale**: Designed for interactive visualizations in web browsers, allows for real-time data streaming and dashboard creation.\n\n- **ggplot2**\n  - **Rationale**: A powerful R package based on the Grammar of Graphics, ideal for creating complex multi-layered visualizations with ease.\n\n- **Altair**\n  - **Rationale**: Declarative statistical visualization library for Python; based on Vega and Vega-Lite, it emphasizes simplicity and clarity.\n\n- **D3.js**\n  - **Rationale**: A JavaScript library for producing dynamic, interactive data visualizations in web browsers; highly flexible and powerful for web developers.\n\n- **Tableau**\n  - **Rationale**: A leading business intelligence tool that allows users to create interactive and shareable dashboards without programming knowledge.\n\n- **Google Charts**\n  - **Rationale**: A simple and effective way to create interactive charts in web applications; integrates well with Google products.\n\n- **Chart.js**\n  - **Rationale**: A simple yet flexible JavaScript library for creating responsive charts, ideal for smaller projects and applications.",
+    "citations": [],
+    "error": null,
+    "mentions": {
+      "our_brand": false,
+      "d3_js": true,
+      "highcharts": false,
+      "chart_js": true,
+      "echarts": false,
+      "amcharts": false,
+      "ag_grid": false,
+      "ag_chart": false,
+      "recharts": false
+    }
+  },
+  {
+    "timestamp": "2026-02-13T13:21:58.174135+00:00",
+    "model": "gpt-4o-mini",
+    "query": "data visualization library",
+    "run_id": 2,
+    "web_search_enabled": true,
+    "response_text": "Here are some popular data visualization libraries/tools along with a brief rationale for each:\n\n- **Matplotlib**  \n  - A foundational library for creating static, interactive, and animated visualizations in Python.\n  - Highly customizable and widely used in scientific computing.\n\n- **Seaborn**  \n  - Built on top of Matplotlib, this library simplifies the creation of attractive statistical graphics.\n  - Offers built-in themes and color palettes for better aesthetics.\n\n- **Plotly**  \n  - Supports interactive plotting and can handle a variety of complex visualizations.\n  - Useful for web-based applications and dashboards.\n\n- **Bokeh**  \n  - Designed for creating interactive plots and dashboards in modern web browsers.\n  - Allows for real-time streaming and large datasets.\n\n- **ggplot2**  \n  - An R-based library that implements the Grammar of Graphics.\n  - Excellent for creating complex multi-layered visualizations easily.\n\n- **D3.js**  \n  - A JavaScript library for producing dynamic, interactive data visualizations in web browsers.\n  - Provides immense flexibility and control over visual design.\n\n- **Altair**  \n  - Declarative statistical visualization library in Python that is user-friendly.\n  - Based on Vega and Vega-Lite, making it easy to create complex visualizations with concise code.\n\n- **Tableau**  \n  - A powerful business intelligence tool for data visualization that supports drag-and-drop features.\n  - Ideal for creating interactive dashboards and reports without extensive coding knowledge.\n\n- **Power BI**  \n  - Microsoft’s data visualization tool, which integrates well with other Microsoft products.\n  - Offers a user-friendly interface for creating reports and dashboards.\n\n- **Chart.js**  \n  - A simple yet flexible JavaScript charting library for designers and developers.\n  - Easy to use and integrates well with web applications for basic visualizations.",
+    "citations": [],
+    "error": null,
+    "mentions": {
+      "our_brand": false,
+      "d3_js": true,
+      "highcharts": false,
+      "chart_js": true,
+      "echarts": false,
+      "amcharts": false,
+      "ag_grid": false,
+      "ag_chart": false,
+      "recharts": false
+    }
+  },
+  {
+    "timestamp": "2026-02-13T13:22:06.161522+00:00",
+    "model": "gpt-4o-mini",
+    "query": "data visualization library",
+    "run_id": 3,
+    "web_search_enabled": true,
+    "response_text": "Here are some popular data visualization libraries/tools along with their rationales:\n\n- **Matplotlib**: \n  - A foundational library in Python for creating static, animated, and interactive visualizations.\n  - Highly customizable with extensive options for plotting.\n\n- **Seaborn**:\n  - Built on Matplotlib, it simplifies complex visualizations and provides attractive default styles.\n  - Great for statistical graphics and data exploration.\n\n- **Plotly**:\n  - Offers interactive plots that can be embedded in web applications.\n  - Supports a wide range of chart types and is suitable for dashboards.\n\n- **Bokeh**:\n  - Focuses on interactive visualizations for web browsers.\n  - Can handle large datasets and integrates well with web frameworks.\n\n- **ggplot2**:\n  - A popular R library based on the Grammar of Graphics.\n  - Excellent for creating complex and multi-layered visualizations easily.\n\n- **Altair**:\n  - Declarative statistical visualization library for Python.\n  - Allows for concise visualizations based on a simple syntax.\n\n- **D3.js**:\n  - A JavaScript library for producing dynamic, interactive data visualizations in web browsers.\n  - Provides fine-grained control over the final visual output.\n\n- **Tableau**:\n  - A powerful commercial tool for business intelligence and data visualization.\n  - User-friendly drag-and-drop interface for creating dashboards and reports.\n\n- **Power BI**:\n  - Microsoft’s analytics service that provides interactive visualizations and business intelligence capabilities.\n  - Integrates well with other Microsoft products and services.\n\n- **Google Charts**:\n  - Offers a variety of interactive charts and data tools that are easy to use and integrate into web applications.\n  - Good for embedding visualizations in web pages.\n\nThese libraries/tools cater to different needs and preferences, from programming-focused libraries to user-friendly commercial solutions.",
+    "citations": [],
+    "error": null,
+    "mentions": {
+      "our_brand": false,
+      "d3_js": true,
+      "highcharts": false,
+      "chart_js": false,
+      "echarts": false,
+      "amcharts": false,
+      "ag_grid": false,
+      "ag_chart": false,
+      "recharts": false
+    }
+  },
+  {
+    "timestamp": "2026-02-13T13:22:13.267204+00:00",
+    "model": "gpt-4o-mini",
+    "query": "React graph visualization library",
+    "run_id": 1,
+    "web_search_enabled": true,
+    "response_text": "Here are some popular React graph visualization libraries:\n\n- **Recharts**\n  - Simple and easy to use; built specifically for React.\n  - Composable and responsive components for line, bar, pie charts, etc.\n\n- **D3.js (with React wrapper)**\n  - Highly customizable and powerful for complex visualizations.\n  - Allows detailed control over SVG elements; often used for sophisticated graphs.\n\n- **Visx**\n  - Combines the power of D3 with the simplicity of React.\n  - Modular approach allows for building visualizations with a focus on performance.\n\n- **React-Vis**\n  - Developed by Uber; offers a set of components for building data visualizations.\n  - Good documentation and easy to integrate into React applications.\n\n- **Nivo**\n  - Rich feature set with a variety of chart types and responsive design.\n  - Provides interactive and animated charts out of the box.\n\n- **Victory**\n  - Designed for modularity and composability; easy to create complex data visualizations.\n  - Good for both simple and advanced charts, with a focus on accessibility.\n\n- **React Flow**\n  - Specifically for flow-based diagrams and graph visualizations.\n  - Easy to create interactive diagrams and workflows with drag-and-drop functionality.\n\n- **Graphlib (with React)**\n  - Useful for representing and manipulating graphs; often paired with visual libraries.\n  - Provides algorithms for layout and traversal of graph structures.\n\nChoose based on your specific visualization needs, complexity, and customization requirements!",
+    "citations": [],
+    "error": null,
+    "mentions": {
+      "our_brand": false,
+      "d3_js": true,
+      "highcharts": false,
+      "chart_js": false,
+      "echarts": false,
+      "amcharts": false,
+      "ag_grid": false,
+      "ag_chart": false,
+      "recharts": true
+    }
+  },
+  {
+    "timestamp": "2026-02-13T13:22:19.781585+00:00",
+    "model": "gpt-4o-mini",
+    "query": "React graph visualization library",
+    "run_id": 2,
+    "web_search_enabled": true,
+    "response_text": "Here are some popular React graph visualization libraries:\n\n- **Recharts**\n  - **Rationale**: Simple and responsive charts, built with React components. Good for integrating with existing React applications.\n\n- **Visx**\n  - **Rationale**: Combines the power of D3 with React. Offers low-level building blocks for creating custom visualizations.\n\n- **React-Vis**\n  - **Rationale**: Developed by Uber, this library provides a collection of React components for building data visualizations easily.\n\n- **Nivo**\n  - **Rationale**: Offers a rich set of interactive data visualization components, built on top of D3 and designed for server-side rendering.\n\n- **Victory**\n  - **Rationale**: A modular set of components for building interactive data visualizations with a focus on simplicity and composition.\n\n- **D3.js (with React)**\n  - **Rationale**: While not React-specific, D3 can be integrated with React for complex and highly customizable visualizations.\n\n- **React-Chartjs-2**\n  - **Rationale**: A wrapper for Chart.js that allows the use of Chart.js charts in React applications easily, offering various chart types.\n\n- **React-Spring (for animations)**\n  - **Rationale**: While not a graph library per se, it can be used to animate your charts and visualizations, enhancing user experience.\n\nChoose based on your project needs regarding complexity, customization, and ease of use.",
+    "citations": [],
+    "error": null,
+    "mentions": {
+      "our_brand": false,
+      "d3_js": true,
+      "highcharts": false,
+      "chart_js": true,
+      "echarts": false,
+      "amcharts": false,
+      "ag_grid": false,
+      "ag_chart": false,
+      "recharts": true
+    }
+  },
+  {
+    "timestamp": "2026-02-13T13:22:26.033414+00:00",
+    "model": "gpt-4o-mini",
+    "query": "React graph visualization library",
+    "run_id": 3,
+    "web_search_enabled": true,
+    "response_text": "Here are some popular React graph visualization libraries:\n\n- **Recharts**\n  - Simple and easy to use with a focus on responsive design.\n  - Built on React components, making it straightforward to integrate.\n\n- **Visx**\n  - Combines the power of D3 with the benefits of React.\n  - Offers a collection of low-level visualization components.\n\n- **React-Vis**\n  - Developed by Uber, it provides a set of React components for common visualization types.\n  - Good for quick prototyping and has a simple API.\n\n- **Nivo**\n  - Rich set of components for various types of data visualizations.\n  - Highly customizable and supports server-side rendering.\n\n- **Victory**\n  - Focuses on modular charting components for React and React Native.\n  - Provides a flexible API and supports animations.\n\n- **D3.js (with React)**\n  - While not a React library per se, D3 can be integrated with React for complex visualizations.\n  - Offers extensive capabilities for data manipulation and visualization.\n\n- **Chart.js (with React wrapper)**\n  - Popular charting library with a React wrapper (e.g., `react-chartjs-2`).\n  - Easy to use with good documentation and a variety of chart types. \n\n- **Cytoscape.js (with React wrapper)**\n  - Ideal for complex graph/network visualizations.\n  - Supports large datasets and provides layout algorithms.\n\nThese libraries offer a range of functionalities and can be chosen based on the specific requirements of your project.",
+    "citations": [],
+    "error": null,
+    "mentions": {
+      "our_brand": false,
+      "d3_js": true,
+      "highcharts": false,
+      "chart_js": true,
+      "echarts": false,
+      "amcharts": false,
+      "ag_grid": false,
+      "ag_chart": false,
+      "recharts": true
+    }
+  }
+]

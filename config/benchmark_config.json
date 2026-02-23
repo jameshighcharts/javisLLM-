@@ -1,0 +1,29 @@
+{
+  "queries": [
+    "javascript charting libraries",
+    "data visualization library",
+    "React graph visualization library",
+    "accessibility charting library",
+    "best charting library only give 1 answer"
+  ],
+  "competitors": [
+    "d3.js",
+    "Highcharts",
+    "chart.js",
+    "echarts",
+    "amcharts",
+    "AG Grid",
+    "AG Chart",
+    "Recharts"
+  ],
+  "aliases": {
+    "d3.js": ["d3.js", "d3 js", "d3js", "d3"],
+    "Highcharts": ["highcharts"],
+    "chart.js": ["chart.js", "chart js", "chartjs"],
+    "echarts": ["echarts", "e charts", "e-charts"],
+    "amcharts": ["amcharts", "am charts", "am-charts"],
+    "AG Grid": ["ag grid", "ag-grid"],
+    "AG Chart": ["ag chart", "ag charts", "ag-chart", "ag-charts"],
+    "Recharts": ["recharts", "re charts", "re-charts"]
+  }
+}

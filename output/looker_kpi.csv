@@ -1,0 +1,2 @@
+metric_name,ai_visibility_overall_score,score_scale,queries_count,window_start_utc,window_end_utc,models,web_search_enabled,run_month,run_id
+AI Visibility Overall,31.00,0-100,5,2026-02-16T14:03:39.796393+00:00,2026-02-16T14:05:29.021313+00:00,gpt-4o-mini,yes,2026-02,3dd04f4c-d178-4405-b780-88c6767b5c3d

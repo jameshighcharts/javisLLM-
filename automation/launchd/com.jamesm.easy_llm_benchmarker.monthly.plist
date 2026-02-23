@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.jamesm.easy_llm_benchmarker.monthly</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/zsh</string>
+      <string>-lc</string>
+      <string>cd /Users/jamesm/projects/easy_llm_benchmarker &amp;&amp; /Users/jamesm/projects/easy_llm_benchmarker/scripts/monthly_run.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jamesm/projects/easy_llm_benchmarker</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+      <key>Day</key>
+      <integer>1</integer>
+      <key>Hour</key>
+      <integer>9</integer>
+      <key>Minute</key>
+      <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jamesm/projects/easy_llm_benchmarker/output/logs/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jamesm/projects/easy_llm_benchmarker/output/logs/launchd.err.log</string>
+  </dict>
+</plist>

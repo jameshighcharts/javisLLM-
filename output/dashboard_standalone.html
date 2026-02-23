@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLM Mention Benchmark Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://code.highcharts.com/highcharts.js"></script>
+  <script src="https://code.highcharts.com/modules/heatmap.js"></script>
+  <script src="https://code.highcharts.com/modules/accessibility.js"></script>
+  <style>
+    :root {
+      --ink: #0d1b2a;
+      --ink-soft: #324967;
+      --paper: #f8fafc;
+      --panel: #ffffff;
+      --line: #d9e3ef;
+      --teal: #00788c;
+      --teal-deep: #005f70;
+      --sand: #f2ebe3;
+      --mint: #dff3ee;
+      --signal: #f18f01;
+      --good: #1f8f64;
+      --bad: #c14633;
+      --shadow: 0 12px 36px rgba(8, 25, 44, 0.08);
+      --radius: 18px;
+      --gutter: 2.25rem;
+      --chart-max-h: 320px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: "Manrope", "Avenir Next", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 12% 15%, rgba(0, 120, 140, 0.14), transparent 30%),
+        radial-gradient(circle at 88% 10%, rgba(241, 143, 1, 0.14), transparent 32%),
+        linear-gradient(145deg, #f7fbff 0%, #f4f8f9 52%, #faf7f2 100%);
+      min-height: 100vh;
+    }
+
+    .wrap {
+      width: min(1060px, calc(100% - var(--gutter)));
+      margin: 2.1rem auto 2.6rem;
+      display: grid;
+      gap: 1rem;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 1.1rem 1.1rem 1.15rem;
+      overflow: hidden;
+      animation: reveal 420ms ease both;
+    }
+
+    @keyframes reveal {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .hero h1 {
+      margin: 0 0 0.35rem;
+      font-size: clamp(1.32rem, 2.6vw, 2.05rem);
+      letter-spacing: -0.02em;
+      font-weight: 800;
+    }
+
+    .hero p {
+      margin: 0.2rem 0;
+      color: var(--ink-soft);
+      max-width: 90ch;
+      line-height: 1.45;
+      font-size: 0.96rem;
+    }
+
+    .micro {
+      font-family: "IBM Plex Mono", "SF Mono", "Menlo", monospace;
+      font-size: 0.76rem;
+      color: var(--ink-soft);
+      letter-spacing: 0.01em;
+    }
+
+    .kpis {
+      display: grid;
+      gap: 0.72rem;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    }
+
+    .kpi {
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, #ffffff 0%, #fdfefe 100%);
+      border-radius: 13px;
+      padding: 0.65rem 0.7rem;
+      min-height: 82px;
+    }
+
+    .kpi .label {
+      font-size: 0.73rem;
+      color: var(--ink-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.32rem;
+    }
+
+    .kpi .value {
+      font-family: "IBM Plex Mono", "SF Mono", "Menlo", monospace;
+      font-size: 0.9rem;
+      line-height: 1.2;
+      word-break: break-word;
+    }
+
+    .section-head h2 {
+      margin: 0;
+      font-size: 1.03rem;
+      letter-spacing: -0.01em;
+    }
+
+    .section-head p {
+      margin: 0.27rem 0 0;
+      color: var(--ink-soft);
+      font-size: 0.88rem;
+      line-height: 1.42;
+    }
+
+    .chart {
+      height: clamp(220px, 32vw, var(--chart-max-h));
+      width: 100%;
+      margin-top: 0.72rem;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+    }
+
+    .table-wrap {
+      margin-top: 0.72rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+      background: #ffffff;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      min-width: 980px;
+    }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      background: #eef4f7;
+      z-index: 1;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid var(--line);
+      padding: 0.5rem 0.52rem;
+      text-align: center;
+      font-size: 0.8rem;
+      white-space: nowrap;
+    }
+
+    th:first-child,
+    td:first-child {
+      text-align: left;
+      font-weight: 700;
+      position: sticky;
+      left: 0;
+      z-index: 2;
+      background: #f7fbfe;
+      box-shadow: 1px 0 0 #deebf2;
+    }
+
+    tbody tr:nth-child(odd) {
+      background: #fcfefe;
+    }
+
+    tbody tr:nth-child(odd) td:first-child {
+      background: #f4fafc;
+    }
+
+    .tag {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 0.11rem 0.45rem;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .yes {
+      background: #e2f5eb;
+      color: var(--good);
+      border: 1px solid #b8e6cf;
+    }
+
+    .no {
+      background: #fbe8e5;
+      color: var(--bad);
+      border: 1px solid #f1beb6;
+    }
+
+    .hint {
+      margin-top: 0.4rem;
+      font-size: 0.8rem;
+      color: var(--ink-soft);
+      font-family: "IBM Plex Mono", "SF Mono", "Menlo", monospace;
+      background: var(--sand);
+      border: 1px dashed #d7cbbf;
+      border-radius: 10px;
+      padding: 0.45rem 0.52rem;
+      white-space: pre-wrap;
+    }
+
+    @media (max-width: 1100px) {
+      :root {
+        --gutter: 1.5rem;
+        --chart-max-h: 300px;
+      }
+
+      table {
+        min-width: 920px;
+      }
+    }
+
+    @media (max-width: 840px) {
+      :root {
+        --gutter: 1rem;
+        --chart-max-h: 280px;
+      }
+
+      .kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .hero p {
+        font-size: 0.9rem;
+      }
+
+      .section-head p {
+        font-size: 0.84rem;
+      }
+
+      table {
+        min-width: 800px;
+      }
+
+      th,
+      td {
+        font-size: 0.75rem;
+        padding: 0.45rem 0.4rem;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .wrap {
+        margin-top: 0.8rem;
+        margin-bottom: 1.3rem;
+      }
+
+      .panel {
+        padding: 0.78rem;
+      }
+
+      .chart {
+        height: clamp(200px, 52vw, 250px);
+      }
+
+      .kpis {
+        grid-template-columns: 1fr;
+      }
+
+      .kpi {
+        min-height: 70px;
+      }
+
+      .hero h1 {
+        font-size: 1.2rem;
+      }
+
+      .tag {
+        font-size: 0.66rem;
+      }
+
+      table {
+        min-width: 720px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="panel hero">
+      <h1>LLM Mention Benchmark Dashboard</h1>
+      <p>
+        This view compares how often Highcharts and key competitors appear in LLM responses
+        for the selected benchmark queries. Values are based on mention presence
+        (<strong>yes/no</strong>) per response run, then aggregated into rates and viability index.
+        In this dashboard, <strong>Highcharts is the primary tracked brand</strong>.
+      </p>
+      <p class="micro" id="renderStamp">Dashboard rendered at: --</p>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Run Context</h2>
+        <p>These cards describe what data you are currently looking at: response window, run volume, model usage, and whether web search was enabled.</p>
+      </div>
+      <div class="kpis" id="kpis"></div>
+      <div class="hint" id="loadHint" hidden></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Overall Mention Rate by Entity</h2>
+        <p>Each bar is the percent of total responses (all queries combined) where that entity was mentioned at least once.</p>
+      </div>
+      <div id="overallChart" class="chart"></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Query × Entity Mention Heatmap</h2>
+        <p>Color intensity shows mention rate per query and entity. This helps spot where competitors dominate specific search intents.</p>
+      </div>
+      <div id="heatmapChart" class="chart"></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Viability Index by Query</h2>
+        <p>The viability index measures competitor mentions across runs, normalized by possible mentions, and excludes Highcharts.</p>
+      </div>
+      <div id="viabilityChart" class="chart"></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Detailed Comparison Table</h2>
+        <p>Use this table to inspect query-level counts/rates and yes/no mention flags side by side.</p>
+      </div>
+      <div class="table-wrap">
+        <table id="comparisonTable"></table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    window.__EMBEDDED_BENCHMARK_DATA__ = {"comparisonRows": [{"query": "javascript charting libraries", "runs": "1", "web_search_enabled": "yes", "our_brand_yes": "yes", "our_brand_count": "1", "our_brand_rate": "1.0", "d3_js_yes": "yes", "d3_js_count": "1", "d3_js_rate": "1.0", "highcharts_yes": "yes", "highcharts_count": "1", "highcharts_rate": "1.0", "chart_js_yes": "yes", "chart_js_count": "1", "chart_js_rate": "1.0", "echarts_yes": "yes", "echarts_count": "1", "echarts_rate": "1.0", "amcharts_yes": "no", "amcharts_count": "0", "amcharts_rate": "0.0", "ag_grid_yes": "no", "ag_grid_count": "0", "ag_grid_rate": "0.0", "ag_chart_yes": "no", "ag_chart_count": "0", "ag_chart_rate": "0.0", "recharts_yes": "no", "recharts_count": "0", "recharts_rate": "0.0", "citation_count": "0", "viability_index_count": "4", "viability_index_rate": "0.5"}, {"query": "data visualization library", "runs": "1", "web_search_enabled": "yes", "our_brand_yes": "no", "our_brand_count": "0", "our_brand_rate": "0.0", "d3_js_yes": "yes", "d3_js_count": "1", "d3_js_rate": "1.0", "highcharts_yes": "no", "highcharts_count": "0", "highcharts_rate": "0.0", "chart_js_yes": "yes", "chart_js_count": "1", "chart_js_rate": "1.0", "echarts_yes": "no", "echarts_count": "0", "echarts_rate": "0.0", "amcharts_yes": "no", "amcharts_count": "0", "amcharts_rate": "0.0", "ag_grid_yes": "no", "ag_grid_count": "0", "ag_grid_rate": "0.0", "ag_chart_yes": "no", "ag_chart_count": "0", "ag_chart_rate": "0.0", "recharts_yes": "no", "recharts_count": "0", "recharts_rate": "0.0", "citation_count": "0", "viability_index_count": "2", "viability_index_rate": "0.25"}, {"query": "React graph visualization library", "runs": "1", "web_search_enabled": "yes", "our_brand_yes": "no", "our_brand_count": "0", "our_brand_rate": "0.0", "d3_js_yes": "yes", "d3_js_count": "1", "d3_js_rate": "1.0", "highcharts_yes": "no", "highcharts_count": "0", "highcharts_rate": "0.0", "chart_js_yes": "yes", "chart_js_count": "1", "chart_js_rate": "1.0", "echarts_yes": "no", "echarts_count": "0", "echarts_rate": "0.0", "amcharts_yes": "no", "amcharts_count": "0", "amcharts_rate": "0.0", "ag_grid_yes": "no", "ag_grid_count": "0", "ag_grid_rate": "0.0", "ag_chart_yes": "no", "ag_chart_count": "0", "ag_chart_rate": "0.0", "recharts_yes": "yes", "recharts_count": "1", "recharts_rate": "1.0", "citation_count": "0", "viability_index_count": "3", "viability_index_rate": "0.375"}, {"query": "accessibility charting library", "runs": "1", "web_search_enabled": "yes", "our_brand_yes": "yes", "our_brand_count": "1", "our_brand_rate": "1.0", "d3_js_yes": "yes", "d3_js_count": "1", "d3_js_rate": "1.0", "highcharts_yes": "yes", "highcharts_count": "1", "highcharts_rate": "1.0", "chart_js_yes": "yes", "chart_js_count": "1", "chart_js_rate": "1.0", "echarts_yes": "yes", "echarts_count": "1", "echarts_rate": "1.0", "amcharts_yes": "no", "amcharts_count": "0", "amcharts_rate": "0.0", "ag_grid_yes": "no", "ag_grid_count": "0", "ag_grid_rate": "0.0", "ag_chart_yes": "no", "ag_chart_count": "0", "ag_chart_rate": "0.0", "recharts_yes": "no", "recharts_count": "0", "recharts_rate": "0.0", "citation_count": "0", "viability_index_count": "4", "viability_index_rate": "0.5"}, {"query": "OVERALL", "runs": "4", "web_search_enabled": "yes", "our_brand_yes": "yes", "our_brand_count": "2", "our_brand_rate": "0.5", "d3_js_yes": "yes", "d3_js_count": "4", "d3_js_rate": "1.0", "highcharts_yes": "yes", "highcharts_count": "2", "highcharts_rate": "0.5", "chart_js_yes": "yes", "chart_js_count": "4", "chart_js_rate": "1.0", "echarts_yes": "yes", "echarts_count": "2", "echarts_rate": "0.5", "amcharts_yes": "no", "amcharts_count": "0", "amcharts_rate": "0.0", "ag_grid_yes": "no", "ag_grid_count": "0", "ag_grid_rate": "0.0", "ag_chart_yes": "no", "ag_chart_count": "0", "ag_chart_rate": "0.0", "recharts_yes": "yes", "recharts_count": "1", "recharts_rate": "0.25", "citation_count": "0", "viability_index_count": "13", "viability_index_rate": "0.4062"}], "viabilityRows": [{"query": "javascript charting libraries", "entity": "our_brand", "mentions_count": "1", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "javascript charting libraries", "entity": "d3.js", "mentions_count": "1", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "javascript charting libraries", "entity": "Highcharts", "mentions_count": "1", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "javascript charting libraries", "entity": "chart.js", "mentions_count": "1", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "javascript charting libraries", "entity": "echarts", "mentions_count": "1", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "javascript charting libraries", "entity": "amcharts", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "javascript charting libraries", "entity": "AG Grid", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "javascript charting libraries", "entity": "AG Chart", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "javascript charting libraries", "entity": "Recharts", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "data visualization library", "entity": "our_brand", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "data visualization library", "entity": "d3.js", "mentions_count": "1", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "data visualization library", "entity": "Highcharts", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "data visualization library", "entity": "chart.js", "mentions_count": "1", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "data visualization library", "entity": "echarts", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "data visualization library", "entity": "amcharts", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "data visualization library", "entity": "AG Grid", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "data visualization library", "entity": "AG Chart", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "data visualization library", "entity": "Recharts", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "React graph visualization library", "entity": "our_brand", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "React graph visualization library", "entity": "d3.js", "mentions_count": "1", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "React graph visualization library", "entity": "Highcharts", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "React graph visualization library", "entity": "chart.js", "mentions_count": "1", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "React graph visualization library", "entity": "echarts", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "React graph visualization library", "entity": "amcharts", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "React graph visualization library", "entity": "AG Grid", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "React graph visualization library", "entity": "AG Chart", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "React graph visualization library", "entity": "Recharts", "mentions_count": "1", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "accessibility charting library", "entity": "our_brand", "mentions_count": "1", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "accessibility charting library", "entity": "d3.js", "mentions_count": "1", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "accessibility charting library", "entity": "Highcharts", "mentions_count": "1", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "accessibility charting library", "entity": "chart.js", "mentions_count": "1", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "accessibility charting library", "entity": "echarts", "mentions_count": "1", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "accessibility charting library", "entity": "amcharts", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "accessibility charting library", "entity": "AG Grid", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "accessibility charting library", "entity": "AG Chart", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "accessibility charting library", "entity": "Recharts", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "OVERALL", "entity": "our_brand", "mentions_count": "2", "mentions_rate": "0.5", "mentioned_yes": "yes"}, {"query": "OVERALL", "entity": "d3.js", "mentions_count": "4", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "OVERALL", "entity": "Highcharts", "mentions_count": "2", "mentions_rate": "0.5", "mentioned_yes": "yes"}, {"query": "OVERALL", "entity": "chart.js", "mentions_count": "4", "mentions_rate": "1.0", "mentioned_yes": "yes"}, {"query": "OVERALL", "entity": "echarts", "mentions_count": "2", "mentions_rate": "0.5", "mentioned_yes": "yes"}, {"query": "OVERALL", "entity": "amcharts", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "OVERALL", "entity": "AG Grid", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "OVERALL", "entity": "AG Chart", "mentions_count": "0", "mentions_rate": "0.0", "mentioned_yes": "no"}, {"query": "OVERALL", "entity": "Recharts", "mentions_count": "1", "mentions_rate": "0.25", "mentioned_yes": "yes"}], "jsonlRows": [{"timestamp": "2026-02-16T09:33:39.297331+00:00", "model": "gpt-4o-mini", "query": "javascript charting libraries", "run_id": 1, "web_search_enabled": "yes", "citation_count": 0, "error": null}, {"timestamp": "2026-02-16T09:33:47.474930+00:00", "model": "gpt-4o-mini", "query": "data visualization library", "run_id": 1, "web_search_enabled": "yes", "citation_count": 0, "error": null}, {"timestamp": "2026-02-16T09:33:55.441237+00:00", "model": "gpt-4o-mini", "query": "React graph visualization library", "run_id": 1, "web_search_enabled": "yes", "citation_count": 0, "error": null}, {"timestamp": "2026-02-16T09:34:02.973562+00:00", "model": "gpt-4o-mini", "query": "accessibility charting library", "run_id": 1, "web_search_enabled": "yes", "citation_count": 0, "error": null}]};
+  </script>
+
+  <script>
+    const ENTITY_LABELS = {
+      our_brand: "Other Highcharts Terms",
+      d3_js: "d3.js",
+      highcharts: "Highcharts",
+      chart_js: "chart.js",
+      echarts: "echarts",
+      amcharts: "amcharts",
+      ag_grid: "AG Grid",
+      ag_chart: "AG Chart",
+      recharts: "Recharts"
+    };
+
+    const COLOR_BY_ENTITY = {
+      our_brand: "#95a4b8",
+      d3_js: "#0f4c81",
+      highcharts: "#00788c",
+      chart_js: "#5f0f40",
+      echarts: "#1282a2",
+      amcharts: "#7f5539",
+      ag_grid: "#4361ee",
+      ag_chart: "#2a9d8f",
+      recharts: "#ef476f"
+    };
+    const OUR_PRIMARY_ENTITY_KEY = "highcharts";
+    const HIDDEN_ENTITY_KEYS = new Set(["our_brand"]);
+
+    const DATA_PATHS = {
+      comparison: "../output/comparison_table.csv",
+      viability: "../output/viability_index.csv",
+      jsonl: "../output/llm_outputs.jsonl"
+    };
+    const EMBEDDED_DATA = window.__EMBEDDED_BENCHMARK_DATA__ || null;
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function parseCsv(text) {
+      const rows = [];
+      let current = "";
+      let row = [];
+      let inQuotes = false;
+      const input = text.replace(/\r\n/g, "\n");
+      for (let i = 0; i < input.length; i += 1) {
+        const char = input[i];
+        const next = input[i + 1];
+        if (char === '"' && inQuotes && next === '"') {
+          current += '"';
+          i += 1;
+          continue;
+        }
+        if (char === '"') {
+          inQuotes = !inQuotes;
+          continue;
+        }
+        if (char === "," && !inQuotes) {
+          row.push(current);
+          current = "";
+          continue;
+        }
+        if (char === "\n" && !inQuotes) {
+          row.push(current);
+          rows.push(row);
+          row = [];
+          current = "";
+          continue;
+        }
+        current += char;
+      }
+      if (current.length > 0 || row.length > 0) {
+        row.push(current);
+        rows.push(row);
+      }
+      if (rows.length === 0) {
+        return [];
+      }
+      const headers = rows[0];
+      return rows.slice(1).filter((cells) => cells.length > 1).map((cells) => {
+        const obj = {};
+        headers.forEach((h, idx) => {
+          obj[h] = cells[idx] ?? "";
+        });
+        return obj;
+      });
+    }
+
+    function parseJsonl(text) {
+      const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+      const out = [];
+      for (const line of lines) {
+        try {
+          out.push(JSON.parse(line));
+        } catch (_err) {
+          // Skip malformed lines to keep dashboard resilient.
+        }
+      }
+      return out;
+    }
+
+    function num(value) {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    function pct(value) {
+      return `${(value * 100).toFixed(1)}%`;
+    }
+
+    function fmtDate(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) {
+        return "n/a";
+      }
+      return date.toISOString().replace("T", " ").replace(".000Z", " UTC");
+    }
+
+    function collectEntityKeys(comparisonRows) {
+      if (!comparisonRows.length) {
+        return [];
+      }
+      const keys = Object.keys(comparisonRows[0])
+        .filter((key) => key.endsWith("_rate"))
+        .map((key) => key.replace(/_rate$/, ""))
+        .filter((key) => key !== "viability_index")
+        .filter((key) => !HIDDEN_ENTITY_KEYS.has(key));
+      return keys.sort((a, b) => {
+        if (a === OUR_PRIMARY_ENTITY_KEY) {
+          return -1;
+        }
+        if (b === OUR_PRIMARY_ENTITY_KEY) {
+          return 1;
+        }
+        return 0;
+      });
+    }
+
+    function labelForEntity(key) {
+      return ENTITY_LABELS[key] || key.replaceAll("_", " ");
+    }
+
+    function truncateLabel(value, maxLen) {
+      const text = String(value ?? "");
+      if (text.length <= maxLen) {
+        return text;
+      }
+      return `${text.slice(0, Math.max(3, maxLen - 1)).trim()}…`;
+    }
+
+    function formatEntityAxisLabel(entityKey, labelText) {
+      const safe = escapeHtml(labelText);
+      if (entityKey === OUR_PRIMARY_ENTITY_KEY) {
+        return `<span style="font-weight:800;color:#005f70">${safe}</span>`;
+      }
+      return safe;
+    }
+
+    function computeAdjustedViability(row, entityKeys) {
+      const competitorKeys = entityKeys.filter((key) => key !== OUR_PRIMARY_ENTITY_KEY);
+      const runs = num(row.runs);
+      const count = competitorKeys.reduce(
+        (sum, key) => sum + num(row[`${key}_count`]),
+        0
+      );
+      const denom = runs * competitorKeys.length;
+      return {
+        count,
+        rate: denom ? count / denom : 0
+      };
+    }
+
+    function isSmallScreen() {
+      return window.innerWidth <= 760;
+    }
+
+    function tableCellForYesNo(value) {
+      const normalized = String(value || "").toLowerCase();
+      const cls = normalized === "yes" ? "yes" : "no";
+      return `<span class="tag ${cls}">${escapeHtml(normalized || "no")}</span>`;
+    }
+
+    function renderKpis(container, summary) {
+      const cards = [
+        { label: "Primary brand", value: summary.brandMappedAs },
+        { label: "Data window start", value: summary.firstTimestamp },
+        { label: "Data window end", value: summary.lastTimestamp },
+        { label: "Total responses", value: String(summary.responseCount) },
+        { label: "Model(s)", value: summary.models.join(", ") || "n/a" },
+        { label: "Web search mode", value: summary.webSearchModes.join(", ") || "n/a" },
+        { label: "Queries tracked", value: String(summary.queryCount) }
+      ];
+      container.innerHTML = cards
+        .map(
+          (card) => `
+            <div class="kpi">
+              <div class="label">${escapeHtml(card.label)}</div>
+              <div class="value">${escapeHtml(card.value)}</div>
+            </div>
+          `
+        )
+        .join("");
+    }
+
+    function renderOverallChart(containerId, overallRow, entityKeys) {
+      const small = isSmallScreen();
+      const categories = entityKeys.map((key) => {
+        const label = labelForEntity(key);
+        return small ? truncateLabel(label, 16) : truncateLabel(label, 26);
+      });
+      const data = entityKeys.map((key) => ({
+        y: num(overallRow[`${key}_rate`]) * 100,
+        color: COLOR_BY_ENTITY[key] || "#2b6cb0",
+        name: labelForEntity(key)
+      }));
+
+      Highcharts.chart(containerId, {
+        chart: {
+          type: "column",
+          backgroundColor: "transparent",
+          spacingTop: 16,
+          spacingBottom: 20
+        },
+        title: { text: "" },
+        credits: { enabled: false },
+        xAxis: {
+          categories,
+          labels: {
+            style: { fontSize: small ? "9px" : "11px" },
+            rotation: small ? -28 : 0,
+            useHTML: true,
+            formatter: function () {
+              const key = entityKeys[this.pos];
+              const text = categories[this.pos] || "";
+              return formatEntityAxisLabel(key, text);
+            }
+          },
+          lineColor: "#d9e3ef"
+        },
+        yAxis: {
+          min: 0,
+          max: 100,
+          title: { text: "Mention Rate (%)" },
+          gridLineColor: "#ecf1f6"
+        },
+        tooltip: {
+          pointFormat: "<b>{point.y:.1f}%</b> responses mentioned this entity."
+        },
+        plotOptions: {
+          column: {
+            borderRadius: 4,
+            pointPadding: 0.08,
+            groupPadding: 0.1
+          }
+        },
+        series: [
+          {
+            name: "Overall mention rate",
+            data,
+            dataLabels: {
+              enabled: !small,
+              formatter: function () {
+                return `${this.y.toFixed(0)}%`;
+              }
+            }
+          }
+        ],
+        responsive: {
+          rules: [
+            {
+              condition: { maxWidth: 760 },
+              chartOptions: {
+                legend: { enabled: false }
+              }
+            },
+            {
+              condition: { maxWidth: 980 },
+              chartOptions: {
+                plotOptions: {
+                  column: {
+                    pointPadding: 0.03,
+                    groupPadding: 0.06
+                  }
+                }
+              }
+            }
+          ]
+        }
+      });
+    }
+
+    function renderHeatmap(containerId, queryRows, viabilityRows, entityKeys) {
+      const small = isSmallScreen();
+      const queries = queryRows.map((row) => row.query);
+      const queryAxis = queries.map((query) =>
+        small ? truncateLabel(query, 22) : truncateLabel(query, 34)
+      );
+      const entities = entityKeys.map((key) => {
+        const label = labelForEntity(key);
+        return small ? truncateLabel(label, 16) : truncateLabel(label, 24);
+      });
+      const data = [];
+      const lookup = new Map();
+
+      for (const row of viabilityRows) {
+        lookup.set(`${row.query}||${row.entity}`, row);
+      }
+
+      for (let y = 0; y < queries.length; y += 1) {
+        for (let x = 0; x < entityKeys.length; x += 1) {
+          const entityKey = entityKeys[x];
+          const entityLabel = labelForEntity(entityKey);
+          const candidate = lookup.get(`${queries[y]}||${entityLabel}`) || lookup.get(`${queries[y]}||${entityKey}`);
+          const value = candidate ? num(candidate.mentions_rate) * 100 : num(queryRows[y][`${entityKey}_rate`]) * 100;
+          data.push([x, y, Number(value.toFixed(2))]);
+        }
+      }
+
+      Highcharts.chart(containerId, {
+        chart: {
+          type: "heatmap",
+          backgroundColor: "transparent",
+          plotBorderWidth: 1
+        },
+        title: { text: "" },
+        credits: { enabled: false },
+        xAxis: {
+          categories: entities,
+          labels: {
+            style: { fontSize: small ? "9px" : "11px" },
+            rotation: small ? -35 : 0,
+            useHTML: true,
+            formatter: function () {
+              const key = entityKeys[this.pos];
+              const text = entities[this.pos] || "";
+              return formatEntityAxisLabel(key, text);
+            }
+          }
+        },
+        yAxis: {
+          categories: queryAxis,
+          title: { text: "" },
+          reversed: true,
+          labels: { style: { fontSize: small ? "9px" : "11px" } }
+        },
+        colorAxis: {
+          min: 0,
+          max: 100,
+          stops: [
+            [0, "#edf8f3"],
+            [0.4, "#9dd9c8"],
+            [0.7, "#40b69b"],
+            [1, "#006d5b"]
+          ]
+        },
+        legend: {
+          enabled: !small,
+          align: "right",
+          layout: "vertical",
+          margin: 0,
+          verticalAlign: "top",
+          y: 18,
+          symbolHeight: small ? 110 : 140
+        },
+        tooltip: {
+          formatter: function () {
+            return `<b>${escapeHtml(queries[this.point.y])}</b><br/>` +
+              `${escapeHtml(entities[this.point.x])}: <b>${this.point.value.toFixed(1)}%</b> mention rate`;
+          }
+        },
+        series: [
+          {
+            name: "Mention rate",
+            borderWidth: 1,
+            borderColor: "#f4f7fa",
+            data,
+            dataLabels: {
+              enabled: !small,
+              formatter: function () {
+                return `${this.point.value.toFixed(0)}%`;
+              },
+              style: { textOutline: "none", fontSize: "10px" }
+            }
+          }
+        ]
+      });
+    }
+
+    function renderViabilityChart(containerId, queryRows) {
+      const small = isSmallScreen();
+      const fullCategories = queryRows.map((row) => row.query);
+      const categories = fullCategories.map((query) =>
+        small ? truncateLabel(query, 22) : truncateLabel(query, 34)
+      );
+      const rates = queryRows.map((row, idx) => {
+        const adjusted = computeAdjustedViability(row, collectEntityKeys([row]));
+        return {
+          y: adjusted.rate * 100,
+          fullLabel: fullCategories[idx]
+        };
+      });
+
+      Highcharts.chart(containerId, {
+        chart: {
+          type: "bar",
+          backgroundColor: "transparent"
+        },
+        title: { text: "" },
+        credits: { enabled: false },
+        xAxis: {
+          categories,
+          title: { text: "" },
+          labels: { style: { fontSize: small ? "10px" : "11px" } }
+        },
+        yAxis: {
+          min: 0,
+          max: 100,
+          title: { text: "Viability Index (%)" },
+          gridLineColor: "#ecf1f6"
+        },
+        tooltip: {
+          formatter: function () {
+            return `<b>${escapeHtml(this.point.fullLabel || this.key)}</b><br/>` +
+              `<b>${this.point.y.toFixed(1)}%</b> competitor mention saturation (excluding Highcharts).`;
+          }
+        },
+        legend: { enabled: false },
+        plotOptions: {
+          bar: { borderRadius: 4, color: "#005f70" }
+        },
+        series: [
+          {
+            name: "Viability index",
+            data: rates,
+            dataLabels: {
+              enabled: !small,
+              formatter: function () {
+                return `${this.y.toFixed(1)}%`;
+              }
+            }
+          }
+        ]
+      });
+    }
+
+    function renderComparisonTable(tableEl, rows, entityKeys) {
+      const columns = [
+        { key: "query", label: "Query" },
+        { key: "runs", label: "Runs" },
+        { key: "web_search_enabled", label: "Web Search" },
+        { key: "citation_count", label: "Citations" },
+        { key: "viability_index_count", label: "Comp. Viability Count" },
+        { key: "viability_index_rate", label: "Comp. Viability Rate" },
+        ...entityKeys.flatMap((key) => ([
+          { key: `${key}_yes`, label: `${labelForEntity(key)} yes/no`, yesNo: true },
+          { key: `${key}_count`, label: `${labelForEntity(key)} count` },
+          { key: `${key}_rate`, label: `${labelForEntity(key)} rate` }
+        ]))
+      ];
+
+      const head = `
+        <thead>
+          <tr>
+            ${columns.map((col) => `<th>${escapeHtml(col.label)}</th>`).join("")}
+          </tr>
+        </thead>
+      `;
+
+      const bodyRows = rows.map((row) => {
+        const adjusted = computeAdjustedViability(row, entityKeys);
+        const tds = columns.map((col) => {
+          if (col.yesNo) {
+            return `<td>${tableCellForYesNo(row[col.key])}</td>`;
+          }
+          if (col.key === "viability_index_rate") {
+            return `<td>${escapeHtml(pct(adjusted.rate))}</td>`;
+          }
+          if (col.key.endsWith("_rate")) {
+            return `<td>${escapeHtml(pct(num(row[col.key])))}</td>`;
+          }
+          if (col.key === "viability_index_count") {
+            return `<td>${escapeHtml(adjusted.count)}</td>`;
+          }
+          if (col.key === "web_search_enabled") {
+            return `<td>${tableCellForYesNo(row[col.key])}</td>`;
+          }
+          return `<td>${escapeHtml(row[col.key])}</td>`;
+        }).join("");
+        return `<tr>${tds}</tr>`;
+      }).join("");
+
+      tableEl.innerHTML = `${head}<tbody>${bodyRows}</tbody>`;
+    }
+
+    function reflowAllCharts() {
+      if (!window.Highcharts || !Array.isArray(Highcharts.charts)) {
+        return;
+      }
+      for (const chart of Highcharts.charts) {
+        if (chart && typeof chart.reflow === "function") {
+          chart.reflow();
+        }
+      }
+    }
+
+    async function fetchText(path) {
+      const response = await fetch(`${path}?v=${Date.now()}`, { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(`Failed to load ${path} (${response.status})`);
+      }
+      return response.text();
+    }
+
+    function summarizeRun(jsonlRows, comparisonRows) {
+      const stamps = jsonlRows
+        .map((row) => row.timestamp)
+        .filter(Boolean)
+        .sort();
+      const models = [...new Set(jsonlRows.map((row) => row.model).filter(Boolean))];
+      const modes = [...new Set(comparisonRows.map((row) => row.web_search_enabled).filter(Boolean))];
+      const queryCount = comparisonRows.filter((row) => row.query !== "OVERALL").length;
+
+      return {
+        brandMappedAs: labelForEntity(OUR_PRIMARY_ENTITY_KEY),
+        firstTimestamp: stamps.length ? fmtDate(stamps[0]) : "n/a",
+        lastTimestamp: stamps.length ? fmtDate(stamps[stamps.length - 1]) : "n/a",
+        responseCount: jsonlRows.length,
+        models,
+        webSearchModes: modes,
+        queryCount
+      };
+    }
+
+    async function init() {
+      const hint = document.getElementById("loadHint");
+      document.getElementById("renderStamp").textContent =
+        `Dashboard rendered at: ${fmtDate(new Date().toISOString())}`;
+
+      try {
+        let comparisonRows = [];
+        let viabilityRows = [];
+        let jsonlRows = [];
+
+        if (EMBEDDED_DATA) {
+          comparisonRows = Array.isArray(EMBEDDED_DATA.comparisonRows) ? EMBEDDED_DATA.comparisonRows : [];
+          viabilityRows = Array.isArray(EMBEDDED_DATA.viabilityRows) ? EMBEDDED_DATA.viabilityRows : [];
+          jsonlRows = Array.isArray(EMBEDDED_DATA.jsonlRows) ? EMBEDDED_DATA.jsonlRows : [];
+        } else {
+          const [comparisonCsv, viabilityCsv, jsonlText] = await Promise.all([
+            fetchText(DATA_PATHS.comparison),
+            fetchText(DATA_PATHS.viability),
+            fetchText(DATA_PATHS.jsonl)
+          ]);
+          comparisonRows = parseCsv(comparisonCsv);
+          viabilityRows = parseCsv(viabilityCsv);
+          jsonlRows = parseJsonl(jsonlText);
+        }
+
+        if (!comparisonRows.length) {
+          throw new Error("comparison_table.csv is empty.");
+        }
+
+        const overallRow = comparisonRows.find((row) => row.query === "OVERALL");
+        const queryRows = comparisonRows.filter((row) => row.query !== "OVERALL");
+        if (!overallRow || queryRows.length === 0) {
+          throw new Error("Expected query rows plus OVERALL row in comparison_table.csv.");
+        }
+
+        const entityKeys = collectEntityKeys(comparisonRows);
+        if (!entityKeys.length) {
+          throw new Error("No entity columns found in comparison_table.csv.");
+        }
+
+        const summary = summarizeRun(jsonlRows, comparisonRows);
+        renderKpis(document.getElementById("kpis"), summary);
+        renderOverallChart("overallChart", overallRow, entityKeys);
+        renderHeatmap("heatmapChart", queryRows, viabilityRows, entityKeys);
+        renderViabilityChart("viabilityChart", queryRows);
+        renderComparisonTable(document.getElementById("comparisonTable"), comparisonRows, entityKeys);
+        setTimeout(reflowAllCharts, 120);
+      } catch (error) {
+        hint.hidden = false;
+        hint.textContent =
+          `Could not load benchmark files.\n${String(error)}\n\n` +
+          "For shareable single-file mode, open dashboard_standalone.html.\n" +
+          "For local mode, start a local server:\n" +
+          "cd /Users/jamesm/projects/easy_llm_benchmarker\n" +
+          "python3 -m http.server 8000\n" +
+          "Then open http://localhost:8000/dashboard/dashboard.html";
+      }
+    }
+
+    let resizeTimer = null;
+    window.addEventListener("resize", () => {
+      if (resizeTimer) {
+        clearTimeout(resizeTimer);
+      }
+      resizeTimer = setTimeout(reflowAllCharts, 120);
+    });
+    window.addEventListener("orientationchange", () => {
+      setTimeout(reflowAllCharts, 180);
+    });
+
+    init();
+  </script>
+</body>
+</html>

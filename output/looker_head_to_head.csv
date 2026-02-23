@@ -1,0 +1,29 @@
+row_type,query,competitor,competitor_key,query_runs,highcharts_mentions_count,highcharts_mentions_rate,competitor_mentions_count,competitor_mentions_rate,h2h_highcharts_share_score,h2h_competitor_share_score,h2h_gap_rate_highcharts_minus_competitor,h2h_winner,web_search_enabled
+query,javascript charting libraries,d3.js,d3_js,3,3,1.0,3,1.0,50.0,50.0,0.0,tie,yes
+query,javascript charting libraries,chart.js,chart_js,3,3,1.0,3,1.0,50.0,50.0,0.0,tie,yes
+query,javascript charting libraries,echarts,echarts,3,3,1.0,3,1.0,50.0,50.0,0.0,tie,yes
+query,javascript charting libraries,amcharts,amcharts,3,3,1.0,0,0.0,100.0,0.0,1.0,highcharts,yes
+query,javascript charting libraries,AG Grid,ag_grid,3,3,1.0,0,0.0,100.0,0.0,1.0,highcharts,yes
+query,javascript charting libraries,AG Chart,ag_chart,3,3,1.0,0,0.0,100.0,0.0,1.0,highcharts,yes
+query,javascript charting libraries,Recharts,recharts,3,3,1.0,0,0.0,100.0,0.0,1.0,highcharts,yes
+query,data visualization library,d3.js,d3_js,3,0,0.0,3,1.0,0.0,100.0,-1.0,competitor,yes
+query,data visualization library,chart.js,chart_js,3,0,0.0,2,0.6667,0.0,100.0,-0.6667,competitor,yes
+query,data visualization library,echarts,echarts,3,0,0.0,0,0.0,0.0,0.0,0.0,tie,yes
+query,data visualization library,amcharts,amcharts,3,0,0.0,0,0.0,0.0,0.0,0.0,tie,yes
+query,data visualization library,AG Grid,ag_grid,3,0,0.0,0,0.0,0.0,0.0,0.0,tie,yes
+query,data visualization library,AG Chart,ag_chart,3,0,0.0,0,0.0,0.0,0.0,0.0,tie,yes
+query,data visualization library,Recharts,recharts,3,0,0.0,0,0.0,0.0,0.0,0.0,tie,yes
+query,React graph visualization library,d3.js,d3_js,3,0,0.0,3,1.0,0.0,100.0,-1.0,competitor,yes
+query,React graph visualization library,chart.js,chart_js,3,0,0.0,2,0.6667,0.0,100.0,-0.6667,competitor,yes
+query,React graph visualization library,echarts,echarts,3,0,0.0,0,0.0,0.0,0.0,0.0,tie,yes
+query,React graph visualization library,amcharts,amcharts,3,0,0.0,0,0.0,0.0,0.0,0.0,tie,yes
+query,React graph visualization library,AG Grid,ag_grid,3,0,0.0,0,0.0,0.0,0.0,0.0,tie,yes
+query,React graph visualization library,AG Chart,ag_chart,3,0,0.0,0,0.0,0.0,0.0,0.0,tie,yes
+query,React graph visualization library,Recharts,recharts,3,0,0.0,3,1.0,0.0,100.0,-1.0,competitor,yes
+overall,OVERALL,d3.js,d3_js,9,3,0.3333,9,1.0,25.0,75.0,-0.6667,competitor,yes
+overall,OVERALL,chart.js,chart_js,9,3,0.3333,7,0.7778,30.0,70.0,-0.4445,competitor,yes
+overall,OVERALL,echarts,echarts,9,3,0.3333,3,0.3333,50.0,50.0,0.0,tie,yes
+overall,OVERALL,amcharts,amcharts,9,3,0.3333,0,0.0,100.0,0.0,0.3333,highcharts,yes
+overall,OVERALL,AG Grid,ag_grid,9,3,0.3333,0,0.0,100.0,0.0,0.3333,highcharts,yes
+overall,OVERALL,AG Chart,ag_chart,9,3,0.3333,0,0.0,100.0,0.0,0.3333,highcharts,yes
+overall,OVERALL,Recharts,recharts,9,3,0.3333,3,0.3333,50.0,50.0,0.0,tie,yes

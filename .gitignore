@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Local env secrets
+.env.monthly
+.env
+
+# Node
+node_modules/
+
+# Local tooling
+.vscode/
