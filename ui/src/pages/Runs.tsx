@@ -1,9 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { api } from '../api'
 import type { BenchmarkWorkflowRun } from '../types'
 
-const TRIGGER_TOKEN_STORAGE_KEY = 'easy-llm-benchmark-trigger-token'
 const MANAGED_TRIGGER_TOKEN = String(
   (import.meta.env.VITE_BENCHMARK_TRIGGER_TOKEN as string | undefined) ?? '',
 ).trim()
@@ -81,37 +80,14 @@ export default function Runs() {
   const [temperature, setTemperature] = useState(0.7)
   const [webSearch, setWebSearch] = useState(true)
   const [runMonth, setRunMonth] = useState('')
-  const [triggerToken, setTriggerToken] = useState(() => {
-    if (MANAGED_TRIGGER_TOKEN) {
-      return ''
-    }
-    if (typeof window === 'undefined') {
-      return ''
-    }
-    return window.localStorage.getItem(TRIGGER_TOKEN_STORAGE_KEY)?.trim() ?? ''
-  })
   const [showAdvanced, setShowAdvanced] = useState(false)
-  const effectiveTriggerToken = triggerToken.trim() || MANAGED_TRIGGER_TOKEN
-  const hasTriggerToken = Boolean(effectiveTriggerToken)
-  const usingManagedTriggerToken = Boolean(MANAGED_TRIGGER_TOKEN)
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || usingManagedTriggerToken) {
-      return
-    }
-    const trimmed = triggerToken.trim()
-    if (!trimmed) {
-      window.localStorage.removeItem(TRIGGER_TOKEN_STORAGE_KEY)
-      return
-    }
-    window.localStorage.setItem(TRIGGER_TOKEN_STORAGE_KEY, trimmed)
-  }, [triggerToken, usingManagedTriggerToken])
+  const hasManagedRunAccess = Boolean(MANAGED_TRIGGER_TOKEN)
 
   const runsQuery = useQuery({
-    queryKey: ['benchmark-runs', effectiveTriggerToken],
-    queryFn: () => api.benchmarkRuns(effectiveTriggerToken),
-    enabled: hasTriggerToken,
-    refetchInterval: hasTriggerToken ? 15_000 : false,
+    queryKey: ['benchmark-runs', hasManagedRunAccess],
+    queryFn: () => api.benchmarkRuns(MANAGED_TRIGGER_TOKEN || undefined),
+    enabled: hasManagedRunAccess,
+    refetchInterval: hasManagedRunAccess ? 15_000 : false,
     retry: false,
   })
 
@@ -119,7 +95,7 @@ export default function Runs() {
     mutationFn: () =>
       api.triggerBenchmark(
         { model, runs, temperature, webSearch, ourTerms, runMonth: runMonth || undefined },
-        effectiveTriggerToken || undefined,
+        MANAGED_TRIGGER_TOKEN || undefined,
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['benchmark-runs'] })
@@ -134,7 +110,7 @@ export default function Runs() {
 
   const canRun =
     !triggerMutation.isPending &&
-    hasTriggerToken &&
+    hasManagedRunAccess &&
     Boolean(model.trim()) &&
     Boolean(ourTerms.trim())
 
@@ -142,7 +118,7 @@ export default function Runs() {
     if (!runsQuery.isError) return ''
     const message = (runsQuery.error as Error).message || 'Unable to load runs.'
     if (message === 'Unauthorized trigger token.') {
-      return 'Trigger token is invalid. Confirm your team token and try again.'
+      return 'Run service is not authorized. Ask an admin to verify environment configuration.'
     }
     if (message === 'Internal server error.') {
       return 'Server is not ready to list runs. Ask an admin to verify benchmark API env vars.'
@@ -183,23 +159,6 @@ export default function Runs() {
           <div className="p-5 space-y-4">
             {/* Primary controls row */}
             <div className="flex items-center gap-3 flex-wrap">
-              <label className="space-y-1">
-                <span className="text-xs font-medium" style={{ color: '#7A8E7C' }}>Trigger token</span>
-                <input
-                  type="password"
-                  value={usingManagedTriggerToken ? 'managed-by-vercel-env' : triggerToken}
-                  onChange={(e) => setTriggerToken(e.target.value)}
-                  className="w-[260px] px-3 py-2 rounded-lg text-sm"
-                  style={inputStyle}
-                  placeholder={
-                    usingManagedTriggerToken
-                      ? 'Managed by deployment env'
-                      : 'Required by /api/benchmark endpoints'
-                  }
-                  disabled={usingManagedTriggerToken}
-                />
-              </label>
-
               <button
                 type="button"
                 onClick={() => triggerMutation.mutate()}
@@ -217,13 +176,13 @@ export default function Runs() {
               <button
                 type="button"
                 onClick={() => runsQuery.refetch()}
-                disabled={!hasTriggerToken}
+                disabled={!hasManagedRunAccess}
                 className="px-4 py-2 rounded-lg text-sm font-medium"
                 style={{
                   border: '1px solid #DDD0BC',
-                  color: hasTriggerToken ? '#2A3A2C' : '#9AAE9C',
+                  color: hasManagedRunAccess ? '#2A3A2C' : '#9AAE9C',
                   background: '#FFFFFF',
-                  cursor: hasTriggerToken ? 'pointer' : 'not-allowed',
+                  cursor: hasManagedRunAccess ? 'pointer' : 'not-allowed',
                 }}
               >
                 Refresh Runs
@@ -355,20 +314,12 @@ export default function Runs() {
                 {(triggerMutation.error as Error).message}
               </div>
             )}
-            {!hasTriggerToken && (
-              <div
-                className="rounded-lg px-3 py-2 text-sm"
-                style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}
-              >
-                Enter your team trigger token to run benchmarks and load workflow runs.
-              </div>
-            )}
-            {usingManagedTriggerToken && (
+            {!hasManagedRunAccess && (
               <div
                 className="rounded-lg px-3 py-2 text-sm"
                 style={{ background: '#f0f9ff', border: '1px solid #bae6fd', color: '#075985' }}
               >
-                Trigger token is managed by deployment env.
+                Run controls are unavailable. Ask an admin to configure benchmark access.
               </div>
             )}
           </div>
@@ -385,21 +336,15 @@ export default function Runs() {
             </div>
           </div>
           <div className="p-4 space-y-2 text-sm">
-            {!hasTriggerToken ? (
+            {!hasManagedRunAccess ? (
               <div
                 className="rounded-lg px-3 py-2"
                 style={{ background: '#f8fafc', border: '1px solid #e2e8f0', color: '#475569' }}
               >
-                Enter a trigger token to load workflow status.
+                Run status is unavailable until benchmark access is configured.
               </div>
             ) : (
               <>
-                <div style={{ color: '#7A8E7C' }}>
-                  {runsQuery.data ? runsQuery.data.repo : 'Loading repo...'}
-                </div>
-                <div style={{ color: '#7A8E7C' }}>
-                  {runsQuery.data ? runsQuery.data.workflow : 'Loading workflow...'}
-                </div>
                 {activeRun ? (
                   <div
                     className="rounded-lg px-3 py-2"
@@ -442,13 +387,13 @@ export default function Runs() {
             Recent Workflow Runs
           </div>
           <div className="text-xs" style={{ color: '#9AAE9C' }}>
-            {hasTriggerToken ? 'Auto-refresh every 15s' : 'Enter trigger token to load runs'}
+            {hasManagedRunAccess ? 'Auto-refresh every 15s' : 'Run access is not configured'}
           </div>
         </div>
 
-        {!hasTriggerToken ? (
+        {!hasManagedRunAccess ? (
           <div className="p-5 text-sm" style={{ color: '#7A8E7C' }}>
-            Enter your team trigger token above to view recent workflow runs.
+            Recent runs are unavailable until benchmark access is configured.
           </div>
         ) : runsQuery.isLoading ? (
           <div className="p-5 space-y-2">
