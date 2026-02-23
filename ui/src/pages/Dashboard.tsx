@@ -354,6 +354,7 @@ function DashboardTagFilterBar({
   trackedCount: number
   isLoading: boolean
 }) {
+  const [isOpen, setIsOpen] = useState(false)
   const [search, setSearch] = useState('')
 
   const visibleTags = useMemo(() => {
@@ -366,150 +367,198 @@ function DashboardTagFilterBar({
   const allSelected = selectedTags.length === 0
 
   return (
-    <div className="rounded-xl border shadow-sm overflow-hidden" style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}>
-      <div
-        className="px-5 py-4"
-        style={{ background: '#FDFCF8', borderBottom: '1px solid #F2EDE6' }}
+    <div
+      className="rounded-xl border shadow-sm overflow-hidden"
+      style={{ background: '#FFFFFF', borderColor: hasActiveFilter ? '#B8CCBA' : '#DDD0BC', transition: 'border-color 0.2s' }}
+    >
+      {/* ── Trigger row ── */}
+      <button
+        type="button"
+        onClick={() => setIsOpen((v) => !v)}
+        className="w-full flex items-center justify-center gap-2.5 px-4 py-3"
+        style={{ background: '#FDFCF8', cursor: 'pointer' }}
       >
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#9AAE9C' }}>
-              Dashboard Prompt Lens
-            </p>
-            <p className="text-sm font-semibold mt-1" style={{ color: '#2A3A2C' }}>
-              Segment by prompt tags
-            </p>
-            <p className="text-xs mt-1" style={{ color: '#9AAE9C' }}>
-              {matchedCount} of {totalCount} prompts matched · {trackedCount} tracked
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold"
-              style={{
-                background: mode === 'any' ? '#3D5C40' : '#FFFFFF',
-                color: mode === 'any' ? '#FEFAE8' : '#7A8E7C',
-                border: `1px solid ${mode === 'any' ? '#3D5C40' : '#DDD0BC'}`,
-              }}
-              onClick={() => onModeChange('any')}
-            >
-              Match Any
-            </button>
-            <button
-              type="button"
-              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold"
-              style={{
-                background: mode === 'all' ? '#3D5C40' : '#FFFFFF',
-                color: mode === 'all' ? '#FEFAE8' : '#7A8E7C',
-                border: `1px solid ${mode === 'all' ? '#3D5C40' : '#DDD0BC'}`,
-              }}
-              onClick={() => onModeChange('all')}
-            >
-              Match All
-            </button>
-            <button
-              type="button"
-              className="px-2.5 py-1.5 rounded-lg text-xs font-medium"
-              style={{
-                background: '#FFFFFF',
-                color: hasActiveFilter ? '#2A3A2C' : '#C4BAB0',
-                border: '1px solid #DDD0BC',
-                cursor: hasActiveFilter ? 'pointer' : 'default',
-              }}
-              onClick={onClear}
-              disabled={!hasActiveFilter}
-            >
-              Clear
-            </button>
-          </div>
-        </div>
-        <div className="mt-3">
-          <div
-            className="flex items-center gap-2 rounded-lg px-3 py-2"
-            style={{ background: '#FFFFFF', border: '1px solid #E8E0D2' }}
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#C4BAB0" strokeWidth="2">
-              <circle cx="11" cy="11" r="7" />
-              <path d="M20 20l-3.5-3.5" strokeLinecap="round" />
-            </svg>
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search tags"
-              className="w-full text-sm bg-transparent outline-none"
-              style={{ color: '#2A3A2C' }}
-            />
-          </div>
-        </div>
-      </div>
-
-      <div className="px-5 py-4" style={{ background: '#FFFFFF' }}>
-        {isLoading ? (
-          <div className="flex flex-wrap gap-2">
-            {Array.from({ length: 7 }).map((_, index) => (
-              <Skeleton key={index} className="h-8 w-20 rounded-full" />
-            ))}
-          </div>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={onClear}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all"
-              style={{
-                background: allSelected ? '#3D5C40' : '#F2EDE6',
-                color: allSelected ? '#FEFAE8' : '#5A7060',
-                border: `1px solid ${allSelected ? '#3D5C40' : '#DDD0BC'}`,
-              }}
-            >
-              <span>All</span>
+        <span className="text-sm font-semibold" style={{ color: '#2A3A2C' }}>
+          Segment by tags
+        </span>
+        <svg
+          width="16" height="16" viewBox="0 0 24 24" fill="none"
+          stroke="#516554" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+          style={{ transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s ease', flexShrink: 0 }}
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+        {hasActiveFilter && (
+          <div className="flex items-center gap-1.5 ml-1">
+            {selectedTags.slice(0, 3).map((tag) => (
               <span
-                className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold"
-                style={{
-                  background: allSelected ? 'rgba(255,255,255,0.18)' : '#E8E0D2',
-                  color: allSelected ? '#FEFAE8' : '#7A8E7C',
-                }}
+                key={tag}
+                className="px-2 py-0.5 rounded-full text-[11px] font-medium"
+                style={{ background: '#EEF5EF', color: '#3D5840', border: '1px solid #C8DDC9' }}
               >
-                {totalCount}
+                {tag}
               </span>
+            ))}
+            {selectedTags.length > 3 && (
+              <span className="text-[11px]" style={{ color: '#9AAE9C' }}>+{selectedTags.length - 3}</span>
+            )}
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onClear() }}
+              className="text-[11px] font-medium ml-1"
+              style={{ color: '#9AAE9C' }}
+            >
+              clear
             </button>
+          </div>
+        )}
+        {!hasActiveFilter && (
+          <span className="text-xs" style={{ color: '#B0A898' }}>
+            {totalCount} prompts
+          </span>
+        )}
+      </button>
 
-            {visibleTags.length > 0 ? (
-              visibleTags.map((entry) => {
-                const active = selectedTags.includes(entry.tag)
-                return (
+      {/* ── Expandable body ── */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateRows: isOpen ? '1fr' : '0fr',
+          transition: 'grid-template-rows 0.25s ease',
+        }}
+      >
+        <div style={{ overflow: 'hidden' }}>
+          <div style={{ borderTop: '1px solid #F2EDE6' }}>
+
+            {/* Controls row */}
+            <div className="px-4 pt-3 pb-2 flex items-center justify-between gap-3 flex-wrap" style={{ background: '#FDFCF8' }}>
+              <div className="flex items-center gap-2">
+                <div
+                  className="flex items-center gap-2 rounded-lg px-3 py-1.5"
+                  style={{ background: '#FFFFFF', border: '1px solid #E8E0D2' }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#C4BAB0" strokeWidth="2">
+                    <circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" strokeLinecap="round" />
+                  </svg>
+                  <input
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Search tags"
+                    className="text-xs bg-transparent outline-none"
+                    style={{ color: '#2A3A2C', width: 120 }}
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+                  style={{
+                    background: mode === 'any' ? '#3D5C40' : '#FFFFFF',
+                    color: mode === 'any' ? '#FEFAE8' : '#7A8E7C',
+                    border: `1px solid ${mode === 'any' ? '#3D5C40' : '#DDD0BC'}`,
+                  }}
+                  onClick={() => onModeChange('any')}
+                >
+                  Match Any
+                </button>
+                <button
+                  type="button"
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+                  style={{
+                    background: mode === 'all' ? '#3D5C40' : '#FFFFFF',
+                    color: mode === 'all' ? '#FEFAE8' : '#7A8E7C',
+                    border: `1px solid ${mode === 'all' ? '#3D5C40' : '#DDD0BC'}`,
+                  }}
+                  onClick={() => onModeChange('all')}
+                >
+                  Match All
+                </button>
+                <button
+                  type="button"
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-medium"
+                  style={{
+                    background: '#FFFFFF',
+                    color: hasActiveFilter ? '#2A3A2C' : '#C4BAB0',
+                    border: '1px solid #DDD0BC',
+                    cursor: hasActiveFilter ? 'pointer' : 'default',
+                  }}
+                  onClick={onClear}
+                  disabled={!hasActiveFilter}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            {/* Tag pills */}
+            <div className="px-4 pb-4 pt-2" style={{ background: '#FFFFFF' }}>
+              {isLoading ? (
+                <div className="flex flex-wrap gap-2">
+                  {Array.from({ length: 7 }).map((_, index) => (
+                    <Skeleton key={index} className="h-8 w-20 rounded-full" />
+                  ))}
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2">
                   <button
-                    key={entry.tag}
                     type="button"
-                    onClick={() => onToggleTag(entry.tag)}
+                    onClick={onClear}
                     className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all"
                     style={{
-                      background: active ? '#3D5C40' : '#F2EDE6',
-                      color: active ? '#FEFAE8' : '#5A7060',
-                      border: `1px solid ${active ? '#3D5C40' : '#DDD0BC'}`,
+                      background: allSelected ? '#3D5C40' : '#F2EDE6',
+                      color: allSelected ? '#FEFAE8' : '#5A7060',
+                      border: `1px solid ${allSelected ? '#3D5C40' : '#DDD0BC'}`,
                     }}
                   >
-                    <span>{entry.tag}</span>
+                    <span>All</span>
                     <span
                       className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold"
                       style={{
-                        background: active ? 'rgba(255,255,255,0.18)' : '#E8E0D2',
-                        color: active ? '#FEFAE8' : '#7A8E7C',
+                        background: allSelected ? 'rgba(255,255,255,0.18)' : '#E8E0D2',
+                        color: allSelected ? '#FEFAE8' : '#7A8E7C',
                       }}
                     >
-                      {entry.count}
+                      {totalCount}
                     </span>
                   </button>
-                )
-              })
-            ) : (
-              <p className="text-sm" style={{ color: '#9AAE9C' }}>
-                No tags matched your search.
-              </p>
-            )}
+                  {visibleTags.length > 0 ? (
+                    visibleTags.map((entry) => {
+                      const active = selectedTags.includes(entry.tag)
+                      return (
+                        <button
+                          key={entry.tag}
+                          type="button"
+                          onClick={() => onToggleTag(entry.tag)}
+                          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all"
+                          style={{
+                            background: active ? '#3D5C40' : '#F2EDE6',
+                            color: active ? '#FEFAE8' : '#5A7060',
+                            border: `1px solid ${active ? '#3D5C40' : '#DDD0BC'}`,
+                          }}
+                        >
+                          <span>{entry.tag}</span>
+                          <span
+                            className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold"
+                            style={{
+                              background: active ? 'rgba(255,255,255,0.18)' : '#E8E0D2',
+                              color: active ? '#FEFAE8' : '#7A8E7C',
+                            }}
+                          >
+                            {entry.count}
+                          </span>
+                        </button>
+                      )
+                    })
+                  ) : (
+                    <p className="text-sm" style={{ color: '#9AAE9C' }}>No tags matched your search.</p>
+                  )}
+                </div>
+              )}
+            </div>
+
           </div>
-        )}
+        </div>
       </div>
     </div>
   )
@@ -1067,6 +1116,13 @@ function PromptHcAvgCard() {
               <path d="M13 18h5" />
             </svg>
           </div>
+        </div>
+
+        <div className="flex-1 flex items-center justify-center py-2">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#D8E8D9" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 12h14" />
+            <path d="M12 5l7 7-7 7" />
+          </svg>
         </div>
 
         <div
