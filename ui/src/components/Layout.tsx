@@ -1,8 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
+import { createContext, useCallback, useContext, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { api } from '../api'
+
+// ── Header extra slot ─────────────────────────────────────────────────────────
+const HeaderExtraContext = createContext<(node: ReactNode) => void>(() => {})
+export function useHeaderExtra() { return useContext(HeaderExtraContext) }
 
 const NAV = [
   {
@@ -27,16 +31,6 @@ const NAV = [
     ),
   },
   {
-    to: '/prompt-drilldown',
-    label: 'Prompt Drilldown',
-    icon: (
-      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h12M4 18h8" />
-        <circle cx="18" cy="18" r="3" />
-      </svg>
-    ),
-  },
-  {
     to: '/runs',
     label: 'Runs',
     icon: (
@@ -56,11 +50,23 @@ const NAV = [
     ),
   },
   {
-    to: '/logics',
-    label: 'Logics',
+    to: '/citation-links',
+    label: 'Citation Links',
+    soon: true,
     icon: (
       <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9 3h6M10 7h4M12 7v5m0 0l-3 3m3-3l3 3M4 21h16" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M14.121 14.121a4 4 0 005.657 0l4-4a4 4 0 00-5.657-5.657l-1.1 1.1" />
+      </svg>
+    ),
+  },
+  {
+    to: '/logics',
+    label: 'Appendix',
+    icon: (
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 19.5A2.5 2.5 0 016.5 17H20" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 4.5A2.5 2.5 0 016.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15z" />
       </svg>
     ),
   },
@@ -70,10 +76,10 @@ const PAGE_TITLES: Record<string, string> = {
   '/dashboard': 'Dashboard',
   '/runs': 'Run Benchmarks',
   '/prompts': 'Prompts',
-  '/prompt-drilldown': 'Prompt Drilldown',
   '/prompts/drilldown': 'Prompt Drilldown',
   '/competitors': 'Competitors',
-  '/logics': 'Logics',
+  '/citation-links': 'Citation Links',
+  '/logics': 'Appendix',
 }
 
 const USING_SUPABASE =
@@ -107,6 +113,8 @@ export default function Layout({ children }: { children: ReactNode }) {
   const [iconOpen, setIconOpen] = useState(false)
   const [clickCount, setClickCount] = useState(0)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const [headerExtra, setHeaderExtraRaw] = useState<ReactNode>(null)
+  const setHeaderExtra = useCallback((node: ReactNode) => setHeaderExtraRaw(node), [])
 
   const videoSrc = clickCount % 2 === 0 ? '/video.mp4' : '/video2.mp4'
 
@@ -125,6 +133,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   }
 
   return (
+    <HeaderExtraContext.Provider value={setHeaderExtra}>
     <div className="flex h-screen overflow-hidden">
       {/* Icon lightbox */}
       <div
@@ -189,7 +198,7 @@ export default function Layout({ children }: { children: ReactNode }) {
       </div>
       {/* Sidebar — deep sage shell */}
       <aside
-        className="flex flex-col w-[240px] flex-shrink-0"
+        className="flex flex-col w-[220px] flex-shrink-0"
         style={{ background: '#3D5C40', borderRight: '1px solid rgba(255,255,255,0.08)' }}
       >
         {/* Brand */}
@@ -259,7 +268,15 @@ export default function Layout({ children }: { children: ReactNode }) {
               }}
             >
               <span style={{ flexShrink: 0 }}>{item.icon}</span>
-              {item.label}
+              <span className="flex-1">{item.label}</span>
+              {item.soon && (
+                <span
+                  className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full flex-shrink-0"
+                  style={{ background: 'rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.35)', letterSpacing: '0.06em' }}
+                >
+                  soon
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>
@@ -280,12 +297,13 @@ export default function Layout({ children }: { children: ReactNode }) {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Top bar */}
         <header
-          className="flex items-center h-14 px-6 flex-shrink-0"
+          className="flex items-center justify-between h-14 px-6 flex-shrink-0"
           style={{ background: '#FDFCF8', borderBottom: '1px solid #DDD0BC' }}
         >
           <h1 className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>
             {title}
           </h1>
+          {headerExtra}
         </header>
 
         {/* Scrollable content */}
@@ -294,5 +312,6 @@ export default function Layout({ children }: { children: ReactNode }) {
         </main>
       </div>
     </div>
+    </HeaderExtraContext.Provider>
   )
 }

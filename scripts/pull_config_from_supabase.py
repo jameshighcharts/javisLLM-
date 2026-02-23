@@ -71,6 +71,33 @@ def unique_non_empty(values: Iterable[str]) -> List[str]:
     return output
 
 
+def infer_prompt_tags(query: str) -> List[str]:
+    normalized = query.lower()
+    tags: List[str] = []
+    if "react" in normalized:
+        tags.append("react")
+    if "javascript" in normalized or " js " in f" {normalized} ":
+        tags.append("javascript")
+    if not tags:
+        tags.append("generic")
+    return tags
+
+
+def normalize_prompt_tags(raw_tags: Any, query: str) -> List[str]:
+    if isinstance(raw_tags, str):
+        candidates = raw_tags.split(",")
+    elif isinstance(raw_tags, list):
+        candidates = [str(item) for item in raw_tags]
+    else:
+        candidates = []
+    normalized = unique_non_empty(value.lower() for value in candidates)
+    return normalized if normalized else infer_prompt_tags(query)
+
+
+def is_missing_column_error(error: Any) -> bool:
+    return "42703" in str(error)
+
+
 def sort_key(row: Dict[str, Any]) -> int:
     try:
         return int(row.get("sort_order") or 0)
@@ -88,16 +115,31 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     prompt_result = (
         client.table("prompt_queries")
-        .select("query_text,sort_order")
+        .select("query_text,sort_order,tags")
         .eq("is_active", True)
         .order("sort_order")
         .execute()
     )
+    prompt_error = getattr(prompt_result, "error", None)
+    if prompt_error and is_missing_column_error(prompt_error):
+        prompt_result = (
+            client.table("prompt_queries")
+            .select("query_text,sort_order")
+            .eq("is_active", True)
+            .order("sort_order")
+            .execute()
+        )
     if getattr(prompt_result, "error", None):
         raise SyncError(f"Failed to read prompt_queries: {prompt_result.error}")
     prompt_rows = list(getattr(prompt_result, "data", []) or [])
     prompt_rows.sort(key=sort_key)
     queries = unique_non_empty(row.get("query_text", "") for row in prompt_rows)
+    query_tags: Dict[str, List[str]] = {}
+    for row in prompt_rows:
+        query = str(row.get("query_text") or "").strip()
+        if not query:
+            continue
+        query_tags[query] = normalize_prompt_tags(row.get("tags"), query)
 
     competitor_result = (
         client.table("competitors")
@@ -137,6 +179,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     payload = {
         "queries": queries,
+        "queryTags": query_tags,
         "competitors": competitors,
         "aliases": aliases,
     }

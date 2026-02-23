@@ -132,6 +132,48 @@ def unique_non_empty(values: Iterable[str]) -> List[str]:
     return out
 
 
+def infer_prompt_tags(query: str) -> List[str]:
+    normalized = query.lower()
+    tags: List[str] = []
+    if "react" in normalized:
+        tags.append("react")
+    if "javascript" in normalized or " js " in f" {normalized} ":
+        tags.append("javascript")
+    if not tags:
+        tags.append("generic")
+    return tags
+
+
+def normalize_prompt_tags(raw_tags: Any, query: str) -> List[str]:
+    if isinstance(raw_tags, str):
+        candidates = raw_tags.split(",")
+    elif isinstance(raw_tags, list):
+        candidates = [str(item) for item in raw_tags]
+    else:
+        candidates = []
+
+    normalized = unique_non_empty(value.lower() for value in candidates)
+    return normalized if normalized else infer_prompt_tags(query)
+
+
+def normalize_query_tags(
+    queries: List[str],
+    raw_query_tags: Dict[str, Any] | None,
+) -> Dict[str, List[str]]:
+    lookup: Dict[str, Any] = {}
+    for query, tags in (raw_query_tags or {}).items():
+        lookup[str(query).strip().lower()] = tags
+
+    return {
+        query: normalize_prompt_tags(lookup.get(query.strip().lower()), query)
+        for query in queries
+    }
+
+
+def is_missing_column_error(error: Any) -> bool:
+    return "42703" in str(error)
+
+
 def slugify(value: str) -> str:
     out = []
     prev_sep = False
@@ -189,6 +231,8 @@ def batched(items: Sequence[Dict[str, Any]], size: int) -> Iterable[List[Dict[st
 def sync_config(client: Client, config: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, str]]:
     queries = unique_non_empty(config.get("queries", []))
     competitors = unique_non_empty(config.get("competitors", []))
+    query_tags_raw = config.get("queryTags", {}) if isinstance(config.get("queryTags"), dict) else {}
+    query_tags = normalize_query_tags(queries, query_tags_raw)
     alias_map_raw = config.get("aliases", {}) if isinstance(config.get("aliases"), dict) else {}
 
     if not queries:
@@ -203,13 +247,20 @@ def sync_config(client: Client, config: Dict[str, Any]) -> Tuple[Dict[str, str],
             "query_text": query,
             "sort_order": index + 1,
             "is_active": True,
+            "tags": query_tags.get(query) or infer_prompt_tags(query),
         }
         for index, query in enumerate(queries)
     ]
-    execute_or_raise(
-        client.table("prompt_queries").upsert(query_rows, on_conflict="query_text").execute(),
-        "Failed to upsert prompt_queries",
-    )
+    prompt_upsert = client.table("prompt_queries").upsert(
+        query_rows, on_conflict="query_text"
+    ).execute()
+    prompt_error = getattr(prompt_upsert, "error", None)
+    if prompt_error and is_missing_column_error(prompt_error):
+        query_rows_no_tags = [{k: v for k, v in row.items() if k != "tags"} for row in query_rows]
+        prompt_upsert = client.table("prompt_queries").upsert(
+            query_rows_no_tags, on_conflict="query_text"
+        ).execute()
+    execute_or_raise(prompt_upsert, "Failed to upsert prompt_queries")
 
     all_queries = execute_or_raise(
         client.table("prompt_queries").select("id,query_text,is_active").execute(),

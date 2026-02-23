@@ -15,6 +15,93 @@ const RIVAL_COLORS = ['#C8A87A', '#A89CB8', '#D49880', '#C8B858', '#7AABB8', '#C
 
 const CHART_FONT = "'Inter', system-ui, sans-serif"
 
+// ── Brand logos ──────────────────────────────────────────────────────────────
+
+const ENTITY_LOGOS: Record<string, string> = {
+  'chart.js':   '/chartjs.png',
+  'chartjs':    '/chartjs.png',
+  'd3.js':      '/d3.png',
+  'd3':         '/d3.png',
+  'highcharts': '/highcharts%20(1).svg',
+  'echarts':    '/echarts.png',
+  'ag grid':    '/aggrid.png',
+  'aggrid':     '/aggrid.png',
+  'ag chart':   '/aggrid.png',
+  'amcharts':   '/amcharts.png',
+  'recharts':   '/react-svgrepo-com.svg',
+}
+
+interface LogoCrop { x: number; y: number; w: number; h: number; srcW: number; srcH: number; displayH: number }
+const LOGO_CROP: Record<string, LogoCrop> = {
+  '/aggrid.png':   { x: 16, y: 116, w: 374, h: 118, srcW: 400, srcH: 400, displayH: 13 },
+  '/amcharts.png': { x: 100, y: 100, w: 799, h: 353, srcW: 1000, srcH: 558, displayH: 13 },
+}
+
+function getEntityLogo(entity: string): string | null {
+  return ENTITY_LOGOS[entity.toLowerCase()] ?? null
+}
+
+function EntityLogo({ entity, size = 16 }: { entity: string; size?: number }) {
+  const src = getEntityLogo(entity)
+  if (!src) return null
+  const crop = LOGO_CROP[src]
+  if (crop) {
+    const scale = crop.displayH / crop.h
+    const displayW = Math.round(crop.w * scale)
+    const imgW = Math.round(crop.srcW * scale)
+    const imgH = Math.round(crop.srcH * scale)
+    const offX = Math.round(crop.x * scale)
+    const offY = Math.round(crop.y * scale)
+    return (
+      <div style={{ width: displayW, height: crop.displayH, overflow: 'hidden', position: 'relative', flexShrink: 0 }}>
+        <img src={src} alt={entity}
+          style={{ position: 'absolute', width: imgW, height: imgH, top: -offY, left: -offX, objectFit: 'fill' }} />
+      </div>
+    )
+  }
+  return (
+    <div style={{ width: size, height: size, overflow: 'hidden', borderRadius: 3, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <img src={src} width={size} height={size} style={{ objectFit: 'contain', flexShrink: 0 }} alt={entity} />
+    </div>
+  )
+}
+
+function logoLabel(entity: string, opts?: { size?: number; color?: string; fontSize?: string; fontWeight?: string }) {
+  const logo = getEntityLogo(entity)
+  const size = opts?.size ?? 14
+  const color = opts?.color ?? '#607860'
+  const fontSize = opts?.fontSize ?? '12px'
+  const fontWeight = opts?.fontWeight ?? '500'
+  if (logo) {
+    const crop = LOGO_CROP[logo]
+    let imgHtml: string
+    if (crop) {
+      const scale = crop.displayH / crop.h
+      const displayW = Math.round(crop.w * scale)
+      const imgW = Math.round(crop.srcW * scale)
+      const imgH = Math.round(crop.srcH * scale)
+      const offX = Math.round(crop.x * scale)
+      const offY = Math.round(crop.y * scale)
+      imgHtml =
+        `<span style="display:inline-block;width:${displayW}px;height:${crop.displayH}px;overflow:hidden;position:relative;flex-shrink:0;vertical-align:middle">` +
+        `<img src="${logo}" style="position:absolute;width:${imgW}px;height:${imgH}px;top:${-offY}px;left:${-offX}px;object-fit:fill" />` +
+        `</span>`
+    } else {
+      imgHtml =
+        `<span style="display:inline-flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;overflow:hidden;border-radius:2px;flex-shrink:0;vertical-align:middle">` +
+        `<img src="${logo}" width="${size}" height="${size}" style="object-fit:contain;flex-shrink:0" />` +
+        `</span>`
+    }
+    return (
+      `<span style="display:inline-flex;align-items:center;gap:4px">` +
+      imgHtml +
+      `<span style="color:${color};font-size:${fontSize};font-weight:${fontWeight}">${entity}</span>` +
+      `</span>`
+    )
+  }
+  return `<span style="color:${color};font-size:${fontSize};font-weight:${fontWeight}">${entity}</span>`
+}
+
 const TOOLTIP_BASE: Highcharts.TooltipOptions = {
   backgroundColor: '#FFFFFF',
   borderColor: '#DDD0BC',
@@ -257,7 +344,11 @@ function CompetitorBreakdownChart({ competitors }: { competitors: PromptDrilldow
       lineWidth: 0,
       tickWidth: 0,
       labels: {
-        style: { color: '#7A8E7C', fontSize: '12px', fontFamily: CHART_FONT, fontWeight: '500' },
+        useHTML: true,
+        style: { color: '#7A8E7C', fontSize: '12px', fontWeight: '500' },
+        formatter: function () {
+          return logoLabel(String(this.value), { size: 14 })
+        },
       },
       title: { text: null },
     },
@@ -336,8 +427,8 @@ function RunHistoryTable({ runPoints }: { runPoints: PromptDrilldownRunPoint[] }
             <th className="px-4 py-3 text-left text-xs font-medium" style={{ color: '#7A8E7C' }}>Run</th>
             <th className="px-4 py-3 text-left text-xs font-medium" style={{ color: '#7A8E7C' }}>Started</th>
             <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Responses</th>
-            <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Highcharts</th>
-            <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Viability</th>
+            <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Highcharts %</th>
+            <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Viability %</th>
             <th className="px-4 py-3 text-left text-xs font-medium" style={{ color: '#7A8E7C' }}>Top rival</th>
           </tr>
         </thead>
@@ -345,7 +436,12 @@ function RunHistoryTable({ runPoints }: { runPoints: PromptDrilldownRunPoint[] }
           {rows.map((point, index) => (
             <tr
               key={point.runId}
-              style={{ borderBottom: index < rows.length - 1 ? '1px solid #F2EDE6' : 'none' }}
+              style={{
+                borderBottom: index < rows.length - 1 ? '1px solid #F2EDE6' : 'none',
+                transition: 'background 0.1s',
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLTableRowElement).style.background = '#F7F3EE' }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLTableRowElement).style.background = 'transparent' }}
             >
               <td className="px-4 py-3">
                 <div className="space-y-0.5">
@@ -369,8 +465,22 @@ function RunHistoryTable({ runPoints }: { runPoints: PromptDrilldownRunPoint[] }
               <td className="px-4 py-3 text-right text-sm font-semibold tabular-nums" style={{ color: '#7A8E7C' }}>
                 {point.viabilityRatePct.toFixed(1)}%
               </td>
-              <td className="px-4 py-3 text-sm" style={{ color: '#2A3A2C' }}>
-                {point.topCompetitor ? `${point.topCompetitor.entity} (${point.topCompetitor.ratePct.toFixed(1)}%)` : '—'}
+              <td className="px-4 py-3">
+                {point.topCompetitor ? (
+                  <div className="flex items-center gap-1.5">
+                    {getEntityLogo(point.topCompetitor.entity) && (
+                      <EntityLogo entity={point.topCompetitor.entity} size={14} />
+                    )}
+                    <span className="text-sm font-medium" style={{ color: '#2A3A2C' }}>
+                      {point.topCompetitor.entity}
+                    </span>
+                    <span className="text-xs tabular-nums" style={{ color: '#9AAE9C' }}>
+                      ({point.topCompetitor.ratePct.toFixed(1)}%)
+                    </span>
+                  </div>
+                ) : (
+                  <span className="text-sm" style={{ color: '#E5DDD0' }}>—</span>
+                )}
               </td>
             </tr>
           ))}

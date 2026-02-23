@@ -33,12 +33,25 @@ export interface CompetitorSeries {
 
 export interface PromptStatus {
   query: string
+  tags: string[]
   isPaused: boolean
   status: 'tracked' | 'awaiting_run'
   runs: number
   highchartsRatePct: number
+  highchartsRank: number | null
+  highchartsRankOutOf: number
   viabilityRatePct: number
   topCompetitor: { entity: string; ratePct: number } | null
+  latestRunResponseCount?: number | null
+  competitorRates?: PromptCompetitorRate[]
+}
+
+export interface PromptCompetitorRate {
+  entity: string
+  entityKey: string
+  isHighcharts: boolean
+  ratePct: number
+  mentions?: number
 }
 
 export interface DashboardResponse {
@@ -58,6 +71,7 @@ export interface DashboardResponse {
 
 export interface BenchmarkConfig {
   queries: string[]
+  queryTags?: Record<string, string[]>
   competitors: string[]
   aliases: Record<string, string[]>
   pausedQueries?: string[]

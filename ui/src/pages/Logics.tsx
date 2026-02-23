@@ -1,65 +1,103 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api'
 
-function LogicCard({
+type Accent = 'green' | 'amber' | 'neutral'
+
+const ACCENT = {
+  green: { border: '#52B256', badge: '#EEFAF0', badgeText: '#276B2E', badgeBorder: '#B8E4BF' },
+  amber: { border: '#D4870F', badge: '#FEF5E7', badgeText: '#925C0A', badgeBorder: '#F7D89A' },
+  neutral: { border: '#A8BEA9', badge: '#F4EFE9', badgeText: '#4A5E4D', badgeBorder: '#DDD0BC' },
+}
+
+function MetricCard({
+  index,
   name,
   formula,
   meaning,
   current,
-  accent,
+  accent = 'neutral',
   note,
 }: {
+  index: number
   name: string
   formula: string
   meaning: string
   current: string
-  accent?: 'green' | 'amber' | 'neutral'
+  accent?: Accent
   note?: string
 }) {
-  const badge = {
-    green: { bg: '#EEFAF0', text: '#276B2E', border: '#B8E4BF' },
-    amber: { bg: '#FEF5E7', text: '#925C0A', border: '#F7D89A' },
-    neutral: { bg: '#F4EFE9', text: '#4A5E4D', border: '#DDD0BC' },
-  }[accent ?? 'neutral']
-
+  const a = ACCENT[accent]
   return (
     <div
-      className="rounded-2xl border flex flex-col gap-0 overflow-hidden transition-shadow hover:shadow-md"
+      className="rounded-xl border flex flex-col overflow-hidden transition-shadow hover:shadow-sm"
       style={{ background: '#FEFCF9', borderColor: '#DDD0BC' }}
     >
-      {/* Card body */}
-      <div className="px-5 pt-5 pb-4 flex items-start gap-4 justify-between">
-        <div className="min-w-0 flex-1">
-          <div className="font-semibold text-sm leading-snug" style={{ color: '#1C2B1E' }}>
-            {name}
+      <div className="px-5 pt-5 pb-4 flex-1 flex flex-col gap-3">
+        {/* Header: index + name + value */}
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-2.5">
+            <span
+              className="text-[11px] font-bold mt-0.5 shrink-0 w-5 h-5 rounded-full flex items-center justify-center"
+              style={{ background: '#F0EBE3', color: '#9AAE9C' }}
+            >
+              {index}
+            </span>
+            <span className="text-[13px] font-semibold leading-snug" style={{ color: '#1C2B1E' }}>
+              {name}
+            </span>
           </div>
-          <p className="text-xs mt-1.5 leading-relaxed" style={{ color: '#6E8472' }}>
-            {meaning}
+          <div
+            className="shrink-0 rounded-md px-2.5 py-1 text-sm font-bold whitespace-nowrap tabular-nums"
+            style={{
+              background: a.badge,
+              color: a.badgeText,
+              border: `1.5px solid ${a.badgeBorder}`,
+              fontSize: '13px',
+            }}
+          >
+            {current}
+          </div>
+        </div>
+
+        {/* Description */}
+        <p className="text-xs leading-relaxed pl-7" style={{ color: '#7A8E7C' }}>
+          {meaning}
+        </p>
+        {note && (
+          <p className="text-[11px] font-medium pl-7" style={{ color: '#A8BEA9' }}>
+            {note}
           </p>
-          {note && (
-            <p className="text-[11px] mt-2 font-medium" style={{ color: '#A8BEA9' }}>
-              {note}
-            </p>
-          )}
-        </div>
-        <div
-          className="shrink-0 rounded-lg px-3 py-1.5 text-sm font-bold whitespace-nowrap"
-          style={{ background: badge.bg, color: badge.text, border: `1.5px solid ${badge.border}` }}
-        >
-          {current}
-        </div>
+        )}
       </div>
 
       {/* Formula footer */}
       <div
-        className="px-5 py-3 border-t flex items-center gap-2"
-        style={{ borderColor: '#EDE8DF', background: '#FAF7F3' }}
+        className="px-5 py-2.5 border-t flex items-center gap-2"
+        style={{ borderColor: '#EDE8DF', background: '#F8F4EF' }}
       >
-        <span className="text-xs font-semibold" style={{ color: '#B4C5B6' }}>ƒ</span>
-        <span className="text-xs" style={{ color: '#8EA090' }}>
-          {formula}
+        <span className="text-[10px] font-semibold uppercase tracking-wider shrink-0" style={{ color: '#B4C5B6' }}>
+          formula
         </span>
+        <code className="text-[11px] truncate" style={{ color: '#8EA090', fontFamily: "'SF Mono', 'Fira Code', monospace" }}>
+          {formula}
+        </code>
       </div>
+    </div>
+  )
+}
+
+function SectionLabel({ label, desc }: { label: string; desc?: string }) {
+  return (
+    <div className="flex items-baseline gap-3 pt-2">
+      <span className="text-[11px] uppercase tracking-widest font-semibold" style={{ color: '#9AAE9C' }}>
+        {label}
+      </span>
+      {desc && (
+        <span className="text-xs" style={{ color: '#B4C5B6' }}>
+          {desc}
+        </span>
+      )}
+      <div className="flex-1 h-px" style={{ background: '#EDE8DF' }} />
     </div>
   )
 }
@@ -105,7 +143,7 @@ export default function Logics() {
   const highchartsMentionRate = highchartsCompetitor?.mentionRatePct ?? 0
   const highchartsSov = highchartsCompetitor?.shareOfVoicePct ?? 0
 
-  const meta = loading
+  const metaItems = loading
     ? [
         { label: 'Last generated', value: '—' },
         { label: 'Run month', value: '—' },
@@ -120,116 +158,117 @@ export default function Logics() {
       ]
 
   return (
-    <div className="max-w-[1100px] space-y-5">
-      {/* Page header */}
-      <div className="flex items-end justify-between">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight" style={{ color: '#1C2B1E' }}>
-            Logics
-          </h2>
-          <p className="text-sm mt-0.5" style={{ color: '#7A8E7C' }}>
-            Metric definitions and live values from your latest synced benchmark data.
-          </p>
-        </div>
-        <div className="flex items-center gap-1.5 text-xs pb-0.5" style={{ color: '#9AAE9C' }}>
-          <span
-            className="w-1.5 h-1.5 rounded-full inline-block"
-            style={{ background: '#52B256' }}
-          />
-          Live
-        </div>
-      </div>
-
+    <div className="max-w-[900px] space-y-6">
       {/* Run context strip */}
       <div
-        className="rounded-xl border px-5 py-4"
+        className="rounded-xl border px-5 py-4 flex flex-wrap gap-x-8 gap-y-3 items-center"
         style={{ background: '#FEFCF9', borderColor: '#DDD0BC' }}
       >
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-4">
-          {meta.map(({ label, value }) => (
-            <div key={label}>
-              <div
-                className="text-[10px] uppercase tracking-widest font-semibold mb-1"
-                style={{ color: '#A8BEA9' }}
-              >
-                {label}
-              </div>
-              <div className="text-sm font-medium" style={{ color: '#1C2B1E' }}>
-                {value}
-              </div>
-            </div>
-          ))}
+        <div className="flex items-center gap-2 mr-2">
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: '#52B256' }} />
+          <span className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: '#9AAE9C' }}>
+            Latest run
+          </span>
+        </div>
+        <div className="w-px h-4 hidden sm:block" style={{ background: '#DDD0BC' }} />
+        {metaItems.map(({ label, value }) => (
+          <div key={label} className="flex items-baseline gap-2">
+            <span className="text-[11px] uppercase tracking-wider font-medium" style={{ color: '#B4C5B6' }}>
+              {label}
+            </span>
+            <span className="text-[13px] font-medium" style={{ color: '#1C2B1E' }}>
+              {value}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Section: Core performance */}
+      <div className="space-y-3">
+        <SectionLabel label="Core performance" desc="Top-level health indicators" />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <MetricCard
+            index={1}
+            name="AI Visibility Score"
+            meaning="Primary benchmark score for the latest run. Summarises overall brand visibility performance across all prompts and models."
+            formula="overallScore = benchmark_runs.overall_score"
+            current={loading ? '—' : `${data.summary.overallScore.toFixed(1)} / 100`}
+            accent="green"
+            note="↑ Your actual Highcharts benchmark score."
+          />
+          <MetricCard
+            index={2}
+            name="Win Rate"
+            meaning="Share of tracked prompts where Highcharts matches or beats the top competitor."
+            formula="wins / trackedPrompts × 100"
+            current={loading ? '—' : `${winRate.toFixed(1)}%  (${wins.length}/${tracked.length})`}
+            accent={winRate >= 50 ? 'green' : 'amber'}
+          />
+          <MetricCard
+            index={3}
+            name="Coverage"
+            meaning="How many configured prompts have at least one run result."
+            formula="trackedPrompts / totalPrompts × 100"
+            current={
+              loading ? '—' : `${coverage.toFixed(1)}%  (${tracked.length}/${promptStatus.length})`
+            }
+            accent={coverage === 100 ? 'green' : 'neutral'}
+          />
+          <MetricCard
+            index={4}
+            name="Total Responses"
+            meaning="Total LLM outputs analysed in the latest run snapshot."
+            formula="count(benchmark_responses for latest run)"
+            current={loading ? '—' : String(data.summary.totalResponses)}
+            accent="neutral"
+          />
         </div>
       </div>
 
-      {/* Metric grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <LogicCard
-          name="AI Visibility Score"
-          meaning="Primary benchmark score for latest run. It summarizes overall brand visibility performance."
-          formula="overallScore = benchmark_runs.overall_score"
-          current={loading ? '—' : `${data.summary.overallScore.toFixed(1)} / 100`}
-          accent="green"
-          note="↑ This is your actual Highcharts benchmark score."
-        />
+      {/* Section: Reach & visibility */}
+      <div className="space-y-3">
+        <SectionLabel label="Reach & visibility" desc="How often Highcharts appears in model outputs" />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <MetricCard
+            index={5}
+            name="Highcharts Mention Rate"
+            meaning="Across all latest-run responses, the share where Highcharts was mentioned at least once."
+            formula="HighchartsMentions / totalResponses × 100"
+            current={loading ? '—' : `${highchartsMentionRate.toFixed(1)}%`}
+            accent="green"
+          />
+          <MetricCard
+            index={6}
+            name="Share of Voice"
+            meaning="Highcharts' portion of all entity mentions — how dominant the brand is relative to all competitors."
+            formula="HighchartsMentions / allEntityMentions × 100"
+            current={loading ? '—' : `${highchartsSov.toFixed(1)}%`}
+            accent="neutral"
+          />
+        </div>
+      </div>
 
-        <LogicCard
-          name="Win Rate"
-          meaning="Percent of tracked prompts where Highcharts matches or beats the top competitor."
-          formula="winRate = wins / trackedPrompts × 100"
-          current={loading ? '—' : `${winRate.toFixed(1)}%  (${wins.length}/${tracked.length})`}
-          accent={winRate >= 50 ? 'green' : 'amber'}
-        />
-
-        <LogicCard
-          name="Coverage"
-          meaning="How many configured prompts have at least one run result."
-          formula="coverage = trackedPrompts / totalPrompts × 100"
-          current={
-            loading ? '—' : `${coverage.toFixed(1)}%  (${tracked.length}/${promptStatus.length})`
-          }
-          accent={coverage === 100 ? 'green' : 'neutral'}
-        />
-
-        <LogicCard
-          name="Highcharts Mention Rate"
-          meaning="Across all latest-run responses, share where Highcharts was mentioned."
-          formula="mentionRate = HighchartsMentions / totalResponses × 100"
-          current={loading ? '—' : `${highchartsMentionRate.toFixed(1)}%`}
-          accent="green"
-        />
-
-        <LogicCard
-          name="Highcharts Share of Voice"
-          meaning="Share of all entity mentions attributed to Highcharts."
-          formula="shareOfVoice = HighchartsMentions / allEntityMentions × 100"
-          current={loading ? '—' : `${highchartsSov.toFixed(1)}%`}
-          accent="neutral"
-        />
-
-        <LogicCard
-          name="Prompt Highcharts Average"
-          meaning="Average Highcharts rate across tracked prompts (prompt-level lens)."
-          formula="avgPromptHighcharts = sum(prompt.highchartsRatePct) / trackedPrompts"
-          current={loading ? '—' : `${avgPromptHighcharts.toFixed(1)}%`}
-          accent="green"
-        />
-
-        <LogicCard
-          name="Prompt Viability Average"
-          meaning="Average competitor pressure across tracked prompts."
-          formula="avgPromptViability = sum(prompt.viabilityRatePct) / trackedPrompts"
-          current={loading ? '—' : `${avgPromptViability.toFixed(1)}%`}
-          accent="neutral"
-        />
-
-        <LogicCard
-          name="Total Responses"
-          meaning="Total LLM outputs analyzed in the latest run snapshot."
-          formula="totalResponses = count(benchmark_responses for latest run)"
-          current={loading ? '—' : String(data.summary.totalResponses)}
-          accent="neutral"
-        />
+      {/* Section: Prompt-level */}
+      <div className="space-y-3">
+        <SectionLabel label="Prompt-level averages" desc="Aggregated across individual tracked prompts" />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <MetricCard
+            index={7}
+            name="Prompt Highcharts Average"
+            meaning="Average Highcharts mention rate across all tracked prompts — the prompt-level view of visibility."
+            formula="sum(prompt.highchartsRatePct) / trackedPrompts"
+            current={loading ? '—' : `${avgPromptHighcharts.toFixed(1)}%`}
+            accent="green"
+          />
+          <MetricCard
+            index={8}
+            name="Prompt Viability Average"
+            meaning="Average competitor pressure across tracked prompts — higher means more competition in responses."
+            formula="sum(prompt.viabilityRatePct) / trackedPrompts"
+            current={loading ? '—' : `${avgPromptViability.toFixed(1)}%`}
+            accent="neutral"
+          />
+        </div>
       </div>
     </div>
   )

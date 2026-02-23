@@ -1,11 +1,18 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import Highcharts from 'highcharts'
 import HighchartsReact from 'highcharts-react-official'
-import type { ReactNode } from 'react'
-import { useMemo, useState } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
-import type { CompetitorSeries, DashboardResponse, PromptStatus, TimeSeriesPoint } from '../types'
+import { useHeaderExtra } from '../components/Layout'
+import type {
+  CompetitorSeries,
+  DashboardResponse,
+  PromptCompetitorRate,
+  PromptStatus,
+  TimeSeriesPoint,
+} from '../types'
 
 // ── Palette ─────────────────────────────────────────────────────────────────
 
@@ -24,13 +31,15 @@ const ENTITY_LOGOS: Record<string, string> = {
   'aggrid':     '/aggrid.png',
   'ag chart':   '/aggrid.png',
   'amcharts':   '/amcharts.png',
+  'recharts':   '/react-svgrepo-com.svg',
 }
 
-// Some PNGs have heavy transparent padding — zoom crops away the whitespace
-const LOGO_ZOOM: Record<string, number> = {
-  '/echarts.png': 1.9,
-  '/aggrid.png':  2.2,
-  '/amcharts.png':1.8,
+// Wordmark logos need pixel-precise cropping to the content bbox
+// Values computed from actual image analysis (x,y,w,h = content bbox; srcW,srcH = canvas size)
+interface LogoCrop { x: number; y: number; w: number; h: number; srcW: number; srcH: number; displayH: number }
+const LOGO_CROP: Record<string, LogoCrop> = {
+  '/aggrid.png':   { x: 16, y: 116, w: 374, h: 118, srcW: 400, srcH: 400, displayH: 13 },
+  '/amcharts.png': { x: 100, y: 100, w: 799, h: 353, srcW: 1000, srcH: 558, displayH: 13 },
 }
 
 function getEntityLogo(entity: string): string | null {
@@ -40,11 +49,24 @@ function getEntityLogo(entity: string): string | null {
 function EntityLogo({ entity, size = 16 }: { entity: string; size?: number }) {
   const src = getEntityLogo(entity)
   if (!src) return null
-  const zoom = LOGO_ZOOM[src] ?? 1
-  const inner = Math.round(size * zoom)
+  const crop = LOGO_CROP[src]
+  if (crop) {
+    const scale = crop.displayH / crop.h
+    const displayW = Math.round(crop.w * scale)
+    const imgW = Math.round(crop.srcW * scale)
+    const imgH = Math.round(crop.srcH * scale)
+    const offX = Math.round(crop.x * scale)
+    const offY = Math.round(crop.y * scale)
+    return (
+      <div style={{ width: displayW, height: crop.displayH, overflow: 'hidden', position: 'relative', flexShrink: 0 }}>
+        <img src={src} alt={entity}
+          style={{ position: 'absolute', width: imgW, height: imgH, top: -offY, left: -offX, objectFit: 'fill' }} />
+      </div>
+    )
+  }
   return (
     <div style={{ width: size, height: size, overflow: 'hidden', borderRadius: 3, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <img src={src} width={inner} height={inner} style={{ objectFit: 'contain', flexShrink: 0 }} alt={entity} />
+      <img src={src} width={size} height={size} style={{ objectFit: 'contain', flexShrink: 0 }} alt={entity} />
     </div>
   )
 }
@@ -73,10 +95,178 @@ const TOOLTIP_BASE: Highcharts.TooltipOptions = {
 
 const CHART_CREDITS: Highcharts.CreditsOptions = { enabled: false }
 
+type TagFilterMode = 'any' | 'all'
+
+type TagSummary = {
+  tag: string
+  count: number
+}
+
+function normalizeTagList(tags: string[]): string[] {
+  return [...new Set(tags.map((tag) => tag.trim().toLowerCase()).filter(Boolean))].sort()
+}
+
+function promptMatchesTagFilter(
+  tags: string[],
+  selectedTagSet: Set<string>,
+  mode: TagFilterMode,
+): boolean {
+  if (selectedTagSet.size === 0) return true
+
+  const promptTagSet = new Set(tags.map((tag) => tag.toLowerCase()))
+  if (mode === 'all') {
+    for (const tag of selectedTagSet) {
+      if (!promptTagSet.has(tag)) return false
+    }
+    return true
+  }
+
+  for (const tag of selectedTagSet) {
+    if (promptTagSet.has(tag)) return true
+  }
+  return false
+}
+
+function buildTagSummary(prompts: PromptStatus[]): TagSummary[] {
+  const counts = new Map<string, number>()
+
+  for (const prompt of prompts) {
+    for (const tag of normalizeTagList(prompt.tags)) {
+      counts.set(tag, (counts.get(tag) ?? 0) + 1)
+    }
+  }
+
+  return [...counts.entries()]
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((left, right) => {
+      if (right.count !== left.count) return right.count - left.count
+      return left.tag.localeCompare(right.tag)
+    })
+}
+
+function resolvePromptSampleSize(prompt: PromptStatus): number | null {
+  if (
+    typeof prompt.latestRunResponseCount === 'number' &&
+    Number.isFinite(prompt.latestRunResponseCount) &&
+    prompt.latestRunResponseCount > 0
+  ) {
+    return prompt.latestRunResponseCount
+  }
+
+  const estimates = (prompt.competitorRates ?? [])
+    .flatMap((rate) => {
+      if (typeof rate.mentions !== 'number' || !Number.isFinite(rate.mentions)) return []
+      if (!Number.isFinite(rate.ratePct) || rate.ratePct <= 0) return []
+      const estimate = rate.mentions / (rate.ratePct / 100)
+      return Number.isFinite(estimate) && estimate > 0 ? [estimate] : []
+    })
+
+  if (estimates.length === 0) return null
+  return estimates.reduce((sum, value) => sum + value, 0) / estimates.length
+}
+
+function buildFilteredCompetitorSeries(
+  prompts: PromptStatus[],
+  baseline: CompetitorSeries[],
+): CompetitorSeries[] {
+  const tracked = prompts.filter((prompt) => prompt.status === 'tracked')
+
+  if (tracked.length === 0) {
+    return baseline.map((series) => ({
+      ...series,
+      mentionRatePct: 0,
+      shareOfVoicePct: 0,
+    }))
+  }
+
+  const hasCompetitorBreakdown = tracked.some((prompt) => (prompt.competitorRates?.length ?? 0) > 0)
+  if (!hasCompetitorBreakdown) {
+    return baseline
+  }
+
+  const buckets = new Map<string, { rateSum: number; sampleCount: number; mentions: number }>()
+  for (const series of baseline) {
+    buckets.set(series.entityKey.toLowerCase(), { rateSum: 0, sampleCount: 0, mentions: 0 })
+  }
+
+  let weightedTotalResponses = 0
+  let weightedPromptCount = 0
+
+  for (const prompt of tracked) {
+    const promptRates = new Map<string, PromptCompetitorRate>()
+    for (const rate of prompt.competitorRates ?? []) {
+      const key = (rate.entityKey || rate.entity).toLowerCase()
+      promptRates.set(key, rate)
+      promptRates.set(rate.entity.toLowerCase(), rate)
+    }
+
+    const sampleSize = resolvePromptSampleSize(prompt)
+    const hasSampleSize =
+      typeof sampleSize === 'number' && Number.isFinite(sampleSize) && sampleSize > 0
+    if (hasSampleSize) {
+      weightedTotalResponses += sampleSize
+      weightedPromptCount += 1
+    }
+
+    for (const series of baseline) {
+      const bucket = buckets.get(series.entityKey.toLowerCase())
+      if (!bucket) continue
+
+      const rateEntry =
+        promptRates.get(series.entityKey.toLowerCase()) ??
+        promptRates.get(series.entity.toLowerCase()) ??
+        null
+      const ratePct = Math.max(0, rateEntry?.ratePct ?? 0)
+
+      bucket.rateSum += ratePct
+      bucket.sampleCount += 1
+
+      if (hasSampleSize) {
+        const mentions =
+          typeof rateEntry?.mentions === 'number' && Number.isFinite(rateEntry.mentions)
+            ? Math.max(0, rateEntry.mentions)
+            : (ratePct / 100) * sampleSize
+        bucket.mentions += mentions
+      }
+    }
+  }
+
+  const useWeighted = weightedPromptCount === tracked.length && weightedTotalResponses > 0
+
+  const withRates = baseline.map((series) => {
+    const bucket = buckets.get(series.entityKey.toLowerCase())
+    const averageRate =
+      bucket && bucket.sampleCount > 0 ? bucket.rateSum / bucket.sampleCount : 0
+    const weightedRate =
+      useWeighted && bucket ? (bucket.mentions / weightedTotalResponses) * 100 : averageRate
+
+    return {
+      ...series,
+      mentionRatePct: Number(weightedRate.toFixed(2)),
+    }
+  })
+
+  const totalMentionRate = withRates.reduce((sum, series) => sum + series.mentionRatePct, 0)
+
+  return withRates.map((series) => ({
+    ...series,
+    shareOfVoicePct:
+      totalMentionRate > 0
+        ? Number(((series.mentionRatePct / totalMentionRate) * 100).toFixed(2))
+        : 0,
+  }))
+}
+
 // ── Skeleton ─────────────────────────────────────────────────────────────────
 
-function Skeleton({ className = '' }: { className?: string }) {
-  return <div className={`rounded-lg animate-pulse ${className}`} style={{ background: '#E5DDD0' }} />
+function Skeleton({
+  className = '',
+  style,
+}: {
+  className?: string
+  style?: CSSProperties
+}) {
+  return <div className={`rounded-lg animate-pulse ${className}`} style={{ background: '#E5DDD0', ...style }} />
 }
 
 // ── Card Shell ───────────────────────────────────────────────────────────────
@@ -123,33 +313,203 @@ function RunMetaCard({ summary }: { summary: DashboardResponse['summary'] }) {
   const runLabel = summary.runMonth
     ? new Date(summary.runMonth + '-01').toLocaleString('default', { month: 'long', year: 'numeric' })
     : null
+  const model = summary.models.length > 0 ? summary.models.join(', ') : null
+  const webSearch = summary.webSearchEnabled ? (summary.webSearchEnabled === 'yes' ? 'ON' : 'OFF') : null
 
-  const pills = [
+  const parts = [
     runLabel,
-    summary.models.length > 0 ? summary.models.join(', ') : null,
-    summary.webSearchEnabled
-      ? `web search ${summary.webSearchEnabled === 'yes' ? 'on' : 'off'}`
-      : null,
-  ].filter(Boolean) as string[]
+    model ? `Model: "${model}"` : null,
+    webSearch ? `Web search: ${webSearch}` : null,
+  ].filter(Boolean).join(',  ')
+
+  if (!parts) return null
 
   return (
-    <div
-      className="rounded-xl border shadow-sm flex items-center justify-between px-5 py-3"
-      style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
-    >
-      <span className="text-xs font-medium" style={{ color: '#9AAE9C' }}>
-        Run details
-      </span>
-      <div className="flex items-center gap-2">
-        {pills.map((label, i) => (
-          <span
-            key={i}
-            className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium"
-            style={{ background: '#F2EDE6', color: '#2A3A2C', border: '1px solid #DDD0BC' }}
+    <p className="text-[11px]" style={{ color: '#B0A898' }}>
+      {parts}
+    </p>
+  )
+}
+
+function DashboardTagFilterBar({
+  tags,
+  selectedTags,
+  mode,
+  onToggleTag,
+  onModeChange,
+  onClear,
+  totalCount,
+  matchedCount,
+  trackedCount,
+  isLoading,
+}: {
+  tags: TagSummary[]
+  selectedTags: string[]
+  mode: TagFilterMode
+  onToggleTag: (tag: string) => void
+  onModeChange: (mode: TagFilterMode) => void
+  onClear: () => void
+  totalCount: number
+  matchedCount: number
+  trackedCount: number
+  isLoading: boolean
+}) {
+  const [search, setSearch] = useState('')
+
+  const visibleTags = useMemo(() => {
+    const needle = search.trim().toLowerCase()
+    if (!needle) return tags
+    return tags.filter((entry) => entry.tag.includes(needle))
+  }, [tags, search])
+
+  const hasActiveFilter = selectedTags.length > 0
+  const allSelected = selectedTags.length === 0
+
+  return (
+    <div className="rounded-xl border shadow-sm overflow-hidden" style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}>
+      <div
+        className="px-5 py-4"
+        style={{ background: '#FDFCF8', borderBottom: '1px solid #F2EDE6' }}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#9AAE9C' }}>
+              Dashboard Prompt Lens
+            </p>
+            <p className="text-sm font-semibold mt-1" style={{ color: '#2A3A2C' }}>
+              Segment by prompt tags
+            </p>
+            <p className="text-xs mt-1" style={{ color: '#9AAE9C' }}>
+              {matchedCount} of {totalCount} prompts matched · {trackedCount} tracked
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+              style={{
+                background: mode === 'any' ? '#3D5C40' : '#FFFFFF',
+                color: mode === 'any' ? '#FEFAE8' : '#7A8E7C',
+                border: `1px solid ${mode === 'any' ? '#3D5C40' : '#DDD0BC'}`,
+              }}
+              onClick={() => onModeChange('any')}
+            >
+              Match Any
+            </button>
+            <button
+              type="button"
+              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+              style={{
+                background: mode === 'all' ? '#3D5C40' : '#FFFFFF',
+                color: mode === 'all' ? '#FEFAE8' : '#7A8E7C',
+                border: `1px solid ${mode === 'all' ? '#3D5C40' : '#DDD0BC'}`,
+              }}
+              onClick={() => onModeChange('all')}
+            >
+              Match All
+            </button>
+            <button
+              type="button"
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium"
+              style={{
+                background: '#FFFFFF',
+                color: hasActiveFilter ? '#2A3A2C' : '#C4BAB0',
+                border: '1px solid #DDD0BC',
+                cursor: hasActiveFilter ? 'pointer' : 'default',
+              }}
+              onClick={onClear}
+              disabled={!hasActiveFilter}
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+        <div className="mt-3">
+          <div
+            className="flex items-center gap-2 rounded-lg px-3 py-2"
+            style={{ background: '#FFFFFF', border: '1px solid #E8E0D2' }}
           >
-            {label}
-          </span>
-        ))}
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#C4BAB0" strokeWidth="2">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M20 20l-3.5-3.5" strokeLinecap="round" />
+            </svg>
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search tags"
+              className="w-full text-sm bg-transparent outline-none"
+              style={{ color: '#2A3A2C' }}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="px-5 py-4" style={{ background: '#FFFFFF' }}>
+        {isLoading ? (
+          <div className="flex flex-wrap gap-2">
+            {Array.from({ length: 7 }).map((_, index) => (
+              <Skeleton key={index} className="h-8 w-20 rounded-full" />
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onClear}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all"
+              style={{
+                background: allSelected ? '#3D5C40' : '#F2EDE6',
+                color: allSelected ? '#FEFAE8' : '#5A7060',
+                border: `1px solid ${allSelected ? '#3D5C40' : '#DDD0BC'}`,
+              }}
+            >
+              <span>All</span>
+              <span
+                className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold"
+                style={{
+                  background: allSelected ? 'rgba(255,255,255,0.18)' : '#E8E0D2',
+                  color: allSelected ? '#FEFAE8' : '#7A8E7C',
+                }}
+              >
+                {totalCount}
+              </span>
+            </button>
+
+            {visibleTags.length > 0 ? (
+              visibleTags.map((entry) => {
+                const active = selectedTags.includes(entry.tag)
+                return (
+                  <button
+                    key={entry.tag}
+                    type="button"
+                    onClick={() => onToggleTag(entry.tag)}
+                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all"
+                    style={{
+                      background: active ? '#3D5C40' : '#F2EDE6',
+                      color: active ? '#FEFAE8' : '#5A7060',
+                      border: `1px solid ${active ? '#3D5C40' : '#DDD0BC'}`,
+                    }}
+                  >
+                    <span>{entry.tag}</span>
+                    <span
+                      className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold"
+                      style={{
+                        background: active ? 'rgba(255,255,255,0.18)' : '#E8E0D2',
+                        color: active ? '#FEFAE8' : '#7A8E7C',
+                      }}
+                    >
+                      {entry.count}
+                    </span>
+                  </button>
+                )
+              })
+            ) : (
+              <p className="text-sm" style={{ color: '#9AAE9C' }}>
+                No tags matched your search.
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -413,11 +773,25 @@ function SnapshotTrendCard({
       xAxis: { visible: false, type: 'datetime' },
       yAxis: { visible: false, min: 0 },
       legend: { enabled: false },
-      tooltip: { enabled: false },
+      tooltip: {
+        ...TOOLTIP_BASE,
+        enabled: true,
+        shared: true,
+        useHTML: true,
+        xDateFormat: '%b %e, %Y',
+        headerFormat:
+          '<div style="margin-bottom:5px;font-size:11px;color:#7A8E7C;font-weight:600">{point.key}</div>',
+        pointFormat:
+          '<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">' +
+          '<span style="display:inline-block;width:7px;height:7px;border-radius:999px;background:{point.color}"></span>' +
+          '<span style="color:#2A3A2C">{series.name}</span>' +
+          '<span style="margin-left:auto;font-weight:600;color:#2A3A2C">{point.y:.1f}</span>' +
+          '</div>',
+      },
       plotOptions: {
         series: {
           lineWidth: 2,
-          marker: { enabled: false, states: { hover: { enabled: false } } },
+          marker: { enabled: false, states: { hover: { enabled: true, radius: 3 } } },
           states: { hover: { lineWidthPlus: 0 } },
         },
       },
@@ -446,13 +820,29 @@ function SnapshotTrendCard({
       style={{ background: '#FEFCF9', borderColor: '#DDD0BC' }}
     >
       {/* Header */}
-      <div className="px-5 pt-4 pb-0">
+      <div className="px-5 pt-4 pb-0 flex items-center justify-between">
         <span
           className="text-[10px] font-semibold uppercase tracking-widest"
           style={{ color: '#A8BEA9' }}
         >
-          Snapshot Trend
+          AI Visibility Score Over Time
         </span>
+        <div className="relative group">
+          <button
+            type="button"
+            className="w-4 h-4 rounded-full text-[10px] font-semibold border flex items-center justify-center"
+            style={{ color: '#A8BEA9', borderColor: '#D8CEC0', background: '#FEFCF9' }}
+            aria-label="About AI Visibility Score Over Time"
+          >
+            i
+          </button>
+          <div
+            className="pointer-events-none absolute right-0 top-5 z-20 w-52 rounded-md border px-2 py-1.5 text-[10px] leading-snug opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+            style={{ background: '#FFFFFF', borderColor: '#DDD0BC', color: '#6E8472' }}
+          >
+            Trend of official AI Visibility score by run. Dashed line is COMBVI.
+          </div>
+        </div>
       </div>
 
       {/* Latest values + deltas */}
@@ -569,6 +959,122 @@ function StatCard({
         </p>
       </div>
     </div>
+  )
+}
+
+// ── Share of Voice Card ───────────────────────────────────────────────────────
+
+function SovCard({ sov, isLoading }: { sov: number; isLoading: boolean }) {
+  const pct = Math.min(Math.max(sov, 0), 100)
+  const r = 52
+  const sz = 132
+  const cx = sz / 2
+  const cy = sz / 2
+  const circumference = 2 * Math.PI * r
+  const filled = (pct / 100) * circumference
+
+  return (
+    <div
+      className="rounded-xl border shadow-sm h-full flex flex-col overflow-hidden"
+      style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
+    >
+      <div style={{ height: 3, background: 'linear-gradient(90deg, #8FBB93, #52B256)' }} />
+
+      <div className="px-4 pt-3">
+        <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#A8BEA9' }}>
+          Share of Voice
+        </span>
+      </div>
+
+      <div className="flex-1 flex flex-col items-center justify-center px-3 pb-4">
+        {isLoading ? (
+          <Skeleton className="rounded-full" style={{ width: sz, height: sz }} />
+        ) : (
+          <div className="relative" style={{ width: sz, height: sz }}>
+            <svg width={sz} height={sz} viewBox={`0 0 ${sz} ${sz}`}>
+              <circle cx={cx} cy={cy} r={r} fill="none" stroke="#EDE8DF" strokeWidth="11" />
+              <circle
+                cx={cx} cy={cy} r={r}
+                fill="none"
+                stroke={HC_COLOR}
+                strokeWidth="11"
+                strokeLinecap="round"
+                strokeDasharray={`${filled} ${circumference}`}
+                transform={`rotate(-90 ${cx} ${cy})`}
+                style={{ transition: 'stroke-dasharray 0.6s cubic-bezier(0.34,1.56,0.64,1)' }}
+              />
+            </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-0.5">
+              <span className="text-2xl font-black leading-none tracking-tight" style={{ color: '#1C2B1E' }}>
+                {pct.toFixed(1)}%
+              </span>
+              <span className="text-[9px] font-medium uppercase tracking-wide" style={{ color: '#A8BEA9' }}>of mentions</span>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Prompt HC Average Card ────────────────────────────────────────────────────
+
+function PromptHcAvgCard() {
+  return (
+    <Link
+      to="/prompts"
+      className="rounded-xl border shadow-sm h-full flex flex-col overflow-hidden group"
+      style={{ background: '#FFFFFF', borderColor: '#DDD0BC', textDecoration: 'none', transition: 'border-color 0.15s, box-shadow 0.15s' }}
+      onMouseEnter={(e) => {
+        const el = e.currentTarget as HTMLAnchorElement
+        el.style.borderColor = '#8FBB93'
+        el.style.boxShadow = '0 4px 16px rgba(143,187,147,0.18)'
+      }}
+      onMouseLeave={(e) => {
+        const el = e.currentTarget as HTMLAnchorElement
+        el.style.borderColor = '#DDD0BC'
+        el.style.boxShadow = ''
+      }}
+    >
+      <div style={{ height: 3, background: 'linear-gradient(90deg, #8FBB93, #52B256)' }} />
+
+      <div className="flex-1 flex flex-col justify-between px-4 pt-4 pb-4">
+        <div className="flex items-start justify-between">
+          <div>
+            <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#A8BEA9' }}>
+              Prompts
+            </span>
+            <p className="text-sm font-semibold mt-1.5 leading-snug" style={{ color: '#2A3A2C' }}>
+              Manage Queries
+            </p>
+          </div>
+          {/* Lucide: LayoutList */}
+          <div
+            className="flex-shrink-0 flex items-center justify-center rounded-lg"
+            style={{ width: 36, height: 36, background: '#EEF5EF', border: '1px solid #C8DDC9' }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5E8A62" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="5" width="6" height="6" rx="1" />
+              <path d="M13 6h8" />
+              <rect x="3" y="13" width="6" height="6" rx="1" />
+              <path d="M13 14h8" />
+              <path d="M13 18h5" />
+            </svg>
+          </div>
+        </div>
+
+        <div
+          className="inline-flex items-center gap-1.5 text-xs font-semibold"
+          style={{ color: '#8FBB93' }}
+        >
+          Open Prompts
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+            className="group-hover:translate-x-0.5 transition-transform duration-150">
+            <path d="M5 12h14M12 5l7 7-7 7" />
+          </svg>
+        </div>
+      </div>
+    </Link>
   )
 }
 
@@ -745,39 +1251,75 @@ function CompetitorToggles({
   competitorSeries,
   visible,
   onToggle,
+  onHighchartsOnly,
+  onShowAll,
+  isHighchartsOnly,
+  hasHidden,
 }: {
   competitorSeries: CompetitorSeries[]
   visible: Set<string>
   onToggle: (name: string) => void
+  onHighchartsOnly: () => void
+  onShowAll: () => void
+  isHighchartsOnly: boolean
+  hasHidden: boolean
 }) {
   const rivals = competitorSeries.filter((s) => !s.isHighcharts)
   const rivalIndexMap = new Map(rivals.map((s, i) => [s.entity, i]))
 
   return (
-    <div className="flex flex-wrap gap-2 mt-4">
-      {competitorSeries.map((s) => {
-        const on = visible.has(s.entity)
-        const color = s.isHighcharts ? HC_COLOR : rivalColor(rivalIndexMap.get(s.entity) ?? 0)
-        return (
-          <button
-            key={s.entity}
-            onClick={() => onToggle(s.entity)}
-            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all"
-            style={{
-              background: on ? color : '#F2EDE6',
-              color: on ? '#fff' : '#9AAE9C',
-              border: `1.5px solid ${on ? color : '#DDD0BC'}`,
-              opacity: on ? 1 : 0.7,
-            }}
-          >
-            <span
-              className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-              style={{ background: on ? 'rgba(255,255,255,0.8)' : color }}
-            />
-            {s.entity}
-          </button>
-        )
-      })}
+    <div className="mt-4 space-y-2">
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={onHighchartsOnly}
+          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold transition-all"
+          style={{
+            background: isHighchartsOnly ? HC_COLOR : '#F0F7F1',
+            color: isHighchartsOnly ? '#fff' : '#2A5C2E',
+            border: `1.5px solid ${HC_COLOR}`,
+          }}
+        >
+          Highcharts only
+        </button>
+        <button
+          onClick={onShowAll}
+          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all"
+          style={{
+            background: hasHidden ? '#FFFFFF' : '#F8F5EF',
+            color: hasHidden ? '#2A3A2C' : '#9AAE9C',
+            border: `1.5px solid ${hasHidden ? '#DDD0BC' : '#E8DFD0'}`,
+            cursor: hasHidden ? 'pointer' : 'default',
+          }}
+          disabled={!hasHidden}
+        >
+          Show all
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {competitorSeries.map((s) => {
+          const on = visible.has(s.entity)
+          const color = s.isHighcharts ? HC_COLOR : rivalColor(rivalIndexMap.get(s.entity) ?? 0)
+          return (
+            <button
+              key={s.entity}
+              onClick={() => onToggle(s.entity)}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all"
+              style={{
+                background: on ? color : '#F2EDE6',
+                color: on ? '#fff' : '#9AAE9C',
+                border: `1.5px solid ${on ? color : '#DDD0BC'}`,
+                opacity: on ? 1 : 0.7,
+              }}
+            >
+              <span
+                className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                style={{ background: on ? 'rgba(255,255,255,0.8)' : color }}
+              />
+              {s.entity}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -1076,21 +1618,33 @@ function MentionVsViabilityChart({ data }: { data: PromptStatus[] }) {
 
 // ── Prompts Table ─────────────────────────────────────────────────────────────
 
-type SortKey = 'query' | 'status' | 'runs' | 'highchartsRatePct' | 'viabilityRatePct'
+type SortKey =
+  | 'query'
+  | 'tags'
+  | 'status'
+  | 'runs'
+  | 'highchartsRatePct'
+  | 'highchartsRank'
+  | 'viabilityRatePct'
 
-// Clickable ⓘ badge that reveals a description popover
-function ColumnInfoBadge({ text }: { text: string }) {
-  const [open, setOpen] = useState(false)
+// Hover/focus info badge that keeps tooltip anchored inside table cards.
+function ColumnInfoBadge({
+  text,
+  align = 'left',
+}: {
+  text: string
+  align?: 'left' | 'right'
+}) {
   return (
-    <span className="relative inline-flex items-center" style={{ verticalAlign: 'middle' }}>
+    <span className="relative inline-flex items-center group" style={{ verticalAlign: 'middle' }}>
       <button
         type="button"
-        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v) }}
+        onClick={(event) => event.stopPropagation()}
         className="inline-flex items-center justify-center rounded-full text-[9px] font-bold leading-none ml-1"
         style={{
           width: 14, height: 14,
-          background: open ? '#8FBB93' : '#DDD0BC',
-          color: open ? '#fff' : '#7A8E7C',
+          background: '#DDD0BC',
+          color: '#7A8E7C',
           cursor: 'pointer', border: 'none', flexShrink: 0,
           transition: 'background 0.15s',
         }}
@@ -1098,33 +1652,20 @@ function ColumnInfoBadge({ text }: { text: string }) {
       >
         i
       </button>
-      {open && (
-        <>
-          <div
-            className="fixed inset-0"
-            style={{ zIndex: 40 }}
-            onClick={() => setOpen(false)}
-          />
-          <div
-            className="absolute z-50 rounded-lg shadow-xl border text-xs leading-relaxed p-3"
-            style={{
-              top: '100%', left: '50%', transform: 'translateX(-50%)',
-              marginTop: 6, width: 220,
-              background: '#FFFFFF', borderColor: '#DDD0BC', color: '#2A3A2C',
-              boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
-            }}
-          >
-            <div
-              className="absolute w-2 h-2 border-l border-t"
-              style={{
-                top: -5, left: '50%', transform: 'translateX(-50%) rotate(45deg)',
-                background: '#FFFFFF', borderColor: '#DDD0BC',
-              }}
-            />
-            {text}
-          </div>
-        </>
-      )}
+      <div
+        className="pointer-events-none absolute z-50 rounded-lg shadow-xl border text-xs leading-relaxed p-3 opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 transition-all duration-150"
+        style={{
+          top: 'calc(100% + 6px)',
+          width: 230,
+          background: '#FFFFFF',
+          borderColor: '#DDD0BC',
+          color: '#2A3A2C',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+          ...(align === 'right' ? { right: 0 } : { left: 0 }),
+        }}
+      >
+        {text}
+      </div>
     </span>
   )
 }
@@ -1172,6 +1713,29 @@ function PMiniBar({
   )
 }
 
+function PromptTagChips({ tags, muted }: { tags: string[]; muted?: boolean }) {
+  if (tags.length === 0) {
+    return <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>
+  }
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {tags.slice(0, 3).map((tag) => (
+        <span
+          key={tag}
+          className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium"
+          style={{
+            background: '#F2EDE6',
+            color: muted ? '#9AAE9C' : '#3D5840',
+            border: '1px solid #DDD0BC',
+          }}
+        >
+          {tag}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function PSortTh({
   label, col, current, dir, align = 'left', width, onSort, info,
 }: {
@@ -1185,7 +1749,7 @@ function PSortTh({
       onClick={() => onSort(col)}>
       <span className="inline-flex items-center gap-1">
         {label}
-        {info && <ColumnInfoBadge text={info} />}
+        {info && <ColumnInfoBadge text={info} align={align === 'right' ? 'right' : 'left'} />}
         <span style={{ fontSize: 9, color: active ? '#8FBB93' : '#DDD0BC', fontWeight: 700 }}>
           {active ? (dir === 'asc' ? '▲' : '▼') : '⬍'}
         </span>
@@ -1194,20 +1758,45 @@ function PSortTh({
   )
 }
 
-function PromptStatusTable({ data, isLoading }: { data: PromptStatus[]; isLoading: boolean }) {
+function PromptStatusTable({
+  data,
+  isLoading,
+  activeTags,
+  matchMode,
+  onClearTagFilter,
+}: {
+  data: PromptStatus[]
+  isLoading: boolean
+  activeTags: string[]
+  matchMode: TagFilterMode
+  onClearTagFilter: () => void
+}) {
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [search, setSearch] = useState('')
 
   function handleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-    else { setSortKey(key); setSortDir('asc') }
+    else {
+      setSortKey(key)
+      setSortDir('asc')
+    }
   }
 
   const sorted = useMemo(() => {
     if (!sortKey) return data
     return [...data].sort((a, b) => {
-      const av = a[sortKey] as string | number | boolean
-      const bv = b[sortKey] as string | number | boolean
+      let av: string | number | boolean | null
+      let bv: string | number | boolean | null
+      if (sortKey === 'tags') {
+        av = a.tags.join(', ')
+        bv = b.tags.join(', ')
+      } else {
+        av = a[sortKey] as string | number | boolean | null
+        bv = b[sortKey] as string | number | boolean | null
+      }
+      if (av == null) av = Number.POSITIVE_INFINITY
+      if (bv == null) bv = Number.POSITIVE_INFINITY
       const al = typeof av === 'string' ? av.toLowerCase() : av
       const bl = typeof bv === 'string' ? bv.toLowerCase() : bv
       if (al < bl) return sortDir === 'asc' ? -1 : 1
@@ -1216,75 +1805,199 @@ function PromptStatusTable({ data, isLoading }: { data: PromptStatus[]; isLoadin
     })
   }, [data, sortKey, sortDir])
 
+  const rows = useMemo(() => {
+    const needle = search.trim().toLowerCase()
+    if (!needle) return sorted
+
+    return sorted.filter((prompt) => {
+      const statusLabel = prompt.isPaused
+        ? 'paused'
+        : prompt.status === 'tracked'
+          ? 'tracked'
+          : 'awaiting run'
+      const haystack = [
+        prompt.query,
+        prompt.tags.join(' '),
+        statusLabel,
+        prompt.topCompetitor?.entity ?? '',
+      ]
+        .join(' ')
+        .toLowerCase()
+      return haystack.includes(needle)
+    })
+  }, [sorted, search])
+
   return (
-    <div className="rounded-xl border shadow-sm overflow-hidden" style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}>
-      <div className="flex items-center justify-between px-4 py-2.5"
-        style={{ background: '#FDFCF8', borderBottom: '1px solid #F2EDE6' }}>
-        <span className="text-xs" style={{ color: '#9AAE9C' }}>
-          Click a query to open its drilldown dashboard.
-        </span>
-        <Link to="/prompts" className="text-xs font-medium"
-          style={{ color: '#8FBB93' }}
-          onMouseEnter={(e) => ((e.currentTarget as HTMLAnchorElement).style.color = '#607860')}
-          onMouseLeave={(e) => ((e.currentTarget as HTMLAnchorElement).style.color = '#8FBB93')}>
-          View all →
-        </Link>
+    <div
+      className="rounded-xl border shadow-sm overflow-hidden min-h-[360px]"
+      style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
+    >
+      <div className="px-4 py-3" style={{ background: '#FDFCF8', borderBottom: '1px solid #F2EDE6' }}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-medium" style={{ color: '#7A8E7C' }}>
+              Prompt table
+            </p>
+            <p className="text-[11px] mt-0.5" style={{ color: '#9AAE9C' }}>
+              {rows.length} row{rows.length !== 1 ? 's' : ''} shown
+            </p>
+          </div>
+          <div className="flex items-center gap-2 min-w-[280px] flex-1 max-w-[420px]">
+            <div
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg w-full"
+              style={{ border: '1px solid #DDD0BC', background: '#FFFFFF' }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#9AAE9C" strokeWidth="2">
+                <circle cx="11" cy="11" r="7" />
+                <path d="M20 20l-3.5-3.5" strokeLinecap="round" />
+              </svg>
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search query, tag, status, rival"
+                className="w-full bg-transparent text-xs outline-none"
+                style={{ color: '#2A3A2C' }}
+              />
+            </div>
+            <Link
+              to="/prompts"
+              className="text-xs font-medium whitespace-nowrap"
+              style={{ color: '#8FBB93' }}
+              onMouseEnter={(e) => ((e.currentTarget as HTMLAnchorElement).style.color = '#607860')}
+              onMouseLeave={(e) => ((e.currentTarget as HTMLAnchorElement).style.color = '#8FBB93')}
+            >
+              View all →
+            </Link>
+          </div>
+        </div>
+
+        {activeTags.length > 0 && (
+          <div className="mt-2 flex items-center gap-2 flex-wrap">
+            <span className="text-[11px] font-medium" style={{ color: '#607860' }}>
+              Global tag filter ({matchMode}):
+            </span>
+            {activeTags.map((tag) => (
+              <span
+                key={tag}
+                className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium"
+                style={{ background: '#F2EDE6', color: '#3D5840', border: '1px solid #DDD0BC' }}
+              >
+                {tag}
+              </span>
+            ))}
+            <button
+              type="button"
+              onClick={onClearTagFilter}
+              className="text-[11px] font-medium underline underline-offset-2"
+              style={{ color: '#607860' }}
+            >
+              Clear
+            </button>
+          </div>
+        )}
       </div>
-      <table className="w-full border-collapse">
-        <thead>
-          <tr style={{ borderBottom: '1px solid #F2EDE6', background: '#FDFCF8' }}>
-            <PSortTh label="Query" col="query" current={sortKey} dir={sortDir} onSort={handleSort} />
-            <PSortTh label="Status" col="status" current={sortKey} dir={sortDir} onSort={handleSort} width="130px" />
-            <PSortTh
-              label="Highcharts Mention Rate" col="highchartsRatePct" current={sortKey} dir={sortDir}
-              onSort={handleSort} width="190px"
-              info="The share of LLM responses for this prompt that explicitly mention Highcharts. Bar = mention rate %."
-            />
-            <PSortTh label="Runs" col="runs" current={sortKey} dir={sortDir} align="right" onSort={handleSort} width="60px" />
-            <PSortTh
-              label="Viability" col="viabilityRatePct" current={sortKey} dir={sortDir}
-              onSort={handleSort} width="160px"
-              info="Average mention rate of competitor brands for this prompt. High viability means strong competitive pressure."
-            />
-            <th className="px-4 py-3 text-xs font-medium" style={{ color: '#7A8E7C', textAlign: 'left', whiteSpace: 'nowrap' }}>
-              Top rival
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {isLoading
-            ? Array.from({ length: 4 }).map((_, i) => (
+
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1240px] border-collapse">
+          <thead className="sticky top-0 z-10">
+            <tr style={{ borderBottom: '1px solid #F2EDE6', background: '#F7F2EA' }}>
+              <PSortTh label="Query" col="query" current={sortKey} dir={sortDir} onSort={handleSort} width="320px" />
+              <PSortTh label="Tags" col="tags" current={sortKey} dir={sortDir} onSort={handleSort} width="160px" />
+              <PSortTh label="Status" col="status" current={sortKey} dir={sortDir} onSort={handleSort} width="130px" />
+              <PSortTh
+                label="Highcharts Mention Rate" col="highchartsRatePct" current={sortKey} dir={sortDir}
+                onSort={handleSort} width="190px"
+                info="The share of LLM responses for this prompt that explicitly mention Highcharts. Bar = mention rate %."
+              />
+              <PSortTh
+                label="HC Rank" col="highchartsRank" current={sortKey} dir={sortDir}
+                align="right" onSort={handleSort} width="90px"
+                info="Highcharts position among all tracked entities for this prompt, ranked by mention rate."
+              />
+              <PSortTh label="Runs" col="runs" current={sortKey} dir={sortDir} align="right" onSort={handleSort} width="60px" />
+              <PSortTh
+                label="Viability" col="viabilityRatePct" current={sortKey} dir={sortDir}
+                onSort={handleSort} width="160px"
+                info="Average mention rate of competitor brands for this prompt. High viability means strong competitive pressure."
+              />
+              <th className="px-4 py-3 text-xs font-medium" style={{ color: '#7A8E7C', textAlign: 'left', whiteSpace: 'nowrap' }}>
+                Top rival
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading ? (
+              Array.from({ length: 4 }).map((_, i) => (
                 <tr key={i} style={{ borderBottom: '1px solid #F2EDE6' }}>
-                  {Array.from({ length: 6 }).map((__, j) => (
+                  {Array.from({ length: 8 }).map((__, j) => (
                     <td key={j} className="px-4 py-4"><Skeleton className="h-4" /></td>
                   ))}
                 </tr>
               ))
-            : sorted.map((p, i) => {
+            ) : rows.length === 0 ? (
+              <tr>
+                <td colSpan={8} className="px-4 py-10 text-center">
+                  <p className="text-sm font-medium" style={{ color: '#607860' }}>
+                    No prompts matched your current filters.
+                  </p>
+                  <p className="text-xs mt-1" style={{ color: '#9AAE9C' }}>
+                    Try a different search, or clear the global tag filter.
+                  </p>
+                </td>
+              </tr>
+            ) : (
+              rows.map((p, i) => {
                 const paused = p.isPaused
                 return (
                   <tr key={p.query}
                     style={{
-                      borderBottom: i < sorted.length - 1 ? '1px solid #F2EDE6' : 'none',
-                      background: paused ? '#FDFCF8' : 'transparent',
-                      opacity: paused ? 0.65 : 1,
+                      borderBottom: i < rows.length - 1 ? '1px solid #F2EDE6' : 'none',
+                      background: paused ? '#FDFCF8' : i % 2 === 0 ? '#FFFFFF' : '#FEFCF9',
+                      opacity: paused ? 0.7 : 1,
                       transition: 'opacity 0.15s, background 0.15s',
                     }}
-                    onMouseEnter={(e) => { if (!paused) (e.currentTarget as HTMLTableRowElement).style.background = '#F7F3EE' }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLTableRowElement).style.background = paused ? '#FDFCF8' : 'transparent' }}>
+                    onMouseEnter={(e) => {
+                      if (!paused) {
+                        (e.currentTarget as HTMLTableRowElement).style.background = '#F7F3EE'
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLTableRowElement).style.background =
+                        paused ? '#FDFCF8' : i % 2 === 0 ? '#FFFFFF' : '#FEFCF9'
+                    }}>
                     <td className="px-4 py-3 text-sm font-medium">
                       <Link to={`/prompts/drilldown?query=${encodeURIComponent(p.query)}`}
-                        className="inline-flex items-center gap-1.5"
+                        className="inline-flex max-w-[320px] items-center gap-1.5"
                         style={{ color: paused ? '#9AAE9C' : '#2A3A2C' }}>
-                        <span>{p.query}</span>
+                        <span className="block truncate whitespace-nowrap">{p.query}</span>
                         <span className="text-xs" style={{ color: paused ? '#C8D0C8' : '#8FBB93' }} aria-hidden>↗</span>
                       </Link>
+                    </td>
+                    <td className="px-4 py-3">
+                      <PromptTagChips tags={p.tags} muted={paused} />
                     </td>
                     <td className="px-4 py-3"><PStatusBadge status={p.status} isPaused={paused} /></td>
                     <td className="px-4 py-3">
                       {p.status === 'tracked'
                         ? <PMiniBar pct={p.highchartsRatePct} muted={paused} hoverLabel="Mention rate" />
                         : <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>}
+                    </td>
+                    <td
+                      className="px-4 py-3 text-right text-sm font-semibold tabular-nums"
+                      style={{
+                        color:
+                          p.status === 'tracked' && p.highchartsRank !== null
+                            ? p.highchartsRank === 1
+                              ? '#2A5C2E'
+                              : paused
+                                ? '#9AAE9C'
+                                : '#2A3A2C'
+                            : '#E5DDD0',
+                      }}
+                    >
+                      {p.status === 'tracked' && p.highchartsRank !== null
+                        ? `${p.highchartsRank}/${p.highchartsRankOutOf}`
+                        : '–'}
                     </td>
                     <td className="px-4 py-3 text-right text-sm font-medium tabular-nums"
                       style={{ color: p.runs > 0 && !paused ? '#2A3A2C' : '#E5DDD0' }}>
@@ -1310,9 +2023,11 @@ function PromptStatusTable({ data, isLoading }: { data: PromptStatus[]; isLoadin
                     </td>
                   </tr>
                 )
-              })}
-        </tbody>
-      </table>
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
@@ -1320,6 +2035,14 @@ function PromptStatusTable({ data, isLoading }: { data: PromptStatus[]; isLoadin
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
+  const setHeaderExtra = useHeaderExtra()
+  const [tagFilterMode, setTagFilterMode] = useState<TagFilterMode>('any')
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [hidden, setHidden] = useState<Set<string>>(new Set<string>())
+
+  const normalizedSelectedTags = useMemo(() => normalizeTagList(selectedTags), [selectedTags])
+  const selectedTagSet = useMemo(() => new Set(normalizedSelectedTags), [normalizedSelectedTags])
+
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['dashboard'],
     queryFn: api.dashboard,
@@ -1327,38 +2050,110 @@ export default function Dashboard() {
   })
 
   const { data: tsData } = useQuery({
-    queryKey: ['timeseries'],
-    queryFn: api.timeseries,
+    queryKey: ['timeseries', normalizedSelectedTags.join(','), tagFilterMode],
+    queryFn: () => api.timeseries({ tags: normalizedSelectedTags, mode: tagFilterMode }),
     retry: false,
     staleTime: 30_000,
     refetchInterval: 60_000,
   })
 
   const s = data?.summary
-  const promptStatus = data?.promptStatus ?? []
-  const competitorSeries = data?.competitorSeries ?? []
+
+  useEffect(() => {
+    if (!data) return
+    const runLabel = data.summary.runMonth
+      ? new Date(data.summary.runMonth + '-01').toLocaleString('default', { month: 'long', year: 'numeric' })
+      : null
+    const models = data.summary.models.join(', ') || null
+    const webSearch = data.summary.webSearchEnabled
+      ? (data.summary.webSearchEnabled === 'yes' ? 'ON' : 'OFF')
+      : null
+    const pills = [
+      runLabel,
+      models ? `Model: "${models}"` : null,
+      webSearch ? `Web search: ${webSearch}` : null,
+    ].filter(Boolean) as string[]
+    setHeaderExtra(
+      <div className="flex items-center gap-2 ml-auto">
+        {pills.map((val) => (
+          <span
+            key={val}
+            className="text-[11px] font-medium px-2.5 py-1 rounded-md"
+            style={{ background: '#F0EBE3', color: '#7A8E7C', border: '1px solid #DDD0BC' }}
+          >
+            {val}
+          </span>
+        ))}
+      </div>
+    )
+    return () => setHeaderExtra(null)
+  }, [data, setHeaderExtra])
+
+  const promptStatusAll = data?.promptStatus ?? []
+  const competitorSeriesAll = data?.competitorSeries ?? []
+
+  const tagSummary = useMemo(() => buildTagSummary(promptStatusAll), [promptStatusAll])
+
+  const promptStatus = useMemo(() => {
+    if (selectedTagSet.size === 0) return promptStatusAll
+    return promptStatusAll.filter((prompt) =>
+      promptMatchesTagFilter(prompt.tags, selectedTagSet, tagFilterMode),
+    )
+  }, [promptStatusAll, selectedTagSet, tagFilterMode])
+
+  const competitorSeries = useMemo(() => {
+    if (selectedTagSet.size === 0) return competitorSeriesAll
+    return buildFilteredCompetitorSeries(promptStatus, competitorSeriesAll)
+  }, [selectedTagSet, promptStatus, competitorSeriesAll])
 
   const tracked = promptStatus.filter((p) => p.status === 'tracked')
-  const wins = tracked.filter(
-    (p) => !p.topCompetitor || p.highchartsRatePct >= p.topCompetitor.ratePct,
-  )
-  const winRate = tracked.length > 0 ? Math.round((wins.length / tracked.length) * 100) : 0
-  const coverage =
-    promptStatus.length > 0 ? Math.round((tracked.length / promptStatus.length) * 100) : 0
 
   const hcEntry = competitorSeries.find((s) => s.isHighcharts)
   const hcRate = hcEntry?.mentionRatePct ?? 0
   const hcSov = hcEntry?.shareOfVoicePct ?? 0
+  const derivedOverallScore = 0.7 * hcRate + 0.3 * hcSov
+  const overallScore = normalizedSelectedTags.length > 0
+    ? derivedOverallScore
+    : (s?.overallScore ?? derivedOverallScore)
   const avgPromptHighcharts =
     tracked.length > 0
       ? tracked.reduce((sum, p) => sum + p.highchartsRatePct, 0) / tracked.length
       : 0
 
-  const [hidden, setHidden] = useState<Set<string>>(new Set<string>())
   const visible = useMemo(
     () => new Set(competitorSeries.map((s) => s.entity).filter((n) => !hidden.has(n))),
     [hidden, competitorSeries],
   )
+  const highchartsEntity = competitorSeries.find((series) => series.isHighcharts)?.entity ?? null
+  const nonHighchartsEntities = useMemo(
+    () => competitorSeries.filter((series) => !series.isHighcharts).map((series) => series.entity),
+    [competitorSeries],
+  )
+  const isHighchartsOnly = useMemo(() => {
+    if (!highchartsEntity) return false
+    return (
+      visible.has(highchartsEntity) &&
+      nonHighchartsEntities.every((entity) => !visible.has(entity))
+    )
+  }, [highchartsEntity, nonHighchartsEntities, visible])
+  const hasHidden = useMemo(
+    () => competitorSeries.some((series) => hidden.has(series.entity)),
+    [hidden, competitorSeries],
+  )
+
+  function toggleTag(tag: string) {
+    const normalized = tag.trim().toLowerCase()
+    setSelectedTags((prev) => {
+      const next = new Set(normalizeTagList(prev))
+      if (next.has(normalized)) next.delete(normalized)
+      else next.add(normalized)
+      return [...next].sort()
+    })
+  }
+
+  function clearTagFilter() {
+    setSelectedTags([])
+  }
 
   function toggleCompetitor(name: string) {
     setHidden((prev) => {
@@ -1370,6 +2165,14 @@ export default function Dashboard() {
       }
       return next
     })
+  }
+
+  function showHighchartsOnly() {
+    setHidden(new Set(nonHighchartsEntities))
+  }
+
+  function showAllCompetitors() {
+    setHidden(new Set())
   }
 
   const timeseriesPoints = useMemo((): TimeSeriesPoint[] => {
@@ -1393,15 +2196,25 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="space-y-4 max-w-[1100px]">
-      {/* Run meta card */}
-      {!isLoading && s && <RunMetaCard summary={s} />}
-      {isLoading && <Skeleton className="h-11 rounded-xl" />}
+    <div className="space-y-4 max-w-[1360px]">
+      {/* Global tag filter */}
+      <DashboardTagFilterBar
+        tags={tagSummary}
+        selectedTags={normalizedSelectedTags}
+        mode={tagFilterMode}
+        onToggleTag={toggleTag}
+        onModeChange={setTagFilterMode}
+        onClear={clearTagFilter}
+        totalCount={promptStatusAll.length}
+        matchedCount={promptStatus.length}
+        trackedCount={tracked.length}
+        isLoading={isLoading}
+      />
 
       {/* KPI row: score (2) + trend chart (2) + sov (1) + prompt avg (1) */}
       <div className="grid grid-cols-6 gap-4">
         <div className="col-span-2">
-          <ScoreStatCard score={s?.overallScore ?? 0} isLoading={isLoading} />
+          <ScoreStatCard score={overallScore} isLoading={isLoading} />
         </div>
         <div className="col-span-2">
           <SnapshotTrendCard
@@ -1410,20 +2223,8 @@ export default function Dashboard() {
             isLoading={isLoading}
           />
         </div>
-        <StatCard
-          label="Share of Voice"
-          value={isLoading ? '–' : `${hcSov.toFixed(1)}%`}
-          sub="of all brand mentions"
-          isLoading={isLoading}
-          accent={hcSov >= 30 ? '#22c55e' : undefined}
-        />
-        <StatCard
-          label="Prompt HC Average"
-          value={isLoading ? '–' : `${avgPromptHighcharts.toFixed(1)}%`}
-          sub="avg across tracked prompts"
-          isLoading={isLoading}
-          accent={avgPromptHighcharts >= 40 ? '#22c55e' : undefined}
-        />
+        <SovCard sov={hcSov} isLoading={isLoading} />
+        <PromptHcAvgCard />
       </div>
 
       {/* Main section — visibility chart + ranking */}
@@ -1432,7 +2233,11 @@ export default function Dashboard() {
         <Card
           className="col-span-7"
           title="LLM Mention Rate Over Time"
-          sub="% of responses that mention each brand across runs"
+          sub={
+            normalizedSelectedTags.length > 0
+              ? `% of responses mentioning each brand for selected tags (${tagFilterMode})`
+              : '% of responses that mention each brand across runs'
+          }
           action={
             !isLoading && (
               <div className="flex items-baseline gap-2">
@@ -1460,6 +2265,10 @@ export default function Dashboard() {
                   competitorSeries={competitorSeries}
                   visible={visible}
                   onToggle={toggleCompetitor}
+                  onHighchartsOnly={showHighchartsOnly}
+                  onShowAll={showAllCompetitors}
+                  isHighchartsOnly={isHighchartsOnly}
+                  hasHidden={hasHidden}
                 />
               )}
             </>
@@ -1489,10 +2298,18 @@ export default function Dashboard() {
         <div className="flex items-center justify-between mb-2">
           <div>
             <div className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>Prompt Performance</div>
-            <div className="text-xs mt-0.5" style={{ color: '#9AAE9C' }}>Mention &amp; viability rates per query — click to drilldown</div>
+            <div className="text-xs mt-0.5" style={{ color: '#9AAE9C' }}>
+              Mention &amp; viability rates per query — scoped by prompt-tag filter
+            </div>
           </div>
         </div>
-        <PromptStatusTable data={promptStatus} isLoading={isLoading} />
+        <PromptStatusTable
+          data={promptStatus}
+          isLoading={isLoading}
+          activeTags={normalizedSelectedTags}
+          matchMode={tagFilterMode}
+          onClearTagFilter={clearTagFilter}
+        />
       </div>
 
       {/* Data file status */}

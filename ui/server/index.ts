@@ -10,6 +10,7 @@ type CsvRow = Record<string, string>;
 
 type BenchmarkConfig = {
   queries: string[];
+  queryTags: Record<string, string[]>;
   competitors: string[];
   aliases: Record<string, string[]>;
   pausedQueries: string[];
@@ -29,6 +30,7 @@ const dashboardFiles = {
 
 const configSchema = z.object({
   queries: z.array(z.string().min(1)).min(1),
+  queryTags: z.record(z.string(), z.array(z.string().min(1))).optional().default({}),
   competitors: z.array(z.string().min(1)).min(1),
   aliases: z.record(z.string(), z.array(z.string().min(1))).default({}),
   pausedQueries: z.array(z.string()).optional().default([]),
@@ -148,6 +150,97 @@ function uniqueNonEmpty(values: string[]): string[] {
   return [...new Set(normalized)];
 }
 
+function inferPromptTags(query: string): string[] {
+  const normalized = query.toLowerCase();
+  const tags: string[] = [];
+
+  if (normalized.includes("react")) {
+    tags.push("react");
+  }
+  if (normalized.includes("javascript") || /\bjs\b/.test(normalized)) {
+    tags.push("javascript");
+  }
+  if (tags.length === 0) {
+    tags.push("general");
+  }
+
+  return tags;
+}
+
+function normalizePromptTags(rawTags: unknown, query: string): string[] {
+  const candidates =
+    typeof rawTags === "string"
+      ? rawTags.split(",")
+      : Array.isArray(rawTags)
+        ? rawTags.map((value) => String(value))
+        : [];
+
+  const normalized = uniqueNonEmpty(
+    candidates.map((value) => {
+      const normalizedTag = value.trim().toLowerCase();
+      return normalizedTag === "generic" ? "general" : normalizedTag;
+    }),
+  );
+  return normalized.length > 0 ? normalized : inferPromptTags(query);
+}
+
+function normalizeQueryTagsMap(
+  queries: string[],
+  rawQueryTags: Record<string, string[]> | undefined,
+): Record<string, string[]> {
+  const lookup = new Map<string, unknown>();
+  for (const [query, tags] of Object.entries(rawQueryTags ?? {})) {
+    lookup.set(query.trim().toLowerCase(), tags);
+  }
+
+  return Object.fromEntries(
+    queries.map((query) => [
+      query,
+      normalizePromptTags(lookup.get(query.trim().toLowerCase()), query),
+    ]),
+  );
+}
+
+function normalizeSelectedTags(rawTags: unknown): string[] {
+  if (typeof rawTags !== "string") {
+    return [];
+  }
+  return uniqueNonEmpty(
+    rawTags
+      .split(",")
+      .map((tag) => tag.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+function promptMatchesTagFilter(
+  promptTags: string[],
+  selectedTagSet: Set<string>,
+  mode: "any" | "all",
+): boolean {
+  if (selectedTagSet.size === 0) {
+    return true;
+  }
+
+  const promptTagSet = new Set(promptTags.map((tag) => tag.toLowerCase()));
+  if (mode === "all") {
+    for (const tag of selectedTagSet) {
+      if (!promptTagSet.has(tag)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  for (const tag of selectedTagSet) {
+    if (promptTagSet.has(tag)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function slugifyEntity(label: string): string {
   return label
     .toLowerCase()
@@ -171,8 +264,46 @@ function splitCsvish(value: string): string[] {
     .filter(Boolean);
 }
 
+function inferPromptResponseCount(row: CsvRow | undefined, competitors: string[]): number | null {
+  if (!row) {
+    return null;
+  }
+
+  const estimates: number[] = [];
+
+  for (const competitor of competitors) {
+    const key = slugifyEntity(competitor);
+    const count = asNumber(row[`${key}_count`]);
+    const rate = asNumber(row[`${key}_rate`]);
+    if (count > 0 && rate > 0) {
+      const estimate = count / rate;
+      if (Number.isFinite(estimate) && estimate > 0) {
+        estimates.push(estimate);
+      }
+    }
+  }
+
+  const rivals = competitors.filter((name) => name.toLowerCase() !== "highcharts");
+  const viabilityCount = asNumber(row.viability_index_count);
+  const viabilityRate = asNumber(row.viability_index_rate);
+  if (rivals.length > 0 && viabilityCount > 0 && viabilityRate > 0) {
+    const estimate = viabilityCount / viabilityRate / rivals.length;
+    if (Number.isFinite(estimate) && estimate > 0) {
+      estimates.push(estimate);
+    }
+  }
+
+  if (estimates.length === 0) {
+    return null;
+  }
+
+  const average = estimates.reduce((sum, value) => sum + value, 0) / estimates.length;
+  return Math.max(0, Math.round(average));
+}
+
 function normalizeConfig(rawConfig: BenchmarkConfig): BenchmarkConfig {
   const queries = uniqueNonEmpty(rawConfig.queries);
+  const queryTags = normalizeQueryTagsMap(queries, rawConfig.queryTags);
   const competitors = uniqueNonEmpty(rawConfig.competitors);
   if (!competitors.some((name) => name.toLowerCase() === "highcharts")) {
     throw new Error('`competitors` must include "Highcharts".');
@@ -189,6 +320,7 @@ function normalizeConfig(rawConfig: BenchmarkConfig): BenchmarkConfig {
 
   return {
     queries,
+    queryTags,
     competitors,
     aliases,
     pausedQueries: uniqueNonEmpty(rawConfig.pausedQueries ?? []),
@@ -381,29 +513,62 @@ app.get("/api/dashboard", async (_req, res) => {
           }));
 
     const promptLookup = new Map(queryRows.map((row) => [row.query, row]));
+    const queryTags = normalizeQueryTagsMap(config.queries, config.queryTags);
 
     const pausedSet = new Set(config.pausedQueries ?? []);
     const promptStatus = config.queries.map((query) => {
       const row = promptLookup.get(query);
-      const highchartsRatePct = Number((asNumber(row?.highcharts_rate) * 100).toFixed(2));
-      const competitorRates = config.competitors
-        .filter((name) => name.toLowerCase() !== "highcharts")
-        .map((name) => ({
+      const latestRunResponseCount = inferPromptResponseCount(row, config.competitors);
+
+      const competitorRatesAll = config.competitors.map((name) => {
+        const entityKey = slugifyEntity(name);
+        return {
           entity: name,
-          ratePct: Number((asNumber(row?.[`${slugifyEntity(name)}_rate`]) * 100).toFixed(2)),
-        }));
+          entityKey,
+          isHighcharts: name.toLowerCase() === "highcharts",
+          mentions: asNumber(row?.[`${entityKey}_count`]),
+          ratePct: Number((asNumber(row?.[`${entityKey}_rate`]) * 100).toFixed(2)),
+        };
+      });
+
+      const highchartsRatePct =
+        competitorRatesAll.find((entry) => entry.isHighcharts)?.ratePct ?? 0;
+      const competitorRates = competitorRatesAll.filter((entry) => !entry.isHighcharts);
+      const highchartsRank = row
+        ? competitorRatesAll
+            .slice()
+            .sort((a, b) => {
+              if (b.ratePct !== a.ratePct) {
+                return b.ratePct - a.ratePct;
+              }
+              return a.entity.localeCompare(b.entity);
+            })
+            .findIndex((entry) => entry.isHighcharts) + 1
+        : null;
       const topCompetitor = competitorRates
+        .slice()
         .sort((a, b) => b.ratePct - a.ratePct)
         .at(0) ?? null;
 
       return {
         query,
+        tags: queryTags[query] ?? inferPromptTags(query),
         isPaused: pausedSet.has(query),
         status: row ? "tracked" : "awaiting_run",
         runs: asNumber(row?.runs),
         highchartsRatePct,
+        highchartsRank: highchartsRank && highchartsRank > 0 ? highchartsRank : null,
+        highchartsRankOutOf: config.competitors.length,
         viabilityRatePct: Number((asNumber(row?.viability_index_rate) * 100).toFixed(2)),
         topCompetitor,
+        latestRunResponseCount,
+        competitorRates: competitorRatesAll.map((entry) => ({
+          entity: entry.entity,
+          entityKey: entry.entityKey,
+          isHighcharts: entry.isHighcharts,
+          ratePct: entry.ratePct,
+          mentions: entry.mentions,
+        })),
       };
     });
 
@@ -440,12 +605,22 @@ app.get("/api/dashboard", async (_req, res) => {
   }
 });
 
-app.get("/api/timeseries", async (_req, res) => {
+app.get("/api/timeseries", async (req, res) => {
   try {
     const [config, jsonlRows] = await Promise.all([
       loadConfig(),
       readJsonl(dashboardFiles.jsonl),
     ]);
+
+    const selectedTags = normalizeSelectedTags(req.query.tags);
+    const selectedTagSet = new Set(selectedTags);
+    const tagFilterMode: "any" | "all" =
+      String(req.query.mode ?? "any").toLowerCase() === "all" ? "all" : "any";
+    const shouldFilterByTags = selectedTagSet.size > 0;
+    const queryTags = normalizeQueryTagsMap(config.queries, config.queryTags);
+    const tagsByQuery = new Map(
+      Object.entries(queryTags).map(([query, tags]) => [query.trim().toLowerCase(), tags]),
+    );
 
     if (jsonlRows.length === 0) {
       res.json({ ok: true, competitors: config.competitors, points: [] });
@@ -464,6 +639,20 @@ app.get("/api/timeseries", async (_req, res) => {
     const byDate = new Map<string, DayBucket>();
 
     for (const row of jsonlRows) {
+      if (shouldFilterByTags) {
+        const queryText = String(
+          row.query ?? row.query_text ?? row.prompt ?? row.prompt_text ?? "",
+        ).trim();
+        if (!queryText) {
+          continue;
+        }
+
+        const promptTags = tagsByQuery.get(queryText.toLowerCase()) ?? inferPromptTags(queryText);
+        if (!promptMatchesTagFilter(promptTags, selectedTagSet, tagFilterMode)) {
+          continue;
+        }
+      }
+
       const ts = String(row.timestamp ?? "");
       const date = ts.length >= 10 ? ts.slice(0, 10) : null;
       if (!date) continue;

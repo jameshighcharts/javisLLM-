@@ -50,6 +50,7 @@ In Vercel Project Settings -> Environment Variables, set:
 - `GITHUB_OWNER` (e.g. `jameshighcharts`)
 - `GITHUB_REPO` (e.g. `javisLLM-`)
 - `BENCHMARK_TRIGGER_TOKEN` (required; bearer token for `/api/benchmark/*`)
+- Optional for internal-only convenience: `VITE_BENCHMARK_TRIGGER_TOKEN` (auto-fills Runs page trigger token so users do not need to paste it)
 - Optional: `GITHUB_WORKFLOW_FILE` (default: `run-benchmark.yml`)
 - Optional: `GITHUB_WORKFLOW_REF` (default: `main`)
 - Optional hardening:
@@ -93,6 +94,7 @@ Workflow file used by `/runs` trigger:
 Edit `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark_config.json`:
 
 - `queries`: list of query strings.
+- `queryTags` (optional): per-query tags map (example tags: `javascript`, `react`, `general`).
 - `competitors`: list of entities to track (keep `Highcharts` included).
 - `aliases`: optional mention variants per competitor.
 

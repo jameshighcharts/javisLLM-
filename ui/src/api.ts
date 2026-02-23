@@ -20,6 +20,9 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const SUPABASE_ANON_KEY =
   (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ||
   (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined)
+const DEFAULT_TRIGGER_TOKEN = String(
+  (import.meta.env.VITE_BENCHMARK_TRIGGER_TOKEN as string | undefined) ?? '',
+).trim()
 
 const supabase =
   SUPABASE_URL && SUPABASE_ANON_KEY
@@ -36,6 +39,7 @@ type PromptQueryRow = {
   query_text: string
   sort_order: number
   is_active: boolean
+  tags?: string[] | null
   updated_at?: string | null
 }
 
@@ -85,6 +89,12 @@ type TimeSeriesRunRow = {
 type TimeSeriesResponseRow = {
   id: number
   run_id: string
+  query_id: string
+}
+
+type TimeSeriesOptions = {
+  tags?: string[]
+  mode?: 'any' | 'all'
 }
 
 type PromptDrilldownPromptRow = {
@@ -122,6 +132,83 @@ type PromptDrilldownRunRow = {
 function uniqueNonEmpty(values: string[]): string[] {
   const normalized = values.map((value) => value.trim()).filter(Boolean)
   return [...new Set(normalized)]
+}
+
+function inferPromptTags(query: string): string[] {
+  const normalized = query.toLowerCase()
+  const tags: string[] = []
+
+  if (normalized.includes('react')) {
+    tags.push('react')
+  }
+  if (normalized.includes('javascript') || /\bjs\b/.test(normalized)) {
+    tags.push('javascript')
+  }
+  if (tags.length === 0) {
+    tags.push('general')
+  }
+
+  return tags
+}
+
+function normalizePromptTags(rawTags: unknown, query: string): string[] {
+  const candidates =
+    typeof rawTags === 'string'
+      ? rawTags.split(',')
+      : Array.isArray(rawTags)
+        ? rawTags.map((value) => String(value))
+        : []
+
+  const normalized = uniqueNonEmpty(
+    candidates.map((value) => {
+      const normalizedTag = value.trim().toLowerCase()
+      return normalizedTag === 'generic' ? 'general' : normalizedTag
+    }),
+  )
+  return normalized.length > 0 ? normalized : inferPromptTags(query)
+}
+
+function normalizeQueryTagsMap(
+  queries: string[],
+  rawQueryTags: BenchmarkConfig['queryTags'],
+): Record<string, string[]> {
+  const lookup = new Map<string, unknown>()
+
+  for (const [query, tags] of Object.entries(rawQueryTags ?? {})) {
+    lookup.set(query.trim().toLowerCase(), tags)
+  }
+
+  return Object.fromEntries(
+    queries.map((query) => [
+      query,
+      normalizePromptTags(lookup.get(query.trim().toLowerCase()), query),
+    ]),
+  )
+}
+
+function normalizeSelectedTags(tags?: string[]): string[] {
+  return uniqueNonEmpty((tags ?? []).map((tag) => tag.toLowerCase()))
+}
+
+function promptMatchesTagFilter(
+  promptTags: string[],
+  selectedTagSet: Set<string>,
+  mode: 'any' | 'all',
+): boolean {
+  if (selectedTagSet.size === 0) return true
+
+  const promptTagSet = new Set(promptTags.map((tag) => tag.toLowerCase()))
+  if (mode === 'all') {
+    for (const tag of selectedTagSet) {
+      if (!promptTagSet.has(tag)) return false
+    }
+    return true
+  }
+
+  for (const tag of selectedTagSet) {
+    if (promptTagSet.has(tag)) return true
+  }
+  return false
 }
 
 function toValidTimestamp(value: string | null | undefined): string | null {
@@ -208,6 +295,23 @@ function isMissingRelation(error: unknown): boolean {
   return code === '42P01'
 }
 
+function isMissingColumn(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false
+  }
+  const code = (error as { code?: string }).code
+  if (code === '42703' || code === 'PGRST204') {
+    return true
+  }
+
+  const message = String((error as { message?: string }).message ?? '').toLowerCase()
+  return (
+    message.includes('could not find the') &&
+    message.includes('column') &&
+    message.includes('schema cache')
+  )
+}
+
 function asError(error: unknown, context: string): Error {
   if (error instanceof Error) {
     return error
@@ -253,6 +357,8 @@ async function runCheck(
 }
 
 function emptyDashboard(config: BenchmarkConfig): DashboardResponse {
+  const queryTags = normalizeQueryTagsMap(config.queries, config.queryTags)
+
   return {
     generatedAt: new Date().toISOString(),
     summary: {
@@ -276,12 +382,23 @@ function emptyDashboard(config: BenchmarkConfig): DashboardResponse {
     })),
     promptStatus: config.queries.map((query) => ({
       query,
+      tags: queryTags[query] ?? inferPromptTags(query),
       isPaused: false,
       status: 'awaiting_run',
       runs: 0,
       highchartsRatePct: 0,
+      highchartsRank: null,
+      highchartsRankOutOf: config.competitors.length,
       viabilityRatePct: 0,
       topCompetitor: null,
+      latestRunResponseCount: 0,
+      competitorRates: config.competitors.map((name) => ({
+        entity: name,
+        entityKey: slugifyEntity(name),
+        isHighcharts: name.toLowerCase() === 'highcharts',
+        ratePct: 0,
+        mentions: 0,
+      })),
     })),
     comparisonRows: [],
     files: {
@@ -312,7 +429,7 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
 function withOptionalTriggerToken(
   triggerToken?: string,
 ): Record<string, string> | undefined {
-  const trimmed = triggerToken?.trim()
+  const trimmed = triggerToken?.trim() || DEFAULT_TRIGGER_TOKEN
   if (!trimmed) {
     return undefined
   }
@@ -327,10 +444,10 @@ async function fetchSupabaseConfigRows(): Promise<{
     throw new Error('Supabase is not configured.')
   }
 
-  const [promptResult, competitorResult] = await Promise.all([
+  const [promptResultWithTags, competitorResult] = await Promise.all([
     supabase
       .from('prompt_queries')
-      .select('id,query_text,sort_order,is_active,updated_at')
+      .select('id,query_text,sort_order,is_active,tags,updated_at')
       .eq('is_active', true)
       .order('sort_order', { ascending: true }),
     supabase
@@ -340,15 +457,32 @@ async function fetchSupabaseConfigRows(): Promise<{
       .order('sort_order', { ascending: true }),
   ])
 
-  if (promptResult.error) {
-    throw asError(promptResult.error, 'Failed to read prompt_queries from Supabase')
+  let promptRows = (promptResultWithTags.data ?? []) as PromptQueryRow[]
+  let promptError = promptResultWithTags.error
+
+  // Backward compatibility while Supabase migration for tags rolls out.
+  if (promptError && isMissingColumn(promptError)) {
+    const promptResultFallback = await supabase
+      .from('prompt_queries')
+      .select('id,query_text,sort_order,is_active,updated_at')
+      .eq('is_active', true)
+      .order('sort_order', { ascending: true })
+    promptRows = ((promptResultFallback.data ?? []) as PromptQueryRow[]).map((row) => ({
+      ...row,
+      tags: null,
+    }))
+    promptError = promptResultFallback.error
+  }
+
+  if (promptError) {
+    throw asError(promptError, 'Failed to read prompt_queries from Supabase')
   }
   if (competitorResult.error) {
     throw asError(competitorResult.error, 'Failed to read competitors from Supabase')
   }
 
   return {
-    promptRows: (promptResult.data ?? []) as PromptQueryRow[],
+    promptRows,
     competitorRows: (competitorResult.data ?? []) as CompetitorRow[],
   }
 }
@@ -357,6 +491,9 @@ async function fetchConfigFromSupabase(): Promise<ConfigResponse> {
   const { promptRows, competitorRows } = await fetchSupabaseConfigRows()
 
   const queries = promptRows.map((row) => row.query_text)
+  const queryTags = Object.fromEntries(
+    promptRows.map((row) => [row.query_text, normalizePromptTags(row.tags, row.query_text)]),
+  )
   const competitors = competitorRows.map((row) => row.name)
 
   const aliases: Record<string, string[]> = {}
@@ -376,6 +513,7 @@ async function fetchConfigFromSupabase(): Promise<ConfigResponse> {
   return {
     config: {
       queries,
+      queryTags,
       competitors,
       aliases,
     },
@@ -414,15 +552,25 @@ async function updateConfigInSupabase(config: BenchmarkConfig): Promise<ConfigRe
     ])
   }
 
+  const queryTags = normalizeQueryTagsMap(queries, config.queryTags)
+
   const promptPayload = queries.map((queryText, index) => ({
     query_text: queryText,
     sort_order: index + 1,
     is_active: true,
+    tags: queryTags[queryText] ?? inferPromptTags(queryText),
   }))
 
-  const promptUpsert = await supabase
+  let promptUpsert = await supabase
     .from('prompt_queries')
     .upsert(promptPayload, { onConflict: 'query_text' })
+  // Backward compatibility while Supabase migration for tags rolls out.
+  if (promptUpsert.error && isMissingColumn(promptUpsert.error)) {
+    const promptPayloadWithoutTags = promptPayload.map(({ tags: _tags, ...rest }) => rest)
+    promptUpsert = await supabase
+      .from('prompt_queries')
+      .upsert(promptPayloadWithoutTags, { onConflict: 'query_text' })
+  }
   if (promptUpsert.error) {
     throw asError(
       promptUpsert.error,
@@ -578,13 +726,29 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
   const config = configResponse.config
 
   // Fetch ALL queries (active and paused) so we can show isPaused state in the grid
-  const activeQueryRows = await supabase
+  const activeQueryResultWithTags = await supabase
     .from('prompt_queries')
-    .select('id,query_text,sort_order,is_active')
+    .select('id,query_text,sort_order,is_active,tags')
     .order('sort_order', { ascending: true })
 
-  if (activeQueryRows.error) {
-    throw asError(activeQueryRows.error, 'Failed to load query metadata from Supabase')
+  let activeQueryError = activeQueryResultWithTags.error
+  let activeQueryRows = (activeQueryResultWithTags.data ?? []) as PromptQueryRow[]
+
+  // Backward compatibility while Supabase migration for tags rolls out.
+  if (activeQueryError && isMissingColumn(activeQueryError)) {
+    const fallbackRows = await supabase
+      .from('prompt_queries')
+      .select('id,query_text,sort_order,is_active')
+      .order('sort_order', { ascending: true })
+    activeQueryError = fallbackRows.error
+    activeQueryRows = ((fallbackRows.data ?? []) as PromptQueryRow[]).map((row) => ({
+      ...row,
+      tags: null,
+    }))
+  }
+
+  if (activeQueryError) {
+    throw asError(activeQueryError, 'Failed to load query metadata from Supabase')
   }
 
   const activeCompetitorRows = await supabase
@@ -597,11 +761,12 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
     throw asError(activeCompetitorRows.error, 'Failed to load competitor metadata from Supabase')
   }
 
-  const queryRows = (activeQueryRows.data ?? []) as Array<{
+  const queryRows = activeQueryRows as Array<{
     id: string
     query_text: string
     sort_order: number
     is_active: boolean
+    tags?: string[] | null
   }>
   const competitorRows = (activeCompetitorRows.data ?? []) as Array<{
     id: string
@@ -744,28 +909,44 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
     const latestRunResponseCount = queryResponses.length
     const runs = historicalRunsByQuery.get(queryRow.id)?.size ?? 0
 
-    const highchartsMentions = highchartsCompetitor
-      ? queryResponses.reduce((count, response) => {
-          const mentionMap = mentionsByResponse.get(response.id)
-          return count + (mentionMap?.get(highchartsCompetitor.id) ? 1 : 0)
-        }, 0)
-      : 0
-
-    const highchartsRatePct =
-      latestRunResponseCount > 0 ? (highchartsMentions / latestRunResponseCount) * 100 : 0
-
-    const competitorRates = nonHighchartsCompetitors.map((competitor) => {
+    const competitorRatesAll = competitorRows.map((competitor) => {
       const mentions = queryResponses.reduce((count, response) => {
         const mentionMap = mentionsByResponse.get(response.id)
         return count + (mentionMap?.get(competitor.id) ? 1 : 0)
       }, 0)
       const ratePct = latestRunResponseCount > 0 ? (mentions / latestRunResponseCount) * 100 : 0
+      const isHighcharts = highchartsCompetitor
+        ? competitor.id === highchartsCompetitor.id
+        : competitor.slug === 'highcharts'
       return {
         entity: competitor.name,
+        entityKey: competitor.slug,
+        isHighcharts,
         ratePct,
         mentions,
       }
     })
+
+    const highchartsRateEntry =
+      competitorRatesAll.find((entry) => entry.isHighcharts) ?? null
+    const highchartsRatePct = highchartsRateEntry?.ratePct ?? 0
+    const competitorRates = competitorRatesAll.filter((entry) => !entry.isHighcharts)
+
+    const highchartsRank =
+      latestRunResponseCount > 0 && highchartsRateEntry
+        ? (() => {
+            const sortedRates = competitorRatesAll
+              .slice()
+              .sort((left, right) => {
+                if (right.ratePct !== left.ratePct) {
+                  return right.ratePct - left.ratePct
+                }
+                return left.entity.localeCompare(right.entity)
+              })
+            const index = sortedRates.findIndex((entry) => entry.isHighcharts)
+            return index >= 0 ? index + 1 : null
+          })()
+        : null
 
     const viabilityCount = competitorRates.reduce((sum, entry) => sum + entry.mentions, 0)
     const viabilityDenominator = latestRunResponseCount * nonHighchartsCompetitors.length
@@ -774,18 +955,30 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
 
     const topCompetitor =
       competitorRates
+        .slice()
         .sort((left, right) => right.ratePct - left.ratePct)
         .map((entry) => ({ entity: entry.entity, ratePct: Number(entry.ratePct.toFixed(2)) }))
         .at(0) ?? null
 
     return {
       query: queryRow.query_text,
+      tags: normalizePromptTags(queryRow.tags, queryRow.query_text),
       isPaused: !queryRow.is_active,
       status: (runs > 0 ? 'tracked' : 'awaiting_run') as 'tracked' | 'awaiting_run',
       runs,
       highchartsRatePct: Number(highchartsRatePct.toFixed(2)),
+      highchartsRank,
+      highchartsRankOutOf: competitorRows.length,
       viabilityRatePct: Number(viabilityRatePct.toFixed(2)),
       topCompetitor,
+      latestRunResponseCount,
+      competitorRates: competitorRatesAll.map((entry) => ({
+        entity: entry.entity,
+        entityKey: entry.entityKey,
+        isHighcharts: entry.isHighcharts,
+        ratePct: Number(entry.ratePct.toFixed(2)),
+        mentions: entry.mentions,
+      })),
     }
   })
 
@@ -831,10 +1024,16 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
   }
 }
 
-async function fetchTimeseriesFromSupabase(): Promise<TimeSeriesResponse> {
+async function fetchTimeseriesFromSupabase(
+  options: TimeSeriesOptions = {},
+): Promise<TimeSeriesResponse> {
   if (!supabase) {
     throw new Error('Supabase is not configured.')
   }
+
+  const selectedTags = normalizeSelectedTags(options.tags)
+  const tagFilterMode: 'any' | 'all' = options.mode === 'all' ? 'all' : 'any'
+  const selectedTagSet = new Set(selectedTags)
 
   const competitorResult = await supabase
     .from('competitors')
@@ -857,6 +1056,37 @@ async function fetchTimeseriesFromSupabase(): Promise<TimeSeriesResponse> {
   if (competitorRows.length === 0) {
     return { ok: true, competitors: [], points: [] }
   }
+
+  const promptResultWithTags = await supabase
+    .from('prompt_queries')
+    .select('id,query_text,tags')
+
+  let promptQueryError = promptResultWithTags.error
+  let promptQueryRows = (promptResultWithTags.data ?? []) as Array<{
+    id: string
+    query_text: string
+    tags?: string[] | null
+  }>
+
+  if (promptQueryError && isMissingColumn(promptQueryError)) {
+    const fallbackRows = await supabase
+      .from('prompt_queries')
+      .select('id,query_text')
+    promptQueryError = fallbackRows.error
+    promptQueryRows = ((fallbackRows.data ?? []) as Array<{ id: string; query_text: string }>).map(
+      (row) => ({ ...row, tags: null }),
+    )
+  }
+
+  if (promptQueryError && !isMissingRelation(promptQueryError)) {
+    throw asError(promptQueryError, 'Failed to load prompt metadata for time series tags')
+  }
+
+  const tagsByPromptId = new Map<string, string[]>()
+  for (const row of promptQueryRows) {
+    tagsByPromptId.set(row.id, normalizePromptTags(row.tags, row.query_text))
+  }
+  const shouldFilterByTags = selectedTagSet.size > 0 && tagsByPromptId.size > 0
 
   const runResult = await supabase
     .from('benchmark_runs')
@@ -884,7 +1114,7 @@ async function fetchTimeseriesFromSupabase(): Promise<TimeSeriesResponse> {
     const runIdChunk = runIds.slice(index, index + runChunkSize)
     const responseResult = await supabase
       .from('benchmark_responses')
-      .select('id,run_id')
+      .select('id,run_id,query_id')
       .in('run_id', runIdChunk)
 
     if (responseResult.error) {
@@ -894,7 +1124,15 @@ async function fetchTimeseriesFromSupabase(): Promise<TimeSeriesResponse> {
       throw asError(responseResult.error, 'Failed to load benchmark_responses for time series')
     }
 
-    responseRows.push(...((responseResult.data ?? []) as TimeSeriesResponseRow[]))
+    for (const response of (responseResult.data ?? []) as TimeSeriesResponseRow[]) {
+      if (shouldFilterByTags) {
+        const promptTags = tagsByPromptId.get(response.query_id)
+        if (!promptTags || !promptMatchesTagFilter(promptTags, selectedTagSet, tagFilterMode)) {
+          continue
+        }
+      }
+      responseRows.push(response)
+    }
   }
 
   if (responseRows.length === 0) {
@@ -1808,13 +2046,21 @@ export const api = {
     })
   },
 
-  async timeseries(): Promise<TimeSeriesResponse> {
+  async timeseries(options: TimeSeriesOptions = {}): Promise<TimeSeriesResponse> {
+    const normalizedTags = normalizeSelectedTags(options.tags)
+    const params = new URLSearchParams()
+    if (normalizedTags.length > 0) {
+      params.set('tags', normalizedTags.join(','))
+      params.set('mode', options.mode === 'all' ? 'all' : 'any')
+    }
+    const suffix = params.size > 0 ? `?${params.toString()}` : ''
+
     if (hasSupabaseConfig()) {
       try {
-        return await fetchTimeseriesFromSupabase()
+        return await fetchTimeseriesFromSupabase(options)
       } catch {
         try {
-          return await json<TimeSeriesResponse>('/timeseries')
+          return await json<TimeSeriesResponse>(`/timeseries${suffix}`)
         } catch {
           return { ok: false, competitors: [], points: [] }
         }
@@ -1822,7 +2068,7 @@ export const api = {
     }
 
     try {
-      return await json<TimeSeriesResponse>('/timeseries')
+      return await json<TimeSeriesResponse>(`/timeseries${suffix}`)
     } catch {
       return { ok: false, competitors: [], points: [] }
     }

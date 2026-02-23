@@ -7,6 +7,7 @@ create table if not exists public.prompt_queries (
   query_text text not null unique,
   sort_order int not null default 0,
   is_active boolean not null default true,
+  tags text[] not null default '{}'::text[],
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

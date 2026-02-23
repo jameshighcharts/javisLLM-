@@ -61,8 +61,80 @@ function StatusBadge({ isPaused, tracked }: { isPaused: boolean; tracked: boolea
   )
 }
 
+function PromptTagChips({ tags, muted }: { tags: string[]; muted?: boolean }) {
+  if (tags.length === 0) {
+    return <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>
+  }
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {tags.slice(0, 3).map((tag) => (
+        <span
+          key={tag}
+          className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium"
+          style={{
+            background: '#F2EDE6',
+            color: muted ? '#9AAE9C' : '#3D5840',
+            border: '1px solid #DDD0BC',
+          }}
+        >
+          {tag}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function truncate(value: string, limit = 86) {
   return value.length > limit ? `${value.slice(0, limit)}...` : value
+}
+
+function HeaderLabel({
+  label,
+  info,
+  align = 'left',
+}: {
+  label: string
+  info?: string
+  align?: 'left' | 'right'
+}) {
+  if (!info) return <>{label}</>
+  return (
+    <span className="inline-flex items-center gap-1">
+      {label}
+      <span className="relative inline-flex items-center group" style={{ verticalAlign: 'middle' }}>
+        <button
+          type="button"
+          className="inline-flex items-center justify-center rounded-full text-[9px] font-bold leading-none"
+          style={{
+            width: 14,
+            height: 14,
+            background: '#DDD0BC',
+            color: '#7A8E7C',
+            cursor: 'default',
+            border: 'none',
+            flexShrink: 0,
+          }}
+          aria-label={`${label} info`}
+        >
+          i
+        </button>
+        <div
+          className="pointer-events-none absolute z-50 rounded-lg shadow-xl border text-xs leading-relaxed p-3 opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-150"
+          style={{
+            top: 'calc(100% + 6px)',
+            width: 230,
+            background: '#FFFFFF',
+            borderColor: '#DDD0BC',
+            color: '#2A3A2C',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+            ...(align === 'right' ? { right: 0 } : { left: 0 }),
+          }}
+        >
+          {info}
+        </div>
+      </span>
+    </span>
+  )
 }
 
 export default function PromptDrilldownHub() {
@@ -107,6 +179,7 @@ export default function PromptDrilldownHub() {
     return rows.filter((prompt) => {
       const haystack = [
         prompt.query,
+        prompt.tags.join(' '),
         prompt.status,
         prompt.topCompetitor?.entity ?? '',
       ]
@@ -128,7 +201,7 @@ export default function PromptDrilldownHub() {
   }
 
   return (
-    <div className="max-w-[1200px] space-y-4">
+    <div className="max-w-[1360px] space-y-4">
       <div>
         <h2 className="text-2xl font-bold tracking-tight" style={{ color: '#2A3A2C' }}>
           Prompt Drilldown
@@ -151,7 +224,7 @@ export default function PromptDrilldownHub() {
       </div>
 
       <div
-        className="rounded-xl border shadow-sm overflow-hidden"
+        className="rounded-xl border shadow-sm overflow-hidden min-h-[360px]"
         style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
       >
         <div className="px-4 py-3.5 flex items-center justify-between gap-3 flex-wrap" style={{ borderBottom: '1px solid #F2EDE6', background: '#FDFCF8' }}>
@@ -162,7 +235,7 @@ export default function PromptDrilldownHub() {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search prompt, status, or top rival"
+              placeholder="Search prompt, tag, status, or top rival"
               className="w-full px-3 py-2 rounded-lg text-sm"
               style={{ border: '1px solid #DDD0BC', background: '#FFFFFF', color: '#2A3A2C' }}
             />
@@ -170,14 +243,22 @@ export default function PromptDrilldownHub() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
+          <table className="w-full min-w-[1180px] border-collapse">
             <thead>
               <tr style={{ borderBottom: '1px solid #F2EDE6' }}>
-                <th className="px-4 py-3 text-left text-xs font-medium" style={{ color: '#7A8E7C' }}>Prompt</th>
+                <th className="px-4 py-3 text-left text-xs font-medium" style={{ color: '#7A8E7C', width: 360 }}>Prompt</th>
+                <th className="px-4 py-3 text-left text-xs font-medium" style={{ color: '#7A8E7C' }}>Tags</th>
                 <th className="px-4 py-3 text-left text-xs font-medium" style={{ color: '#7A8E7C' }}>Status</th>
                 <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Runs</th>
-                <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Highcharts</th>
-                <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Lead</th>
+                <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>
+                  <HeaderLabel label="Highcharts" info="Share of responses for this prompt that mention Highcharts." align="right" />
+                </th>
+                <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>
+                  <HeaderLabel label="HC Rank" info="Highcharts rank for this prompt among all tracked entities, by mention rate." align="right" />
+                </th>
+                <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>
+                  <HeaderLabel label="Lead" info="Highcharts rate minus top rival rate for this prompt." align="right" />
+                </th>
                 <th className="px-4 py-3 text-left text-xs font-medium" style={{ color: '#7A8E7C' }}>Top rival</th>
               </tr>
             </thead>
@@ -185,7 +266,7 @@ export default function PromptDrilldownHub() {
               {isLoading
                 ? Array.from({ length: 8 }).map((_, index) => (
                     <tr key={index} style={{ borderBottom: '1px solid #F2EDE6' }}>
-                      {Array.from({ length: 6 }).map((__, col) => (
+                      {Array.from({ length: 8 }).map((__, col) => (
                         <td key={col} className="px-4 py-4">
                           <div className="h-4 rounded animate-pulse" style={{ background: '#E5DDD0' }} />
                         </td>
@@ -208,14 +289,17 @@ export default function PromptDrilldownHub() {
                         <td className="px-4 py-3">
                           <Link
                             to={`/prompts/drilldown?query=${encodeURIComponent(prompt.query)}`}
-                            className="inline-flex items-center gap-1.5 text-sm font-medium"
+                            className="inline-flex max-w-[340px] items-center gap-1.5 text-sm font-medium"
                             style={{ color: prompt.isPaused ? '#9AAE9C' : '#2A3A2C' }}
                           >
-                            <span>{truncate(prompt.query)}</span>
+                            <span className="block truncate whitespace-nowrap">{prompt.query}</span>
                             <span className="text-xs" style={{ color: '#8FBB93' }} aria-hidden>
                               ↗
                             </span>
                           </Link>
+                        </td>
+                        <td className="px-4 py-3">
+                          <PromptTagChips tags={prompt.tags} muted={prompt.isPaused} />
                         </td>
                         <td className="px-4 py-3">
                           <StatusBadge isPaused={prompt.isPaused} tracked={prompt.status === 'tracked'} />
@@ -225,6 +309,21 @@ export default function PromptDrilldownHub() {
                         </td>
                         <td className="px-4 py-3 text-right text-sm font-semibold tabular-nums" style={{ color: '#2A5C2E' }}>
                           {prompt.highchartsRatePct.toFixed(1)}%
+                        </td>
+                        <td
+                          className="px-4 py-3 text-right text-sm font-semibold tabular-nums"
+                          style={{
+                            color:
+                              prompt.status === 'tracked' && prompt.highchartsRank !== null
+                                ? prompt.highchartsRank === 1
+                                  ? '#2A5C2E'
+                                  : '#2A3A2C'
+                                : '#E5DDD0',
+                          }}
+                        >
+                          {prompt.status === 'tracked' && prompt.highchartsRank !== null
+                            ? `${prompt.highchartsRank}/${prompt.highchartsRankOutOf}`
+                            : '—'}
                         </td>
                         <td className="px-4 py-3 text-right text-sm font-semibold tabular-nums" style={{ color: lead >= 0 ? '#2A5C2E' : '#B45309' }}>
                           {lead >= 0 ? '+' : ''}{lead.toFixed(1)}%

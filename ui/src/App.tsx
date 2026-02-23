@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
+import CitationLinks from './pages/CitationLinks'
 import Competitors from './pages/Competitors'
 import Dashboard from './pages/Dashboard'
 import Logics from './pages/Logics'
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="/prompt-drilldown" element={<PromptDrilldownHub />} />
           <Route path="/prompts/drilldown" element={<PromptDrilldown />} />
           <Route path="/competitors" element={<Competitors />} />
+          <Route path="/citation-links" element={<CitationLinks />} />
           <Route path="/logics" element={<Logics />} />
           <Route path="/diagnostics" element={<Navigate to="/logics" replace />} />
           <Route path="/tests" element={<Navigate to="/logics" replace />} />

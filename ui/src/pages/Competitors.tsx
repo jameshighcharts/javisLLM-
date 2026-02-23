@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import Highcharts from 'highcharts'
 import HighchartsReact from 'highcharts-react-official'
+import { useMemo, useState } from 'react'
 import { api } from '../api'
-import type { CompetitorSeries } from '../types'
+import type { CompetitorSeries, PromptCompetitorRate, PromptStatus } from '../types'
 
 // Highcharts = rich forest green (bolder than before); competitors = original earthy palette
 const HC_COLOR = '#3D7A45'
@@ -20,13 +21,14 @@ const ENTITY_LOGOS: Record<string, string> = {
   'aggrid':     '/aggrid.png',
   'ag chart':   '/aggrid.png',
   'amcharts':   '/amcharts.png',
+  'recharts':   '/react-svgrepo-com.svg',
 }
 
-// Some PNGs have heavy transparent padding — zoom crops away the whitespace
-const LOGO_ZOOM: Record<string, number> = {
-  '/echarts.png': 1.9,
-  '/aggrid.png':  2.2,
-  '/amcharts.png':1.8,
+// Wordmark logos need pixel-precise cropping to the content bbox
+interface LogoCrop { x: number; y: number; w: number; h: number; srcW: number; srcH: number; displayH: number }
+const LOGO_CROP: Record<string, LogoCrop> = {
+  '/aggrid.png':   { x: 16, y: 116, w: 374, h: 118, srcW: 400, srcH: 400, displayH: 13 },
+  '/amcharts.png': { x: 100, y: 100, w: 799, h: 353, srcW: 1000, srcH: 558, displayH: 13 },
 }
 
 function getEntityLogo(entity: string): string | null {
@@ -36,11 +38,24 @@ function getEntityLogo(entity: string): string | null {
 function EntityLogo({ entity, size = 16 }: { entity: string; size?: number }) {
   const src = getEntityLogo(entity)
   if (!src) return null
-  const zoom = LOGO_ZOOM[src] ?? 1
-  const inner = Math.round(size * zoom)
+  const crop = LOGO_CROP[src]
+  if (crop) {
+    const scale = crop.displayH / crop.h
+    const displayW = Math.round(crop.w * scale)
+    const imgW = Math.round(crop.srcW * scale)
+    const imgH = Math.round(crop.srcH * scale)
+    const offX = Math.round(crop.x * scale)
+    const offY = Math.round(crop.y * scale)
+    return (
+      <div style={{ width: displayW, height: crop.displayH, overflow: 'hidden', position: 'relative', flexShrink: 0 }}>
+        <img src={src} alt={entity}
+          style={{ position: 'absolute', width: imgW, height: imgH, top: -offY, left: -offX, objectFit: 'fill' }} />
+      </div>
+    )
+  }
   return (
     <div style={{ width: size, height: size, overflow: 'hidden', borderRadius: 3, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <img src={src} width={inner} height={inner} style={{ objectFit: 'contain', flexShrink: 0 }} alt={entity} />
+      <img src={src} width={size} height={size} style={{ objectFit: 'contain', flexShrink: 0 }} alt={entity} />
     </div>
   )
 }
@@ -52,12 +67,25 @@ function logoLabel(entity: string, opts?: { size?: number; color?: string; fontS
   const fontSize = opts?.fontSize ?? '12px'
   const fontWeight = opts?.fontWeight ?? '500'
   if (logo) {
-    const zoom = LOGO_ZOOM[logo] ?? 1
-    const inner = Math.round(size * zoom)
-    const imgHtml =
-      `<span style="display:inline-flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;overflow:hidden;border-radius:2px;flex-shrink:0;vertical-align:middle">` +
-      `<img src="${logo}" width="${inner}" height="${inner}" style="object-fit:contain;flex-shrink:0" />` +
-      `</span>`
+    const crop = LOGO_CROP[logo]
+    let imgHtml: string
+    if (crop) {
+      const scale = crop.displayH / crop.h
+      const displayW = Math.round(crop.w * scale)
+      const imgW = Math.round(crop.srcW * scale)
+      const imgH = Math.round(crop.srcH * scale)
+      const offX = Math.round(crop.x * scale)
+      const offY = Math.round(crop.y * scale)
+      imgHtml =
+        `<span style="display:inline-block;width:${displayW}px;height:${crop.displayH}px;overflow:hidden;position:relative;flex-shrink:0;vertical-align:middle">` +
+        `<img src="${logo}" style="position:absolute;width:${imgW}px;height:${imgH}px;top:${-offY}px;left:${-offX}px;object-fit:fill" />` +
+        `</span>`
+    } else {
+      imgHtml =
+        `<span style="display:inline-flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;overflow:hidden;border-radius:2px;flex-shrink:0;vertical-align:middle">` +
+        `<img src="${logo}" width="${size}" height="${size}" style="object-fit:contain;flex-shrink:0" />` +
+        `</span>`
+    }
     return (
       `<span style="display:inline-flex;align-items:center;gap:4px">` +
       imgHtml +
@@ -71,6 +99,152 @@ function logoLabel(entity: string, opts?: { size?: number; color?: string; fontS
 function getColor(s: CompetitorSeries, i: number) {
   if (s.isHighcharts) return HC_COLOR
   return COMPETITOR_COLORS[(i % COMPETITOR_COLORS.length)]
+}
+
+type TagFilterMode = 'any' | 'all'
+
+type TagSummary = {
+  tag: string
+  count: number
+}
+
+function normalizeTagList(tags: string[]): string[] {
+  return [...new Set(tags.map((tag) => tag.trim().toLowerCase()).filter(Boolean))].sort()
+}
+
+function promptMatchesTagFilter(
+  tags: string[],
+  selectedTagSet: Set<string>,
+  mode: TagFilterMode,
+): boolean {
+  if (selectedTagSet.size === 0) return true
+
+  const promptTagSet = new Set(tags.map((tag) => tag.toLowerCase()))
+  if (mode === 'all') {
+    for (const tag of selectedTagSet) {
+      if (!promptTagSet.has(tag)) return false
+    }
+    return true
+  }
+
+  for (const tag of selectedTagSet) {
+    if (promptTagSet.has(tag)) return true
+  }
+  return false
+}
+
+function buildTagSummary(prompts: PromptStatus[]): TagSummary[] {
+  const counts = new Map<string, number>()
+  for (const prompt of prompts) {
+    for (const tag of normalizeTagList(prompt.tags)) {
+      counts.set(tag, (counts.get(tag) ?? 0) + 1)
+    }
+  }
+  return [...counts.entries()]
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((left, right) => {
+      if (right.count !== left.count) return right.count - left.count
+      return left.tag.localeCompare(right.tag)
+    })
+}
+
+function resolvePromptSampleSize(prompt: PromptStatus): number | null {
+  if (
+    typeof prompt.latestRunResponseCount === 'number' &&
+    Number.isFinite(prompt.latestRunResponseCount) &&
+    prompt.latestRunResponseCount > 0
+  ) {
+    return prompt.latestRunResponseCount
+  }
+
+  const estimates = (prompt.competitorRates ?? [])
+    .flatMap((rate) => {
+      if (typeof rate.mentions !== 'number' || !Number.isFinite(rate.mentions)) return []
+      if (!Number.isFinite(rate.ratePct) || rate.ratePct <= 0) return []
+      const estimate = rate.mentions / (rate.ratePct / 100)
+      return Number.isFinite(estimate) && estimate > 0 ? [estimate] : []
+    })
+
+  if (estimates.length === 0) return null
+  return estimates.reduce((sum, value) => sum + value, 0) / estimates.length
+}
+
+function buildFilteredCompetitorSeries(
+  prompts: PromptStatus[],
+  baseline: CompetitorSeries[],
+): CompetitorSeries[] {
+  const tracked = prompts.filter((prompt) => prompt.status === 'tracked')
+  if (tracked.length === 0) {
+    return baseline.map((series) => ({ ...series, mentionRatePct: 0, shareOfVoicePct: 0 }))
+  }
+
+  const hasCompetitorBreakdown = tracked.some((prompt) => (prompt.competitorRates?.length ?? 0) > 0)
+  if (!hasCompetitorBreakdown) return baseline
+
+  const buckets = new Map<string, { rateSum: number; sampleCount: number; mentions: number }>()
+  for (const series of baseline) {
+    buckets.set(series.entityKey.toLowerCase(), { rateSum: 0, sampleCount: 0, mentions: 0 })
+  }
+
+  let weightedTotalResponses = 0
+  let weightedPromptCount = 0
+
+  for (const prompt of tracked) {
+    const promptRates = new Map<string, PromptCompetitorRate>()
+    for (const rate of prompt.competitorRates ?? []) {
+      const key = (rate.entityKey || rate.entity).toLowerCase()
+      promptRates.set(key, rate)
+      promptRates.set(rate.entity.toLowerCase(), rate)
+    }
+
+    const sampleSize = resolvePromptSampleSize(prompt)
+    const hasSampleSize =
+      typeof sampleSize === 'number' && Number.isFinite(sampleSize) && sampleSize > 0
+    if (hasSampleSize) {
+      weightedTotalResponses += sampleSize
+      weightedPromptCount += 1
+    }
+
+    for (const series of baseline) {
+      const bucket = buckets.get(series.entityKey.toLowerCase())
+      if (!bucket) continue
+
+      const rateEntry =
+        promptRates.get(series.entityKey.toLowerCase()) ??
+        promptRates.get(series.entity.toLowerCase()) ??
+        null
+      const ratePct = Math.max(0, rateEntry?.ratePct ?? 0)
+      bucket.rateSum += ratePct
+      bucket.sampleCount += 1
+
+      if (hasSampleSize) {
+        const mentions =
+          typeof rateEntry?.mentions === 'number' && Number.isFinite(rateEntry.mentions)
+            ? Math.max(0, rateEntry.mentions)
+            : (ratePct / 100) * sampleSize
+        bucket.mentions += mentions
+      }
+    }
+  }
+
+  const useWeighted = weightedPromptCount === tracked.length && weightedTotalResponses > 0
+
+  const withRates = baseline.map((series) => {
+    const bucket = buckets.get(series.entityKey.toLowerCase())
+    const averageRate = bucket && bucket.sampleCount > 0 ? bucket.rateSum / bucket.sampleCount : 0
+    const weightedRate =
+      useWeighted && bucket ? (bucket.mentions / weightedTotalResponses) * 100 : averageRate
+    return { ...series, mentionRatePct: Number(weightedRate.toFixed(2)) }
+  })
+
+  const totalMentionRate = withRates.reduce((sum, series) => sum + series.mentionRatePct, 0)
+  return withRates.map((series) => ({
+    ...series,
+    shareOfVoicePct:
+      totalMentionRate > 0
+        ? Number(((series.mentionRatePct / totalMentionRate) * 100).toFixed(2))
+        : 0,
+  }))
 }
 
 function Skeleton({ className = '' }: { className?: string }) {
@@ -129,8 +303,185 @@ function Card({ title, sub, children }: { title: string; sub?: string; children:
   )
 }
 
+function TagFilterBar({
+  tags,
+  selectedTags,
+  mode,
+  onToggleTag,
+  onModeChange,
+  onClear,
+  totalCount,
+  matchedCount,
+  trackedCount,
+  isLoading,
+}: {
+  tags: TagSummary[]
+  selectedTags: string[]
+  mode: TagFilterMode
+  onToggleTag: (tag: string) => void
+  onModeChange: (mode: TagFilterMode) => void
+  onClear: () => void
+  totalCount: number
+  matchedCount: number
+  trackedCount: number
+  isLoading: boolean
+}) {
+  const [search, setSearch] = useState('')
+  const allSelected = selectedTags.length === 0
+
+  const visibleTags = useMemo(() => {
+    const needle = search.trim().toLowerCase()
+    if (!needle) return tags
+    return tags.filter((entry) => entry.tag.includes(needle))
+  }, [tags, search])
+
+  return (
+    <div className="rounded-xl border shadow-sm overflow-hidden" style={{ borderColor: '#DDD0BC', background: '#FFFFFF' }}>
+      <div
+        className="px-4 py-3"
+        style={{
+          background:
+            'linear-gradient(120deg, rgba(143,187,147,0.18) 0%, rgba(200,168,122,0.16) 52%, rgba(242,237,230,0.92) 100%)',
+          borderBottom: '1px solid #DDD0BC',
+        }}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#607860' }}>
+              Prompt Tag Scope
+            </p>
+            <p className="text-xs mt-1" style={{ color: '#6E8472' }}>
+              {matchedCount} of {totalCount} prompts matched · {trackedCount} tracked
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+              style={{
+                background: mode === 'any' ? '#2A3A2C' : '#FFFFFF',
+                color: mode === 'any' ? '#F8F5EF' : '#607860',
+                border: '1px solid #DDD0BC',
+              }}
+              onClick={() => onModeChange('any')}
+            >
+              Match Any
+            </button>
+            <button
+              type="button"
+              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+              style={{
+                background: mode === 'all' ? '#2A3A2C' : '#FFFFFF',
+                color: mode === 'all' ? '#F8F5EF' : '#607860',
+                border: '1px solid #DDD0BC',
+              }}
+              onClick={() => onModeChange('all')}
+            >
+              Match All
+            </button>
+            <button
+              type="button"
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium"
+              style={{
+                background: selectedTags.length > 0 ? '#FFFFFF' : '#F6F2EB',
+                color: selectedTags.length > 0 ? '#2A3A2C' : '#9AAE9C',
+                border: '1px solid #DDD0BC',
+                cursor: selectedTags.length > 0 ? 'pointer' : 'default',
+              }}
+              onClick={onClear}
+              disabled={selectedTags.length === 0}
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+
+        <div
+          className="mt-3 flex items-center gap-2 px-3 py-2 rounded-lg"
+          style={{ border: '1px solid #DDD0BC', background: '#FFFFFF' }}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9AAE9C" strokeWidth="2">
+            <circle cx="11" cy="11" r="7" />
+            <path d="M20 20l-3.5-3.5" strokeLinecap="round" />
+          </svg>
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search tags"
+            className="w-full bg-transparent text-sm outline-none"
+            style={{ color: '#2A3A2C' }}
+          />
+        </div>
+      </div>
+
+      <div className="px-4 py-3">
+        {isLoading ? (
+          <div className="flex flex-wrap gap-2">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Skeleton key={i} className="h-8 w-20 rounded-full" />
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onClear}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all"
+              style={{
+                background: allSelected ? '#2A3A2C' : '#F8F5EF',
+                color: allSelected ? '#F8F5EF' : '#3D5840',
+                border: `1px solid ${allSelected ? '#2A3A2C' : '#DDD0BC'}`,
+              }}
+            >
+              <span>All</span>
+              <span
+                className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold"
+                style={{
+                  background: allSelected ? 'rgba(255,255,255,0.18)' : '#EEE5D8',
+                  color: allSelected ? '#F8F5EF' : '#607860',
+                }}
+              >
+                {totalCount}
+              </span>
+            </button>
+
+            {visibleTags.map((entry) => {
+              const active = selectedTags.includes(entry.tag)
+              return (
+                <button
+                  key={entry.tag}
+                  type="button"
+                  onClick={() => onToggleTag(entry.tag)}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all"
+                  style={{
+                    background: active ? '#2A3A2C' : '#F8F5EF',
+                    color: active ? '#F8F5EF' : '#3D5840',
+                    border: `1px solid ${active ? '#2A3A2C' : '#DDD0BC'}`,
+                  }}
+                >
+                  <span>{entry.tag}</span>
+                  <span
+                    className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold"
+                    style={{
+                      background: active ? 'rgba(255,255,255,0.18)' : '#EEE5D8',
+                      color: active ? '#F8F5EF' : '#607860',
+                    }}
+                  >
+                    {entry.count}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function MentionRateChart({ data }: { data: CompetitorSeries[] }) {
   const sorted = [...data].sort((a, b) => b.mentionRatePct - a.mentionRatePct)
+  const hcIndex = sorted.findIndex((s) => s.isHighcharts)
 
   const options: Highcharts.Options = {
     chart: {
@@ -151,6 +502,11 @@ function MentionRateChart({ data }: { data: CompetitorSeries[] }) {
         },
       },
       title: { text: null },
+      plotBands: hcIndex >= 0 ? [{
+        from: hcIndex - 0.5,
+        to: hcIndex + 0.5,
+        color: 'rgba(61, 122, 69, 0.07)',
+      }] : [],
     },
     yAxis: {
       min: 0,
@@ -173,7 +529,7 @@ function MentionRateChart({ data }: { data: CompetitorSeries[] }) {
           },
           formatter: function () {
             const isHC = (this.point as { isHighcharts?: boolean }).isHighcharts
-            return `<span style="color:${isHC ? HC_COLOR : '#7A8E7C'}">${(this.y ?? 0).toFixed(0)}%</span>`
+            return `<span style="color:${isHC ? HC_COLOR : '#7A8E7C'};font-size:${isHC ? '13px' : '12px'};font-weight:${isHC ? '700' : '600'}">${(this.y ?? 0).toFixed(0)}%</span>`
           },
         },
       },
@@ -188,6 +544,8 @@ function MentionRateChart({ data }: { data: CompetitorSeries[] }) {
           color: getColor(s, i),
           isHighcharts: s.isHighcharts,
           name: s.entity,
+          borderColor: s.isHighcharts ? '#2A6032' : 'transparent',
+          borderWidth: s.isHighcharts ? 2 : 0,
         })),
       },
     ],
@@ -235,15 +593,25 @@ function ShareOfVoiceChart({ data }: { data: CompetitorSeries[] }) {
             const color = isHC ? HC_COLOR : '#607860'
             const logo = getEntityLogo(this.point.name ?? '')
             const pSize = 12
-            const pZoom = LOGO_ZOOM[logo ?? ''] ?? 1
-            const pInner = Math.round(pSize * pZoom)
-            const nameSpan = logo
-              ? `<span style="display:inline-flex;align-items:center;gap:3px">` +
+            const pCrop = logo ? LOGO_CROP[logo] : null
+            let logoHtml = ''
+            if (logo && pCrop) {
+              const scale = pCrop.displayH / pCrop.h
+              const dW = Math.round(pCrop.w * scale)
+              const iW = Math.round(pCrop.srcW * scale)
+              const iH = Math.round(pCrop.srcH * scale)
+              const oX = Math.round(pCrop.x * scale)
+              const oY = Math.round(pCrop.y * scale)
+              logoHtml =
+                `<span style="display:inline-block;width:${dW}px;height:${pCrop.displayH}px;overflow:hidden;position:relative;flex-shrink:0;vertical-align:middle">` +
+                `<img src="${logo}" style="position:absolute;width:${iW}px;height:${iH}px;top:${-oY}px;left:${-oX}px;object-fit:fill" /></span>`
+            } else if (logo) {
+              logoHtml =
                 `<span style="display:inline-flex;align-items:center;justify-content:center;width:${pSize}px;height:${pSize}px;overflow:hidden;border-radius:2px;flex-shrink:0;vertical-align:middle">` +
-                `<img src="${logo}" width="${pInner}" height="${pInner}" style="object-fit:contain;flex-shrink:0" />` +
-                `</span>` +
-                `<span style="color:${color}">${this.point.name}</span>` +
-                `</span>`
+                `<img src="${logo}" width="${pSize}" height="${pSize}" style="object-fit:contain;flex-shrink:0" /></span>`
+            }
+            const nameSpan = logo
+              ? `<span style="display:inline-flex;align-items:center;gap:3px">${logoHtml}<span style="color:${color}">${this.point.name}</span></span>`
               : `<span style="color:${color}">${this.point.name}</span>`
             return `${nameSpan}: <b style="color:${color}">${(this.y ?? 0).toFixed(1)}%</b>`
           },
@@ -272,6 +640,12 @@ function ShareOfVoiceChart({ data }: { data: CompetitorSeries[] }) {
 }
 
 export default function Competitors() {
+  const [tagFilterMode, setTagFilterMode] = useState<TagFilterMode>('any')
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
+
+  const normalizedSelectedTags = useMemo(() => normalizeTagList(selectedTags), [selectedTags])
+  const selectedTagSet = useMemo(() => new Set(normalizedSelectedTags), [normalizedSelectedTags])
+
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['dashboard'],
     queryFn: api.dashboard,
@@ -288,15 +662,48 @@ export default function Competitors() {
     )
   }
 
-  const series = data?.competitorSeries ?? []
+  const promptStatusAll = data?.promptStatus ?? []
+  const tagSummary = useMemo(() => buildTagSummary(promptStatusAll), [promptStatusAll])
+
+  const filteredPrompts = useMemo(() => {
+    if (selectedTagSet.size === 0) return promptStatusAll
+    return promptStatusAll.filter((prompt) =>
+      promptMatchesTagFilter(prompt.tags, selectedTagSet, tagFilterMode),
+    )
+  }, [promptStatusAll, selectedTagSet, tagFilterMode])
+
+  const seriesAll = data?.competitorSeries ?? []
+  const series = useMemo(() => {
+    if (selectedTagSet.size === 0) return seriesAll
+    return buildFilteredCompetitorSeries(filteredPrompts, seriesAll)
+  }, [selectedTagSet, filteredPrompts, seriesAll])
+
   const sorted = [...series].sort((a, b) => b.mentionRatePct - a.mentionRatePct)
   const hc = series.find((s) => s.isHighcharts)
   const hcRank = sorted.findIndex((s) => s.isHighcharts) + 1
-  const entitiesBeaten = sorted.filter((s) => !s.isHighcharts && s.mentionRatePct < (hc?.mentionRatePct ?? 0)).length
+  const entitiesBeaten = sorted.filter(
+    (s) => !s.isHighcharts && s.mentionRatePct < (hc?.mentionRatePct ?? 0),
+  ).length
   const leader = sorted[0]
   const gapToLeader = hc && leader && !leader.isHighcharts
     ? (leader.mentionRatePct - hc.mentionRatePct).toFixed(1)
     : null
+
+  const filteredTrackedCount = filteredPrompts.filter((prompt) => prompt.status === 'tracked').length
+
+  function toggleTag(tag: string) {
+    const normalized = tag.trim().toLowerCase()
+    setSelectedTags((prev) => {
+      const next = new Set(normalizeTagList(prev))
+      if (next.has(normalized)) next.delete(normalized)
+      else next.add(normalized)
+      return [...next].sort()
+    })
+  }
+
+  function clearTagFilter() {
+    setSelectedTags([])
+  }
 
   return (
     <div className="max-w-[980px] space-y-4">
@@ -304,9 +711,24 @@ export default function Competitors() {
       <div>
         <h2 className="text-2xl font-bold tracking-tight" style={{ color: '#2A3A2C' }}>Competitors</h2>
         <p className="text-sm mt-0.5" style={{ color: '#7A8E7C' }}>
-          Mention rates and share of voice across all queries
+          {normalizedSelectedTags.length > 0
+            ? `Mention rates and share of voice for selected tags (${tagFilterMode})`
+            : 'Mention rates and share of voice across all queries'}
         </p>
       </div>
+
+      <TagFilterBar
+        tags={tagSummary}
+        selectedTags={normalizedSelectedTags}
+        mode={tagFilterMode}
+        onToggleTag={toggleTag}
+        onModeChange={setTagFilterMode}
+        onClear={clearTagFilter}
+        totalCount={promptStatusAll.length}
+        matchedCount={filteredPrompts.length}
+        trackedCount={filteredTrackedCount}
+        isLoading={isLoading}
+      />
 
       {/* Highcharts summary strip */}
       <div className="grid grid-cols-4 gap-3">
@@ -344,10 +766,24 @@ export default function Competitors() {
 
       {/* Charts */}
       <div className="grid grid-cols-2 gap-4">
-        <Card title="Mention Rate" sub="% of queries each entity was mentioned in">
+        <Card
+          title="Mention Rate"
+          sub={
+            normalizedSelectedTags.length > 0
+              ? '% of selected prompts each entity was mentioned in'
+              : '% of queries each entity was mentioned in'
+          }
+        >
           {isLoading ? <Skeleton className="h-52" /> : <MentionRateChart data={series} />}
         </Card>
-        <Card title="Share of Voice" sub="Proportion of all entity mentions">
+        <Card
+          title="Share of Voice"
+          sub={
+            normalizedSelectedTags.length > 0
+              ? 'Proportion of mentions inside selected prompt tags'
+              : 'Proportion of all entity mentions'
+          }
+        >
           {isLoading ? <Skeleton className="h-52" /> : <ShareOfVoiceChart data={series} />}
         </Card>
       </div>
