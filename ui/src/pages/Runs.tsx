@@ -77,12 +77,14 @@ export default function Runs() {
   const [webSearch, setWebSearch] = useState(true)
   const [runMonth, setRunMonth] = useState('')
   const [triggerToken, setTriggerToken] = useState('')
-  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(true)
+  const hasTriggerToken = Boolean(triggerToken.trim())
 
   const runsQuery = useQuery({
     queryKey: ['benchmark-runs', triggerToken],
-    queryFn: () => api.benchmarkRuns(triggerToken || undefined),
-    refetchInterval: 15_000,
+    queryFn: () => api.benchmarkRuns(triggerToken.trim()),
+    enabled: hasTriggerToken,
+    refetchInterval: hasTriggerToken ? 15_000 : false,
     retry: false,
   })
 
@@ -103,7 +105,11 @@ export default function Runs() {
     [runsQuery.data?.runs],
   )
 
-  const canRun = !triggerMutation.isPending && model.trim() && ourTerms.trim()
+  const canRun =
+    !triggerMutation.isPending &&
+    hasTriggerToken &&
+    Boolean(model.trim()) &&
+    Boolean(ourTerms.trim())
 
   const inputStyle = {
     border: '1px solid #DDD0BC',
@@ -138,6 +144,18 @@ export default function Runs() {
           <div className="p-5 space-y-4">
             {/* Primary controls row */}
             <div className="flex items-center gap-3 flex-wrap">
+              <label className="space-y-1">
+                <span className="text-xs font-medium" style={{ color: '#7A8E7C' }}>Trigger token</span>
+                <input
+                  type="password"
+                  value={triggerToken}
+                  onChange={(e) => setTriggerToken(e.target.value)}
+                  className="w-[260px] px-3 py-2 rounded-lg text-sm"
+                  style={inputStyle}
+                  placeholder="Required by /api/benchmark endpoints"
+                />
+              </label>
+
               <button
                 type="button"
                 onClick={() => triggerMutation.mutate()}
@@ -155,8 +173,14 @@ export default function Runs() {
               <button
                 type="button"
                 onClick={() => runsQuery.refetch()}
+                disabled={!hasTriggerToken}
                 className="px-4 py-2 rounded-lg text-sm font-medium"
-                style={{ border: '1px solid #DDD0BC', color: '#2A3A2C', background: '#FFFFFF', cursor: 'pointer' }}
+                style={{
+                  border: '1px solid #DDD0BC',
+                  color: hasTriggerToken ? '#2A3A2C' : '#9AAE9C',
+                  background: '#FFFFFF',
+                  cursor: hasTriggerToken ? 'pointer' : 'not-allowed',
+                }}
               >
                 Refresh Runs
               </button>
@@ -266,17 +290,6 @@ export default function Runs() {
                       style={inputStyle}
                     />
                   </label>
-                  <label className="space-y-1">
-                    <span className="text-xs font-medium" style={{ color: '#7A8E7C' }}>Trigger token</span>
-                    <input
-                      type="password"
-                      value={triggerToken}
-                      onChange={(e) => setTriggerToken(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg text-sm"
-                      style={inputStyle}
-                      placeholder="Required by /api/benchmark endpoints"
-                    />
-                  </label>
                 </div>
               </div>
             </div>
@@ -296,6 +309,14 @@ export default function Runs() {
                 style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b' }}
               >
                 {(triggerMutation.error as Error).message}
+              </div>
+            )}
+            {!hasTriggerToken && (
+              <div
+                className="rounded-lg px-3 py-2 text-sm"
+                style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}
+              >
+                Enter your team trigger token to run benchmarks and load workflow runs.
               </div>
             )}
           </div>
