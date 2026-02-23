@@ -66,11 +66,7 @@ jobs:
           else
             RUN_MONTH="$(date +%Y-%m)"
           fi
-          RUN_ID="$(python - <<'PY'
-import uuid
-print(uuid.uuid4())
-PY
-)"
+          RUN_ID="$(python -c 'import uuid; print(uuid.uuid4())')"
           echo "run_month=${RUN_MONTH}" >> "$GITHUB_OUTPUT"
           echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
           echo "RUN_MONTH=${RUN_MONTH}" >> "$GITHUB_ENV"
