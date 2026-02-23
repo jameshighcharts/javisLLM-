@@ -2,6 +2,9 @@ import { createClient } from '@supabase/supabase-js'
 import type {
   BenchmarkConfig,
   ConfigResponse,
+  DiagnosticsCheck,
+  DiagnosticsResponse,
+  DiagnosticsStatus,
   DashboardResponse,
   HealthResponse,
   KpiRow,
@@ -103,6 +106,37 @@ function asError(error: unknown, context: string): Error {
     }
   }
   return new Error(`${context}: ${String(error)}`)
+}
+
+type DiagnosticResult = {
+  status: DiagnosticsStatus
+  details: string
+}
+
+async function runCheck(
+  id: string,
+  name: string,
+  check: () => Promise<DiagnosticResult>,
+): Promise<DiagnosticsCheck> {
+  const startedAt = Date.now()
+  try {
+    const result = await check()
+    return {
+      id,
+      name,
+      status: result.status,
+      details: result.details,
+      durationMs: Date.now() - startedAt,
+    }
+  } catch (error) {
+    return {
+      id,
+      name,
+      status: 'fail',
+      details: asError(error, name).message,
+      durationMs: Date.now() - startedAt,
+    }
+  }
 }
 
 function emptyDashboard(config: BenchmarkConfig): DashboardResponse {
@@ -644,6 +678,323 @@ async function healthViaSupabase(): Promise<HealthResponse> {
   }
 }
 
+async function diagnosticsViaSupabase(): Promise<DiagnosticsResponse> {
+  if (!supabase) {
+    throw new Error('Supabase is not configured.')
+  }
+
+  const checks: DiagnosticsCheck[] = []
+  const supabaseHost = new URL(SUPABASE_URL ?? '').hostname
+
+  checks.push(
+    await runCheck('supabase_env', 'Supabase environment', async () => ({
+      status: 'pass',
+      details: `Using project ${supabaseHost}`,
+    })),
+  )
+
+  const tableChecks = await Promise.all([
+    runCheck('table_prompt_queries', 'prompt_queries table', async () => {
+      const result = await supabase
+        .from('prompt_queries')
+        .select('*', { count: 'exact', head: true })
+      if (result.error) {
+        return {
+          status: 'fail',
+          details: asError(result.error, 'Unable to read prompt_queries').message,
+        }
+      }
+      const count = result.count ?? 0
+      if (count < 1) {
+        return {
+          status: 'fail',
+          details: 'No prompt rows found. Add prompts in Configuration or SQL Editor.',
+        }
+      }
+      return { status: 'pass', details: `${count} rows available` }
+    }),
+
+    runCheck('table_competitors', 'competitors table', async () => {
+      const result = await supabase
+        .from('competitors')
+        .select('*', { count: 'exact', head: true })
+      if (result.error) {
+        return {
+          status: 'fail',
+          details: asError(result.error, 'Unable to read competitors').message,
+        }
+      }
+      const count = result.count ?? 0
+      if (count < 1) {
+        return {
+          status: 'fail',
+          details: 'No competitors found. Add competitors in Configuration or SQL Editor.',
+        }
+      }
+      return { status: 'pass', details: `${count} rows available` }
+    }),
+
+    runCheck('table_competitor_aliases', 'competitor_aliases table', async () => {
+      const result = await supabase
+        .from('competitor_aliases')
+        .select('*', { count: 'exact', head: true })
+      if (result.error) {
+        return {
+          status: 'fail',
+          details: asError(result.error, 'Unable to read competitor_aliases').message,
+        }
+      }
+      const count = result.count ?? 0
+      if (count < 1) {
+        return {
+          status: 'warn',
+          details: 'No aliases found yet. Optional, but recommended for better mention matching.',
+        }
+      }
+      return { status: 'pass', details: `${count} rows available` }
+    }),
+
+    runCheck('table_benchmark_runs', 'benchmark_runs table', async () => {
+      const result = await supabase
+        .from('benchmark_runs')
+        .select('*', { count: 'exact', head: true })
+      if (result.error) {
+        if (isMissingRelation(result.error)) {
+          return {
+            status: 'warn',
+            details: 'Table missing. Run the Supabase schema SQL migration for benchmark tables.',
+          }
+        }
+        return {
+          status: 'fail',
+          details: asError(result.error, 'Unable to read benchmark_runs').message,
+        }
+      }
+      const count = result.count ?? 0
+      if (count < 1) {
+        return {
+          status: 'warn',
+          details: 'No benchmark runs yet. Run the benchmark pipeline to populate results.',
+        }
+      }
+      return { status: 'pass', details: `${count} rows available` }
+    }),
+
+    runCheck('table_benchmark_responses', 'benchmark_responses table', async () => {
+      const result = await supabase
+        .from('benchmark_responses')
+        .select('*', { count: 'exact', head: true })
+      if (result.error) {
+        if (isMissingRelation(result.error)) {
+          return {
+            status: 'warn',
+            details: 'Table missing. Run the Supabase schema SQL migration for benchmark tables.',
+          }
+        }
+        return {
+          status: 'fail',
+          details: asError(result.error, 'Unable to read benchmark_responses').message,
+        }
+      }
+      const count = result.count ?? 0
+      if (count < 1) {
+        return {
+          status: 'warn',
+          details: 'No response rows yet. This fills after the first benchmark run.',
+        }
+      }
+      return { status: 'pass', details: `${count} rows available` }
+    }),
+
+    runCheck('table_response_mentions', 'response_mentions table', async () => {
+      const result = await supabase
+        .from('response_mentions')
+        .select('*', { count: 'exact', head: true })
+      if (result.error) {
+        if (isMissingRelation(result.error)) {
+          return {
+            status: 'warn',
+            details: 'Table missing. Run the Supabase schema SQL migration for benchmark tables.',
+          }
+        }
+        return {
+          status: 'fail',
+          details: asError(result.error, 'Unable to read response_mentions').message,
+        }
+      }
+      const count = result.count ?? 0
+      if (count < 1) {
+        return {
+          status: 'warn',
+          details: 'No mention rows yet. This fills after the first benchmark run.',
+        }
+      }
+      return { status: 'pass', details: `${count} rows available` }
+    }),
+  ])
+  checks.push(...tableChecks)
+
+  checks.push(
+    await runCheck('highcharts_primary', 'Highcharts primary competitor', async () => {
+      const result = await supabase
+        .from('competitors')
+        .select('name,slug,is_primary,is_active')
+        .eq('is_active', true)
+
+      if (result.error) {
+        return {
+          status: 'fail',
+          details: asError(result.error, 'Unable to validate Highcharts competitor').message,
+        }
+      }
+
+      const rows = (result.data ?? []) as Array<{
+        name: string
+        slug: string
+        is_primary: boolean
+        is_active: boolean
+      }>
+
+      const highcharts =
+        rows.find((row) => row.slug === 'highcharts') ??
+        rows.find((row) => row.name.toLowerCase() === 'highcharts')
+
+      if (!highcharts) {
+        return {
+          status: 'fail',
+          details: 'Highcharts is missing from active competitors.',
+        }
+      }
+      if (!highcharts.is_primary) {
+        return {
+          status: 'warn',
+          details: 'Highcharts exists but is not marked as primary.',
+        }
+      }
+      return {
+        status: 'pass',
+        details: 'Highcharts is active and marked as primary.',
+      }
+    }),
+  )
+
+  checks.push(
+    await runCheck('latest_run_readiness', 'Latest run readiness', async () => {
+      const latestRunResult = await supabase
+        .from('benchmark_runs')
+        .select('id,created_at')
+        .order('created_at', { ascending: false })
+        .limit(1)
+
+      if (latestRunResult.error) {
+        if (isMissingRelation(latestRunResult.error)) {
+          return {
+            status: 'warn',
+            details: 'benchmark_runs table is missing, so no run data can be read yet.',
+          }
+        }
+        return {
+          status: 'fail',
+          details: asError(latestRunResult.error, 'Unable to read latest benchmark run').message,
+        }
+      }
+
+      const latestRun = (latestRunResult.data ?? [])[0] as { id: string } | undefined
+      if (!latestRun) {
+        return {
+          status: 'warn',
+          details: 'No benchmark run found yet.',
+        }
+      }
+
+      const responseResult = await supabase
+        .from('benchmark_responses')
+        .select('*', { count: 'exact', head: true })
+        .eq('run_id', latestRun.id)
+
+      if (responseResult.error) {
+        if (isMissingRelation(responseResult.error)) {
+          return {
+            status: 'warn',
+            details: 'benchmark_responses table missing; run output cannot be displayed yet.',
+          }
+        }
+        return {
+          status: 'fail',
+          details: asError(responseResult.error, 'Unable to read responses for latest run').message,
+        }
+      }
+
+      const responseCount = responseResult.count ?? 0
+      if (responseCount < 1) {
+        return {
+          status: 'warn',
+          details: 'Latest run exists but has no benchmark_responses rows.',
+        }
+      }
+      return {
+        status: 'pass',
+        details: `Latest run has ${responseCount} response rows.`,
+      }
+    }),
+  )
+
+  checks.push(
+    await runCheck('dashboard_query', 'Dashboard query', async () => {
+      const dashboard = await fetchDashboardFromSupabase()
+      const hasConfig = dashboard.summary.queryCount > 0 && dashboard.summary.competitorCount > 0
+      return {
+        status: hasConfig ? 'pass' : 'warn',
+        details: `${dashboard.summary.queryCount} queries, ${dashboard.summary.competitorCount} competitors, ${dashboard.summary.totalResponses} responses`,
+      }
+    }),
+  )
+
+  return {
+    generatedAt: new Date().toISOString(),
+    source: 'supabase',
+    checks,
+  }
+}
+
+async function diagnosticsViaApi(): Promise<DiagnosticsResponse> {
+  const checks = await Promise.all([
+    runCheck('api_health', 'API /health', async () => {
+      const data = await json<HealthResponse>('/health')
+      return {
+        status: data.ok ? 'pass' : 'fail',
+        details: data.ok ? `Healthy (${data.repoRoot})` : 'Health endpoint returned not ok',
+      }
+    }),
+    runCheck('api_config', 'API /config', async () => {
+      const data = await json<ConfigResponse>('/config')
+      if (data.config.queries.length < 1 || data.config.competitors.length < 1) {
+        return {
+          status: 'warn',
+          details: 'Config loaded but queries or competitors are empty.',
+        }
+      }
+      return {
+        status: 'pass',
+        details: `${data.config.queries.length} queries, ${data.config.competitors.length} competitors`,
+      }
+    }),
+    runCheck('api_dashboard', 'API /dashboard', async () => {
+      const data = await json<DashboardResponse>('/dashboard')
+      return {
+        status: 'pass',
+        details: `${data.summary.totalResponses} responses in latest dashboard snapshot`,
+      }
+    }),
+  ])
+
+  return {
+    generatedAt: new Date().toISOString(),
+    source: 'api',
+    checks,
+  }
+}
+
 export const api = {
   async health() {
     if (hasSupabaseConfig()) {
@@ -658,6 +1009,21 @@ export const api = {
       }
     }
     return json<HealthResponse>('/health')
+  },
+
+  async diagnostics() {
+    if (hasSupabaseConfig()) {
+      try {
+        return await diagnosticsViaSupabase()
+      } catch (primaryError) {
+        try {
+          return await diagnosticsViaApi()
+        } catch {
+          throw asError(primaryError, 'Supabase diagnostics failed')
+        }
+      }
+    }
+    return diagnosticsViaApi()
   },
 
   async dashboard() {

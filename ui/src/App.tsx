@@ -4,6 +4,7 @@ import Competitors from './pages/Competitors'
 import Config from './pages/Config'
 import Dashboard from './pages/Dashboard'
 import Prompts from './pages/Prompts'
+import Tests from './pages/Tests'
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/prompts" element={<Prompts />} />
           <Route path="/competitors" element={<Competitors />} />
+          <Route path="/tests" element={<Tests />} />
           <Route path="/config" element={<Config />} />
         </Routes>
       </Layout>

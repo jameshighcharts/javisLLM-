@@ -35,6 +35,16 @@ const NAV = [
     ),
   },
   {
+    to: '/tests',
+    label: 'Tests',
+    icon: (
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 11l3 3L22 4" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
+      </svg>
+    ),
+  },
+  {
     to: '/config',
     label: 'Config',
     icon: (
@@ -50,6 +60,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/dashboard': 'Dashboard',
   '/prompts': 'Prompts',
   '/competitors': 'Competitors',
+  '/tests': 'System Tests',
   '/config': 'Configuration',
 }
 
@@ -96,11 +107,13 @@ export default function Layout({ children }: { children: ReactNode }) {
         >
           <div
             className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0"
-            style={{ background: '#4A6B4E', border: '1px solid rgba(255,255,255,0.12)' }}
+            style={{ background: '#4A6B4E', border: '1px solid rgba(255,255,255,0.12)', overflow: 'hidden' }}
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9DB8A0" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-            </svg>
+            <img
+              src="/rayquaza.png"
+              alt="App icon"
+              className="w-full h-full object-cover"
+            />
           </div>
           <div>
             <div className="text-[13px] font-semibold leading-snug tracking-tight" style={{ color: '#FEFAE8' }}>LLM Bench</div>

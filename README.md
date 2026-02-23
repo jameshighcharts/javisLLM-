@@ -49,6 +49,14 @@ In Vercel Project Settings -> Environment Variables, set:
 
 Without these vars, the deployed frontend may fail at runtime because `/api` fallback is local-only.
 
+After deploy, open `/tests` in the app to run runtime diagnostics from Vercel:
+- Supabase connectivity
+- Required table checks (`prompt_queries`, `competitors`, `competitor_aliases`, `benchmark_runs`, `benchmark_responses`, `response_mentions`)
+- Highcharts primary-competitor check
+- Latest run readiness check
+
+Note: `/tests` runs app-level diagnostics, not `pytest` execution.
+
 ## Configure inputs (no code edits needed)
 
 Edit `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark_config.json`:

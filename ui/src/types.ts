@@ -75,3 +75,19 @@ export interface HealthResponse {
   ok: boolean
   repoRoot: string
 }
+
+export type DiagnosticsStatus = 'pass' | 'warn' | 'fail'
+
+export interface DiagnosticsCheck {
+  id: string
+  name: string
+  status: DiagnosticsStatus
+  details: string
+  durationMs: number
+}
+
+export interface DiagnosticsResponse {
+  generatedAt: string
+  source: 'supabase' | 'api'
+  checks: DiagnosticsCheck[]
+}
