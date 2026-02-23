@@ -65,6 +65,7 @@ Note: `/diagnostics` runs app-level diagnostics, not `pytest` execution.
 
 To run real prompt/scoring runs from the app, open `/runs`:
 - Trigger benchmark workflow from UI
+- Pull active queries/competitors from Supabase before each run
 - Monitor run state (queued/running/success/failure)
 - Open GitHub Actions logs directly
 - Dashboard updates after workflow syncs to Supabase
@@ -78,6 +79,8 @@ In GitHub repo settings -> Secrets and variables -> Actions, add:
 
 Workflow file used by `/runs` trigger:
 - `/Users/jamesm/projects/easy_llm_benchmarker/.github/workflows/run-benchmark.yml`
+- Helper script used by workflow:
+  - `/Users/jamesm/projects/easy_llm_benchmarker/scripts/pull_config_from_supabase.py`
 
 ## Configure inputs (no code edits needed)
 

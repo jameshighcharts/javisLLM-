@@ -12,6 +12,7 @@ type BenchmarkConfig = {
   queries: string[];
   competitors: string[];
   aliases: Record<string, string[]>;
+  pausedQueries: string[];
 };
 
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
@@ -30,6 +31,12 @@ const configSchema = z.object({
   queries: z.array(z.string().min(1)).min(1),
   competitors: z.array(z.string().min(1)).min(1),
   aliases: z.record(z.string(), z.array(z.string().min(1))).default({}),
+  pausedQueries: z.array(z.string()).optional().default([]),
+});
+
+const toggleSchema = z.object({
+  query: z.string().min(1),
+  active: z.boolean(),
 });
 
 const app = express();
@@ -84,6 +91,7 @@ function normalizeConfig(rawConfig: BenchmarkConfig): BenchmarkConfig {
     queries,
     competitors,
     aliases,
+    pausedQueries: uniqueNonEmpty(rawConfig.pausedQueries ?? []),
   };
 }
 
@@ -205,6 +213,30 @@ app.put("/api/config", async (req, res) => {
   }
 });
 
+app.patch("/api/prompts/toggle", async (req, res) => {
+  try {
+    const { query, active } = toggleSchema.parse(req.body);
+    const raw = await fs.readFile(configPath, "utf8");
+    const config = JSON.parse(raw) as Record<string, unknown>;
+    const paused = (config.pausedQueries as string[] | undefined) ?? [];
+    const pausedQueries = active
+      ? paused.filter((q) => q !== query)
+      : [...new Set([...paused, query])];
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ ...config, pausedQueries }, null, 2)}\n`,
+      "utf8",
+    );
+    res.json({ ok: true, query, active });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: "Invalid payload.", issues: error.issues });
+      return;
+    }
+    res.status(500).json({ error: "Failed to toggle prompt.", details: String(error) });
+  }
+});
+
 app.get("/api/dashboard", async (_req, res) => {
   try {
     const [config, comparisonRows, competitorRows, kpiRows, jsonlRows] = await Promise.all([
@@ -256,6 +288,7 @@ app.get("/api/dashboard", async (_req, res) => {
 
     const promptLookup = new Map(queryRows.map((row) => [row.query, row]));
 
+    const pausedSet = new Set(config.pausedQueries ?? []);
     const promptStatus = config.queries.map((query) => {
       const row = promptLookup.get(query);
       const highchartsRatePct = Number((asNumber(row?.highcharts_rate) * 100).toFixed(2));
@@ -271,6 +304,7 @@ app.get("/api/dashboard", async (_req, res) => {
 
       return {
         query,
+        isPaused: pausedSet.has(query),
         status: row ? "tracked" : "awaiting_run",
         runs: asNumber(row?.runs),
         highchartsRatePct,
@@ -312,6 +346,70 @@ app.get("/api/dashboard", async (_req, res) => {
       error: "Unable to build dashboard response.",
       details: String(error),
     });
+  }
+});
+
+app.get("/api/timeseries", async (_req, res) => {
+  try {
+    const [config, jsonlRows] = await Promise.all([
+      loadConfig(),
+      readJsonl(dashboardFiles.jsonl),
+    ]);
+
+    if (jsonlRows.length === 0) {
+      res.json({ ok: true, competitors: config.competitors, points: [] });
+      return;
+    }
+
+    // Build per-competitor alias patterns (lowercase)
+    const competitorPatterns = config.competitors.map((name) => ({
+      name,
+      patterns: uniqueNonEmpty([name, ...(config.aliases[name] ?? [])]).map((a) =>
+        a.toLowerCase(),
+      ),
+    }));
+
+    type DayBucket = { total: number; mentions: Record<string, number> };
+    const byDate = new Map<string, DayBucket>();
+
+    for (const row of jsonlRows) {
+      const ts = String(row.timestamp ?? "");
+      const date = ts.length >= 10 ? ts.slice(0, 10) : null;
+      if (!date) continue;
+
+      // Try various field names for the raw LLM response text
+      const responseText = String(
+        row.response ?? row.text ?? row.content ?? row.completion ?? row.output ?? "",
+      ).toLowerCase();
+
+      const entry = byDate.get(date) ?? { total: 0, mentions: {} };
+      entry.total++;
+
+      for (const { name, patterns } of competitorPatterns) {
+        if (patterns.some((p) => responseText.includes(p))) {
+          entry.mentions[name] = (entry.mentions[name] ?? 0) + 1;
+        }
+      }
+
+      byDate.set(date, entry);
+    }
+
+    const points = Array.from(byDate.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, { total, mentions }]) => ({
+        date,
+        total,
+        rates: Object.fromEntries(
+          config.competitors.map((name) => [
+            name,
+            total > 0 ? Number((((mentions[name] ?? 0) / total) * 100).toFixed(2)) : 0,
+          ]),
+        ),
+      }));
+
+    res.json({ ok: true, competitors: config.competitors, points });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to build time series.", details: String(error) });
   }
 });
 

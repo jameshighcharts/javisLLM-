@@ -94,6 +94,18 @@ export interface DiagnosticsResponse {
   checks: DiagnosticsCheck[]
 }
 
+export interface TimeSeriesPoint {
+  date: string
+  total: number
+  rates: Record<string, number>
+}
+
+export interface TimeSeriesResponse {
+  ok: boolean
+  competitors: string[]
+  points: TimeSeriesPoint[]
+}
+
 export interface BenchmarkWorkflowRun {
   id: number
   runNumber: number

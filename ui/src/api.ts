@@ -10,6 +10,7 @@ import type {
   DashboardResponse,
   HealthResponse,
   KpiRow,
+  TimeSeriesResponse,
 } from './types'
 
 const BASE = '/api'
@@ -1128,6 +1129,14 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ query, active }),
     })
+  },
+
+  async timeseries(): Promise<TimeSeriesResponse> {
+    try {
+      return await json<TimeSeriesResponse>('/timeseries')
+    } catch {
+      return { ok: false, competitors: [], points: [] }
+    }
   },
 
   async updateConfig(data: BenchmarkConfig) {

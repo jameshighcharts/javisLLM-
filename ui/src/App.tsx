@@ -1,7 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
 import Competitors from './pages/Competitors'
-import Config from './pages/Config'
 import Dashboard from './pages/Dashboard'
 import Prompts from './pages/Prompts'
 import Runs from './pages/Runs'
@@ -19,7 +18,7 @@ export default function App() {
           <Route path="/competitors" element={<Competitors />} />
           <Route path="/diagnostics" element={<Tests />} />
           <Route path="/tests" element={<Tests />} />
-          <Route path="/config" element={<Config />} />
+          <Route path="/config" element={<Navigate to="/prompts" replace />} />
         </Routes>
       </Layout>
     </BrowserRouter>

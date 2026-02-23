@@ -72,6 +72,11 @@ jobs:
           echo "RUN_MONTH=${RUN_MONTH}" >> "$GITHUB_ENV"
           echo "RUN_ID=${RUN_ID}" >> "$GITHUB_ENV"
 
+      - name: Pull live config from Supabase
+        run: |
+          python scripts/pull_config_from_supabase.py \
+            --output config/benchmark_config.json
+
       - name: Run prompt benchmark
         run: |
           RUNS_INPUT="${{ github.event.inputs.runs }}"

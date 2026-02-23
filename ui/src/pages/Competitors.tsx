@@ -38,19 +38,21 @@ function MentionRateChart({ data }: { data: CompetitorSeries[] }) {
       type: 'bar',
       height: Math.max(200, sorted.length * 36 + 30),
       backgroundColor: 'transparent',
-      margin: [4, 72, 8, 4],
+      margin: [8, 80, 28, 120],
     },
     xAxis: {
       categories: sorted.map((s) => s.entity),
       lineWidth: 0,
       tickWidth: 0,
       labels: { style: { color: '#607860', fontSize: '12px', fontWeight: '500' } },
+      title: { text: null },
     },
     yAxis: {
       min: 0,
       max: 100,
       gridLineColor: '#F2EDE6',
       labels: { format: '{value}%', style: { color: '#9AAE9C', fontSize: '11px' } },
+      title: { text: null },
     },
     plotOptions: {
       bar: {
