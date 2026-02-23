@@ -118,8 +118,8 @@ export default function Layout({ children }: { children: ReactNode }) {
             />
           </div>
           <div>
-            <div className="text-[13px] font-semibold leading-snug tracking-tight" style={{ color: '#FEFAE8' }}>LLM Bench</div>
-            <div className="text-[10px] leading-snug" style={{ color: '#5A7A5E' }}>AI Visibility Tracker</div>
+            <div className="text-[13px] font-semibold leading-snug tracking-tight" style={{ color: '#FEFAE8' }}>Javis</div>
+            <div className="text-[10px] leading-snug" style={{ color: '#5A7A5E' }}>The Ai Visability Tracker</div>
           </div>
         </div>
 
