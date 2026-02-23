@@ -610,6 +610,30 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
     sort_order: number
   }>
 
+  const historicalRunsByQuery = new Map<string, Set<string>>()
+  if (queryRows.length > 0) {
+    const historyResult = await supabase
+      .from('benchmark_responses')
+      .select('query_id,run_id')
+      .in('query_id', queryRows.map((row) => row.id))
+
+    if (historyResult.error) {
+      if (isMissingRelation(historyResult.error)) {
+        return emptyDashboard(config)
+      }
+      throw asError(historyResult.error, 'Failed to load historical benchmark_responses')
+    }
+
+    for (const row of (historyResult.data ?? []) as Array<{ query_id: string; run_id: string }>) {
+      let runSet = historicalRunsByQuery.get(row.query_id)
+      if (!runSet) {
+        runSet = new Set<string>()
+        historicalRunsByQuery.set(row.query_id, runSet)
+      }
+      runSet.add(row.run_id)
+    }
+  }
+
   const latestRunResult = await supabase
     .from('benchmark_runs')
     .select('id,run_month,model,web_search_enabled,started_at,ended_at,overall_score,created_at')
@@ -716,7 +740,8 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
 
   const promptStatus = queryRows.map((queryRow) => {
     const queryResponses = responses.filter((response) => response.query_id === queryRow.id)
-    const runs = queryResponses.length
+    const latestRunResponseCount = queryResponses.length
+    const runs = historicalRunsByQuery.get(queryRow.id)?.size ?? 0
 
     const highchartsMentions = highchartsCompetitor
       ? queryResponses.reduce((count, response) => {
@@ -725,14 +750,15 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
         }, 0)
       : 0
 
-    const highchartsRatePct = runs > 0 ? (highchartsMentions / runs) * 100 : 0
+    const highchartsRatePct =
+      latestRunResponseCount > 0 ? (highchartsMentions / latestRunResponseCount) * 100 : 0
 
     const competitorRates = nonHighchartsCompetitors.map((competitor) => {
       const mentions = queryResponses.reduce((count, response) => {
         const mentionMap = mentionsByResponse.get(response.id)
         return count + (mentionMap?.get(competitor.id) ? 1 : 0)
       }, 0)
-      const ratePct = runs > 0 ? (mentions / runs) * 100 : 0
+      const ratePct = latestRunResponseCount > 0 ? (mentions / latestRunResponseCount) * 100 : 0
       return {
         entity: competitor.name,
         ratePct,
@@ -741,7 +767,7 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
     })
 
     const viabilityCount = competitorRates.reduce((sum, entry) => sum + entry.mentions, 0)
-    const viabilityDenominator = runs * nonHighchartsCompetitors.length
+    const viabilityDenominator = latestRunResponseCount * nonHighchartsCompetitors.length
     const viabilityRatePct =
       viabilityDenominator > 0 ? (viabilityCount / viabilityDenominator) * 100 : 0
 

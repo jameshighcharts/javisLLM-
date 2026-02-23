@@ -4,23 +4,62 @@ import HighchartsReact from 'highcharts-react-official'
 import { api } from '../api'
 import type { CompetitorSeries } from '../types'
 
-const CHART_PALETTE = ['#8FBB93', '#DDD0BC', '#D4836A', '#9B8CB5', '#D4C05A', '#9AAE9C', '#C4836A', '#6A8E6E']
+// Highcharts = rich forest green (bolder than before); competitors = original earthy palette
+const HC_COLOR = '#3D7A45'
+const COMPETITOR_COLORS = ['#DDD0BC', '#D4836A', '#9B8CB5', '#D4C05A', '#9AAE9C', '#C4836A', '#6A8E6E', '#B5A898']
 
 function getColor(s: CompetitorSeries, i: number) {
-  if (s.isHighcharts) return '#8FBB93'
-  return CHART_PALETTE[(i - 1 + CHART_PALETTE.length) % CHART_PALETTE.length]
+  if (s.isHighcharts) return HC_COLOR
+  return COMPETITOR_COLORS[(i % COMPETITOR_COLORS.length)]
 }
 
 function Skeleton({ className = '' }: { className?: string }) {
   return <div className={`rounded-lg animate-pulse ${className}`} style={{ background: '#E5DDD0' }} />
 }
 
-function Card({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
+function StatCard({
+  label,
+  value,
+  sub,
+  highlight,
+}: {
+  label: string
+  value: string
+  sub?: string
+  highlight?: boolean
+}) {
   return (
     <div
-      className="rounded-xl border shadow-sm"
-      style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
+      className="rounded-xl p-4 flex flex-col gap-1.5"
+      style={{
+        background: highlight ? '#EEF3EE' : '#FFFFFF',
+        border: `1.5px solid ${highlight ? '#8FBB93' : '#DDD0BC'}`,
+      }}
     >
+      <div
+        className="text-[11px] font-semibold uppercase tracking-widest"
+        style={{ color: highlight ? '#4A8A50' : '#9AAE9C' }}
+      >
+        {label}
+      </div>
+      <div
+        className="text-2xl font-bold tracking-tight tabular-nums"
+        style={{ color: highlight ? '#2A4A2C' : '#2A3A2C' }}
+      >
+        {value}
+      </div>
+      {sub && (
+        <div className="text-xs" style={{ color: highlight ? '#6A9A6E' : '#9AAE9C' }}>
+          {sub}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Card({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-xl border shadow-sm" style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}>
       <div className="flex flex-col space-y-1 p-5 pb-0">
         <div className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>{title}</div>
         {sub && <div className="text-xs" style={{ color: '#9AAE9C' }}>{sub}</div>}
@@ -36,7 +75,7 @@ function MentionRateChart({ data }: { data: CompetitorSeries[] }) {
   const options: Highcharts.Options = {
     chart: {
       type: 'bar',
-      height: Math.max(200, sorted.length * 36 + 30),
+      height: Math.max(200, sorted.length * 38 + 30),
       backgroundColor: 'transparent',
       margin: [8, 80, 28, 120],
     },
@@ -64,8 +103,11 @@ function MentionRateChart({ data }: { data: CompetitorSeries[] }) {
             fontFamily: "'Inter', sans-serif",
             fontSize: '12px',
             fontWeight: '600',
-            color: '#7A8E7C',
             textOutline: 'none',
+          },
+          formatter: function () {
+            const isHC = (this.point as { isHighcharts?: boolean }).isHighcharts
+            return `<span style="color:${isHC ? HC_COLOR : '#7A8E7C'}">${(this.y ?? 0).toFixed(0)}%</span>`
           },
         },
       },
@@ -78,6 +120,7 @@ function MentionRateChart({ data }: { data: CompetitorSeries[] }) {
         data: sorted.map((s, i) => ({
           y: s.mentionRatePct,
           color: getColor(s, i),
+          isHighcharts: s.isHighcharts,
           name: s.entity,
         })),
       },
@@ -89,13 +132,11 @@ function MentionRateChart({ data }: { data: CompetitorSeries[] }) {
 
 function ShareOfVoiceChart({ data }: { data: CompetitorSeries[] }) {
   const withData = data.filter((s) => s.shareOfVoicePct > 0)
+  const sortedAll = [...data].sort((a, b) => b.mentionRatePct - a.mentionRatePct)
 
   if (withData.length === 0) {
     return (
-      <div
-        className="flex items-center justify-center h-48 text-sm"
-        style={{ color: '#9AAE9C' }}
-      >
+      <div className="flex items-center justify-center h-48 text-sm" style={{ color: '#9AAE9C' }}>
         No share-of-voice data yet
       </div>
     )
@@ -123,7 +164,9 @@ function ShareOfVoiceChart({ data }: { data: CompetitorSeries[] }) {
           },
           connectorColor: '#DDD0BC',
           formatter: function () {
-            return `${this.point.name}: <b>${(this.y ?? 0).toFixed(1)}%</b>`
+            const isHC = (this.point as { isHighcharts?: boolean }).isHighcharts
+            const color = isHC ? HC_COLOR : '#607860'
+            return `<span style="color:${color}">${this.point.name}: <b>${(this.y ?? 0).toFixed(1)}%</b></span>`
           },
         },
       },
@@ -132,11 +175,16 @@ function ShareOfVoiceChart({ data }: { data: CompetitorSeries[] }) {
       {
         type: 'pie',
         name: 'Share of Voice',
-        data: withData.map((s, i) => ({
-          name: s.entity,
-          y: s.shareOfVoicePct,
-          color: getColor(s, i),
-        })),
+        data: withData.map((s) => {
+          const idx = sortedAll.findIndex((x) => x.entityKey === s.entityKey)
+          return {
+            name: s.entity,
+            y: s.shareOfVoicePct,
+            color: getColor(s, idx),
+            isHighcharts: s.isHighcharts,
+            sliced: s.isHighcharts,
+          }
+        }),
       },
     ],
   }
@@ -164,14 +212,55 @@ export default function Competitors() {
   const series = data?.competitorSeries ?? []
   const sorted = [...series].sort((a, b) => b.mentionRatePct - a.mentionRatePct)
   const hc = series.find((s) => s.isHighcharts)
+  const hcRank = sorted.findIndex((s) => s.isHighcharts) + 1
+  const entitiesBeaten = sorted.filter((s) => !s.isHighcharts && s.mentionRatePct < (hc?.mentionRatePct ?? 0)).length
+  const leader = sorted[0]
+  const gapToLeader = hc && leader && !leader.isHighcharts
+    ? (leader.mentionRatePct - hc.mentionRatePct).toFixed(1)
+    : null
 
   return (
     <div className="max-w-[980px] space-y-4">
+      {/* Header */}
       <div>
         <h2 className="text-2xl font-bold tracking-tight" style={{ color: '#2A3A2C' }}>Competitors</h2>
         <p className="text-sm mt-0.5" style={{ color: '#7A8E7C' }}>
           Mention rates and share of voice across all queries
         </p>
+      </div>
+
+      {/* Highcharts summary strip */}
+      <div className="grid grid-cols-4 gap-3">
+        {isLoading ? (
+          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24" />)
+        ) : (
+          <>
+            <StatCard
+              label="Rank"
+              value={hc ? `#${hcRank}` : '–'}
+              sub={`of ${sorted.length} entities`}
+              highlight
+            />
+            <StatCard
+              label="Mention Rate"
+              value={hc ? `${hc.mentionRatePct.toFixed(1)}%` : '–'}
+              sub="queries mentioning Highcharts"
+              highlight
+            />
+            <StatCard
+              label="Share of Voice"
+              value={hc ? `${hc.shareOfVoicePct.toFixed(1)}%` : '–'}
+              sub="of all entity mentions"
+              highlight
+            />
+            <StatCard
+              label="Entities Beaten"
+              value={hc ? `${entitiesBeaten}` : '–'}
+              sub={gapToLeader ? `${gapToLeader}% behind ${leader?.entity}` : 'leading the field'}
+              highlight
+            />
+          </>
+        )}
       </div>
 
       {/* Charts */}
@@ -197,13 +286,13 @@ export default function Competitors() {
         <table className="w-full">
           <thead>
             <tr style={{ borderBottom: '1px solid #F2EDE6' }}>
-              {['Entity', 'Mention Rate', 'Share of Voice', 'Gap vs Highcharts'].map((h, i) => (
+              {['Rank', 'Entity', 'Mention Rate', 'Share of Voice', 'Gap vs Highcharts'].map((h, i) => (
                 <th
                   key={h}
                   className="px-5 py-3 text-xs font-medium"
                   style={{
                     color: '#7A8E7C',
-                    textAlign: i === 0 ? 'left' : i < 3 ? 'right' : 'left',
+                    textAlign: i <= 1 ? 'left' : i < 4 ? 'right' : 'left',
                   }}
                 >
                   {h}
@@ -215,7 +304,7 @@ export default function Competitors() {
             {isLoading
               ? Array.from({ length: 6 }).map((_, i) => (
                   <tr key={i} style={{ borderBottom: '1px solid #F2EDE6' }}>
-                    {Array.from({ length: 4 }).map((__, j) => (
+                    {Array.from({ length: 5 }).map((__, j) => (
                       <td key={j} className="px-5 py-4">
                         <Skeleton className="h-4" />
                       </td>
@@ -225,52 +314,102 @@ export default function Competitors() {
               : sorted.map((s, i) => {
                   const diff = (hc?.mentionRatePct ?? 0) - s.mentionRatePct
                   const color = getColor(s, i)
+                  const isHC = s.isHighcharts
                   return (
                     <tr
                       key={s.entityKey}
-                      style={{ borderBottom: i < sorted.length - 1 ? '1px solid #F2EDE6' : 'none' }}
+                      style={{
+                        borderBottom: i < sorted.length - 1 ? '1px solid #F2EDE6' : 'none',
+                        background: isHC ? '#EEF3EE' : 'transparent',
+                      }}
                       onMouseEnter={(e) => {
-                        (e.currentTarget as HTMLTableRowElement).style.background = '#F7F3EE'
+                        if (!isHC)
+                          (e.currentTarget as HTMLTableRowElement).style.background = '#F7F3EE'
                       }}
                       onMouseLeave={(e) => {
-                        (e.currentTarget as HTMLTableRowElement).style.background = 'transparent'
+                        (e.currentTarget as HTMLTableRowElement).style.background = isHC ? '#EEF3EE' : 'transparent'
                       }}
                     >
+                      {/* Rank */}
+                      <td
+                        className="px-5 py-3.5 text-xs font-semibold tabular-nums"
+                        style={{ color: isHC ? HC_COLOR : '#C8C0B8' }}
+                      >
+                        #{i + 1}
+                      </td>
+
+                      {/* Entity */}
                       <td className="px-5 py-3.5">
                         <div className="flex items-center gap-2.5">
-                          <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} />
-                          <span className="text-sm font-medium" style={{ color: '#2A3A2C' }}>
+                          <div
+                            className="w-2 h-2 rounded-full flex-shrink-0"
+                            style={{
+                              background: color,
+                              boxShadow: isHC ? `0 0 0 3px #C4DCC6` : 'none',
+                            }}
+                          />
+                          <span
+                            className="text-sm font-medium"
+                            style={{ color: isHC ? '#2A4A2C' : '#2A3A2C' }}
+                          >
                             {s.entity}
                           </span>
-                          {s.isHighcharts && (
+                          {isHC && (
                             <span
                               className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
-                              style={{ background: '#F2EDE6', color: '#607860', border: '1px solid #DDD0BC' }}
+                              style={{
+                                background: '#D4E8D5',
+                                color: HC_COLOR,
+                                border: `1px solid #8FBB93`,
+                              }}
                             >
                               YOU
                             </span>
                           )}
                         </div>
                       </td>
-                      <td className="px-5 py-3.5 text-right text-sm font-medium" style={{ color: '#2A3A2C' }}>
+
+                      {/* Mention Rate */}
+                      <td
+                        className="px-5 py-3.5 text-right text-sm font-medium tabular-nums"
+                        style={{ color: isHC ? '#2A4A2C' : '#2A3A2C' }}
+                      >
                         {s.mentionRatePct.toFixed(1)}%
                       </td>
-                      <td className="px-5 py-3.5 text-right text-sm font-medium" style={{ color: '#2A3A2C' }}>
+
+                      {/* Share of Voice */}
+                      <td
+                        className="px-5 py-3.5 text-right text-sm font-medium tabular-nums"
+                        style={{ color: isHC ? '#2A4A2C' : '#2A3A2C' }}
+                      >
                         {s.shareOfVoicePct > 0 ? `${s.shareOfVoicePct.toFixed(1)}%` : '–'}
                       </td>
+
+                      {/* Gap */}
                       <td className="px-5 py-3.5">
-                        {s.isHighcharts ? (
+                        {isHC ? (
                           <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>
                         ) : diff > 0 ? (
-                          <span className="text-xs font-semibold" style={{ color: '#16a34a' }}>
+                          <span
+                            className="inline-flex text-xs font-semibold px-2 py-0.5 rounded-full"
+                            style={{ background: '#F0FAF0', color: '#16a34a', border: '1px solid #BBF7D0' }}
+                          >
                             +{diff.toFixed(1)}% ahead
                           </span>
                         ) : diff < 0 ? (
-                          <span className="text-xs font-semibold" style={{ color: '#dc2626' }}>
+                          <span
+                            className="inline-flex text-xs font-semibold px-2 py-0.5 rounded-full"
+                            style={{ background: '#FEF2F2', color: '#dc2626', border: '1px solid #FECACA' }}
+                          >
                             {diff.toFixed(1)}% behind
                           </span>
                         ) : (
-                          <span className="text-xs" style={{ color: '#94a3b8' }}>tied</span>
+                          <span
+                            className="inline-flex text-xs font-semibold px-2 py-0.5 rounded-full"
+                            style={{ background: '#F2EDE6', color: '#9AAE9C', border: '1px solid #DDD0BC' }}
+                          >
+                            tied
+                          </span>
                         )}
                       </td>
                     </tr>

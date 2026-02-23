@@ -112,11 +112,11 @@ for select to anon, authenticated using (true);
 
 drop policy if exists benchmark_responses_read on public.benchmark_responses;
 create policy benchmark_responses_read on public.benchmark_responses
-for select to anon, authenticated using (true);
+for select to authenticated using (true);
 
 drop policy if exists response_mentions_read on public.response_mentions;
 create policy response_mentions_read on public.response_mentions
-for select to anon, authenticated using (true);
+for select to authenticated using (true);
 
 -- Write policies: keep restricted to authenticated users.
 -- Service role bypasses RLS for server-side sync scripts.

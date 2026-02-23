@@ -13,6 +13,19 @@ import type {
 const HC_COLOR = '#8FBB93'
 const RIVAL_COLORS = ['#C8A87A', '#A89CB8', '#D49880', '#C8B858', '#7AABB8', '#C89878']
 
+const CHART_FONT = "'Inter', system-ui, sans-serif"
+
+const TOOLTIP_BASE: Highcharts.TooltipOptions = {
+  backgroundColor: '#FFFFFF',
+  borderColor: '#DDD0BC',
+  borderRadius: 8,
+  shadow: { color: 'rgba(42,58,44,0.08)', offsetX: 0, offsetY: 2, opacity: 1, width: 8 },
+  style: { fontFamily: CHART_FONT, fontSize: '12px', color: '#2A3A2C' },
+  padding: 10,
+}
+
+const CHART_CREDITS: Highcharts.CreditsOptions = { enabled: false }
+
 function formatDateTime(value: string | null | undefined) {
   if (!value) return '—'
   const parsed = Date.parse(value)
@@ -103,36 +116,43 @@ function PromptTrendChart({
     )
   }
 
-  const highcharts = competitors.find((row) => row.isHighcharts)?.entity ?? null
+  const highchartsEntity = competitors.find((row) => row.isHighcharts)?.entity ?? null
   const rivals = competitors.filter((row) => !row.isHighcharts).slice(0, 3)
   const seriesNames = [
-    ...(highcharts ? [highcharts] : []),
+    ...(highchartsEntity ? [highchartsEntity] : []),
     ...rivals.map((row) => row.entity),
   ]
 
   const series: Highcharts.SeriesOptionsType[] = seriesNames.map((name) => {
-    const isHighcharts = name === highcharts
+    const isHC = name === highchartsEntity
     const rivalIndex = rivals.findIndex((row) => row.entity === name)
+    const color = isHC ? HC_COLOR : rivalColor(Math.max(rivalIndex, 0))
     return {
-      type: isHighcharts ? 'areaspline' : 'spline',
+      type: isHC ? 'areaspline' : 'spline',
       name,
-      color: isHighcharts ? HC_COLOR : rivalColor(Math.max(rivalIndex, 0)),
-      lineWidth: isHighcharts ? 2.5 : 1.8,
-      marker: { enabled: runPoints.length <= 4, radius: isHighcharts ? 4 : 3 },
-      zIndex: isHighcharts ? 2 : 1,
-      fillColor: isHighcharts
+      color,
+      lineWidth: isHC ? 2.5 : 1.8,
+      dashStyle: isHC ? 'Solid' : 'ShortDot',
+      marker: {
+        enabled: runPoints.length <= 4,
+        radius: isHC ? 4 : 3,
+        symbol: 'circle',
+        fillColor: color,
+        lineWidth: 2,
+        lineColor: '#FFFFFF',
+        states: { hover: { enabled: true, radius: isHC ? 5 : 4 } },
+      },
+      zIndex: isHC ? 2 : 1,
+      fillColor: isHC
         ? {
             linearGradient: { x1: 0, y1: 0, x2: 0, y2: 1 },
             stops: [
-              [0, 'rgba(143,187,147,0.2)'],
+              [0, 'rgba(143,187,147,0.22)'],
               [1, 'rgba(143,187,147,0)'],
             ],
           }
         : undefined,
-      data: runPoints.map((point) => [
-        Date.parse(point.timestamp),
-        point.rates[name] ?? 0,
-      ]),
+      data: runPoints.map((point) => [Date.parse(point.timestamp), point.rates[name] ?? 0]),
     }
   })
 
@@ -140,44 +160,65 @@ function PromptTrendChart({
     chart: {
       height: 280,
       backgroundColor: 'transparent',
-      margin: [12, 12, 45, 48],
+      margin: [12, 12, 46, 52],
+      style: { fontFamily: CHART_FONT },
+      animation: { duration: 300 },
     },
-    title: { text: '' },
+    credits: CHART_CREDITS,
+    title: { text: undefined },
     xAxis: {
       type: 'datetime',
       lineWidth: 0,
       tickWidth: 0,
-      labels: { style: { color: '#9AAE9C', fontSize: '11px' } },
+      crosshair: { color: '#DDD0BC', width: 1, dashStyle: 'Dash' },
+      labels: {
+        style: { color: '#9AAE9C', fontSize: '11px', fontFamily: CHART_FONT },
+        format: '{value:%b %e}',
+      },
     },
     yAxis: {
       min: 0,
       max: 100,
+      tickAmount: 5,
       title: { text: null },
       gridLineColor: '#EDE8E0',
-      labels: { format: '{value}%', style: { color: '#9AAE9C', fontSize: '11px' } },
+      gridLineDashStyle: 'Dash',
+      labels: {
+        format: '{value}%',
+        style: { color: '#9AAE9C', fontSize: '11px', fontFamily: CHART_FONT },
+      },
     },
     tooltip: {
+      ...TOOLTIP_BASE,
       shared: true,
-      valueSuffix: '%',
-      valueDecimals: 1,
-      backgroundColor: '#FFFFFF',
-      borderColor: '#DDD0BC',
-      borderRadius: 8,
-      shadow: false,
-      style: { fontSize: '12px', color: '#2A3A2C' },
+      useHTML: true,
+      headerFormat:
+        '<div style="margin-bottom:6px;font-size:11px;color:#7A8E7C;font-weight:600">{point.key:%b %e, %Y}</div>',
+      pointFormat:
+        '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">' +
+        '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{point.color}"></span>' +
+        '<span style="color:#2A3A2C">{series.name}</span>' +
+        '<span style="margin-left:auto;font-weight:600;color:#2A3A2C">{point.y:.1f}%</span>' +
+        '</div>',
+      footerFormat: '',
     },
     legend: {
       enabled: true,
       align: 'left',
       verticalAlign: 'top',
-      itemStyle: { fontSize: '11px', fontWeight: '500', color: '#2A3A2C' },
+      itemStyle: { fontSize: '11px', fontWeight: '500', color: '#2A3A2C', fontFamily: CHART_FONT },
+      symbolRadius: 4,
+      symbolHeight: 8,
+      symbolWidth: 8,
     },
     plotOptions: {
       spline: {
-        marker: { enabled: false },
+        marker: { enabled: false, symbol: 'circle', states: { hover: { enabled: true } } },
+        states: { hover: { lineWidth: 2.5 } },
       },
       areaspline: {
-        marker: { enabled: false },
+        marker: { enabled: false, symbol: 'circle', states: { hover: { enabled: true } } },
+        states: { hover: { lineWidth: 3 } },
       },
     },
     series,
@@ -197,46 +238,68 @@ function CompetitorBreakdownChart({ competitors }: { competitors: PromptDrilldow
   }
 
   const sorted = [...competitors].sort((left, right) => right.mentionRatePct - left.mentionRatePct)
+  const maxVal = sorted[0]?.mentionRatePct ?? 1
+  const yMax = Math.max(20, Math.ceil(maxVal / 10) * 10 + 10)
 
   const options: Highcharts.Options = {
     chart: {
       type: 'bar',
-      height: Math.max(280, sorted.length * 36 + 30),
+      height: Math.max(280, sorted.length * 40 + 40),
       backgroundColor: 'transparent',
-      margin: [12, 24, 30, 130],
+      margin: [12, 40, 30, 130],
+      style: { fontFamily: CHART_FONT },
+      animation: { duration: 300 },
     },
-    title: { text: '' },
+    credits: CHART_CREDITS,
+    title: { text: undefined },
     xAxis: {
       categories: sorted.map((row) => row.entity),
       lineWidth: 0,
       tickWidth: 0,
-      labels: { style: { color: '#7A8E7C', fontSize: '11px' } },
+      labels: {
+        style: { color: '#7A8E7C', fontSize: '12px', fontFamily: CHART_FONT, fontWeight: '500' },
+      },
       title: { text: null },
     },
     yAxis: {
       min: 0,
-      max: 100,
+      max: yMax,
       title: { text: null },
       gridLineColor: '#EDE8E0',
-      labels: { format: '{value}%', style: { color: '#9AAE9C', fontSize: '11px' } },
+      gridLineDashStyle: 'Dash',
+      labels: {
+        format: '{value}%',
+        style: { color: '#9AAE9C', fontSize: '11px', fontFamily: CHART_FONT },
+      },
     },
     legend: { enabled: false },
     tooltip: {
-      pointFormat: '<b>{point.y:.1f}%</b> mention rate',
-      backgroundColor: '#FFFFFF',
-      borderColor: '#DDD0BC',
-      borderRadius: 8,
-      shadow: false,
-      style: { fontSize: '12px', color: '#2A3A2C' },
+      ...TOOLTIP_BASE,
+      useHTML: true,
+      pointFormat:
+        '<div style="display:flex;align-items:center;gap:6px">' +
+        '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{point.color}"></span>' +
+        '<span style="color:#2A3A2C;font-weight:600">{point.category}</span>' +
+        '<span style="margin-left:6px;color:#607860;font-weight:700">{point.y:.1f}%</span>' +
+        '</div>',
+      headerFormat: '',
     },
     plotOptions: {
       bar: {
         borderRadius: 4,
+        borderWidth: 0,
         dataLabels: {
           enabled: true,
           format: '{y:.0f}%',
-          style: { color: '#607860', textOutline: 'none', fontSize: '11px' },
+          style: {
+            color: '#607860',
+            textOutline: 'none',
+            fontSize: '11px',
+            fontWeight: '600',
+            fontFamily: CHART_FONT,
+          },
         },
+        states: { hover: { brightness: -0.05 } },
       },
     },
     series: [
@@ -643,7 +706,7 @@ export default function PromptDrilldown() {
           <SummaryCard
             label="Viability Rate"
             value={`${data.summary.viabilityRatePct.toFixed(1)}%`}
-            sub="Rival mention density"
+            sub="Meaningfully recommended"
           />
           <SummaryCard
             label="Tracked Runs"
@@ -663,7 +726,7 @@ export default function PromptDrilldown() {
               Prompt Trend Over Runs
             </div>
             <div className="text-xs mt-0.5" style={{ color: '#9AAE9C' }}>
-              Highcharts versus top rivals for this single prompt
+              Highcharts vs top rivals for this prompt — dashed lines = rivals
             </div>
           </div>
           <div className="p-4">
@@ -684,7 +747,7 @@ export default function PromptDrilldown() {
               Competitor Breakdown
             </div>
             <div className="text-xs mt-0.5" style={{ color: '#9AAE9C' }}>
-              Mention rate inside this prompt only
+              Mention rate for this prompt only
             </div>
           </div>
           <div className="p-4">
@@ -727,7 +790,7 @@ export default function PromptDrilldown() {
             Output Explorer
           </div>
           <div className="text-xs mt-0.5" style={{ color: '#9AAE9C' }}>
-            Raw output, mention matches, and citations for each response
+            Raw LLM output, mention matches, and citations for each response
           </div>
         </div>
         <div className="p-4">

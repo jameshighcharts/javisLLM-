@@ -7,6 +7,10 @@ const {
 } = require('../_github')
 
 const DEFAULT_MODEL = 'gpt-4o-mini'
+const OUR_TERMS_DEFAULT = 'Highcharts'
+const MAX_OUR_TERMS_LENGTH = 300
+const RUN_MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/
+const OUR_TERMS_REGEX = /^[\w\s.,&()+/\-]+$/i
 
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode
@@ -65,6 +69,58 @@ function resolveModel(modelInput, allowedModels) {
   return resolved
 }
 
+function parseWebSearch(value) {
+  if (typeof value === 'boolean') {
+    return value
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (['1', 'true', 'yes'].includes(normalized)) {
+      return true
+    }
+    if (['0', 'false', 'no'].includes(normalized)) {
+      return false
+    }
+  }
+  return true
+}
+
+function resolveOurTerms(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    return OUR_TERMS_DEFAULT
+  }
+
+  const normalized = value.trim()
+  if (normalized.length > MAX_OUR_TERMS_LENGTH) {
+    const error = new Error(
+      `ourTerms is too long. Maximum length is ${MAX_OUR_TERMS_LENGTH} characters.`,
+    )
+    error.statusCode = 400
+    throw error
+  }
+  if (!OUR_TERMS_REGEX.test(normalized)) {
+    const error = new Error(
+      'ourTerms contains unsupported characters. Use letters, numbers, spaces, and punctuation only.',
+    )
+    error.statusCode = 400
+    throw error
+  }
+  return normalized
+}
+
+function resolveRunMonth(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    return ''
+  }
+  const normalized = value.trim()
+  if (!RUN_MONTH_REGEX.test(normalized)) {
+    const error = new Error('runMonth must use YYYY-MM format.')
+    error.statusCode = 400
+    throw error
+  }
+  return normalized
+}
+
 function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms)
@@ -117,17 +173,11 @@ module.exports = async (req, res) => {
         ? body.model.trim()
         : DEFAULT_MODEL
     const model = resolveModel(requestedModel, allowedModels)
-    const ourTerms =
-      typeof body.ourTerms === 'string' && body.ourTerms.trim()
-        ? body.ourTerms.trim()
-        : 'Highcharts'
+    const ourTerms = resolveOurTerms(body.ourTerms)
     const runs = Math.round(normalizeNumber(body.runs, 3, 1, 10))
     const temperature = normalizeNumber(body.temperature, 0.7, 0, 2)
-    const webSearch = Boolean(body.webSearch ?? true)
-    const runMonth =
-      typeof body.runMonth === 'string' && /^\d{4}-\d{2}$/.test(body.runMonth.trim())
-        ? body.runMonth.trim()
-        : ''
+    const webSearch = parseWebSearch(body.webSearch)
+    const runMonth = resolveRunMonth(body.runMonth)
 
     await dispatchWorkflow({
       trigger_id: triggerId,
@@ -164,8 +214,15 @@ module.exports = async (req, res) => {
     ) {
       res.setHeader('Retry-After', String(Math.round(Number(error.retryAfterSeconds))))
     }
-    return sendJson(res, statusCode, {
-      error: error instanceof Error ? error.message : String(error),
-    })
+    if (statusCode >= 500) {
+      console.error('[benchmark.trigger] request failed', error)
+    }
+    const message =
+      statusCode >= 500
+        ? 'Internal server error.'
+        : error instanceof Error
+          ? error.message
+          : String(error)
+    return sendJson(res, statusCode, { error: message })
   }
 }

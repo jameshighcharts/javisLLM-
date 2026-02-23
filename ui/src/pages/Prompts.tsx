@@ -437,137 +437,6 @@ export default function Prompts() {
         )}
       </div>
 
-      {/* ── Prompts data grid ──────────────────────────────────────────────── */}
-      <div
-        className="rounded-xl border shadow-sm overflow-hidden"
-        style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
-      >
-        <div
-          className="px-4 py-2.5 text-xs"
-          style={{ color: '#9AAE9C', background: '#FDFCF8', borderBottom: '1px solid #F2EDE6' }}
-        >
-          Click a query to open its drilldown dashboard.
-        </div>
-        <table className="w-full border-collapse">
-          <thead>
-            <tr style={{ borderBottom: '1px solid #F2EDE6', background: '#FDFCF8' }}>
-              <th className="px-4 py-3" style={{ width: 48 }} />
-              <SortTh label="Query" col="query" current={sortKey} dir={sortDir} onSort={handleSort} />
-              <SortTh label="Status" col="status" current={sortKey} dir={sortDir} onSort={handleSort} width="130px" />
-              <SortTh label="Runs" col="runs" current={sortKey} dir={sortDir} align="right" onSort={handleSort} width="60px" />
-              <SortTh label="Highcharts %" col="highchartsRatePct" current={sortKey} dir={sortDir} onSort={handleSort} width="148px" />
-              <SortTh label="Viability %" col="viabilityRatePct" current={sortKey} dir={sortDir} onSort={handleSort} width="148px" />
-              <SortTh label="Lead" col="lead" current={sortKey} dir={sortDir} onSort={handleSort} width="80px" />
-              <th className="px-4 py-3 text-xs font-medium" style={{ color: '#7A8E7C', textAlign: 'left' }}>
-                Top rival
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading
-              ? Array.from({ length: 6 }).map((_, i) => (
-                  <tr key={i} style={{ borderBottom: '1px solid #F2EDE6' }}>
-                    {Array.from({ length: 8 }).map((__, j) => (
-                      <td key={j} className="px-4 py-4">
-                        <Skeleton className="h-4" />
-                      </td>
-                    ))}
-                  </tr>
-                ))
-              : sorted.map((p, i) => {
-                  const paused = p.isPaused
-                  const delta = p.highchartsRatePct - (p.topCompetitor?.ratePct ?? 0)
-                  const isPending =
-                    toggleMutation.isPending && toggleMutation.variables?.query === p.query
-
-                  return (
-                    <tr
-                      key={p.query}
-                      style={{
-                        borderBottom: i < sorted.length - 1 ? '1px solid #F2EDE6' : 'none',
-                        background: paused ? '#FDFCF8' : 'transparent',
-                        opacity: paused ? 0.65 : 1,
-                        transition: 'opacity 0.15s, background 0.15s',
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!paused) (e.currentTarget as HTMLTableRowElement).style.background = '#F7F3EE'
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.currentTarget as HTMLTableRowElement).style.background = paused ? '#FDFCF8' : 'transparent'
-                      }}
-                    >
-                      <td className="px-4 py-3">
-                        <Toggle
-                          active={!paused}
-                          onChange={(v) => toggleMutation.mutate({ query: p.query, active: v })}
-                          disabled={isPending}
-                        />
-                      </td>
-                      <td className="px-4 py-3 text-sm font-medium">
-                        <Link
-                          to={`/prompts/drilldown?query=${encodeURIComponent(p.query)}`}
-                          className="inline-flex items-center gap-1.5"
-                          style={{ color: paused ? '#9AAE9C' : '#2A3A2C' }}
-                        >
-                          <span>{p.query}</span>
-                          <span
-                            className="text-xs"
-                            style={{ color: paused ? '#C8D0C8' : '#8FBB93' }}
-                            aria-hidden
-                          >
-                            ↗
-                          </span>
-                        </Link>
-                      </td>
-                      <td className="px-4 py-3">
-                        <StatusBadge status={p.status} isPaused={paused} />
-                      </td>
-                      <td
-                        className="px-4 py-3 text-right text-sm font-medium tabular-nums"
-                        style={{ color: p.runs > 0 && !paused ? '#2A3A2C' : '#E5DDD0' }}
-                      >
-                        {p.runs > 0 ? p.runs : '–'}
-                      </td>
-                      <td className="px-4 py-3">
-                        {p.status === 'tracked' ? (
-                          <MiniBar pct={p.highchartsRatePct} muted={paused} />
-                        ) : (
-                          <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        {p.status === 'tracked' ? (
-                          <MiniBar pct={p.viabilityRatePct} color="#C8A87A" muted={paused} />
-                        ) : (
-                          <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        {p.status === 'tracked' ? (
-                          <LeadBadge delta={delta} muted={paused} />
-                        ) : (
-                          <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        {p.topCompetitor ? (
-                          <div className="space-y-1">
-                            <div className="text-sm font-medium" style={{ color: paused ? '#9AAE9C' : '#2A3A2C' }}>
-                              {p.topCompetitor.entity}
-                            </div>
-                            <MiniBar pct={p.topCompetitor.ratePct} color="#C8A87A" muted={paused} />
-                          </div>
-                        ) : (
-                          <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
-          </tbody>
-        </table>
-      </div>
-
       {/* ── Section divider ────────────────────────────────────────────────── */}
       <div className="flex items-center gap-4 pt-1">
         <div className="flex-1 h-px" style={{ background: '#DDD0BC' }} />
@@ -714,6 +583,138 @@ export default function Prompts() {
           </div>
         </>
       )}
+
+      {/* ── Prompts data grid ──────────────────────────────────────────────── */}
+      <div
+        className="rounded-xl border shadow-sm overflow-hidden"
+        style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
+      >
+        <div
+          className="px-4 py-2.5 text-xs"
+          style={{ color: '#9AAE9C', background: '#FDFCF8', borderBottom: '1px solid #F2EDE6' }}
+        >
+          Click a query to open its drilldown dashboard.
+        </div>
+        <table className="w-full border-collapse">
+          <thead>
+            <tr style={{ borderBottom: '1px solid #F2EDE6', background: '#FDFCF8' }}>
+              <th className="px-4 py-3" style={{ width: 48 }} />
+              <SortTh label="Query" col="query" current={sortKey} dir={sortDir} onSort={handleSort} />
+              <SortTh label="Status" col="status" current={sortKey} dir={sortDir} onSort={handleSort} width="130px" />
+              <SortTh label="Runs" col="runs" current={sortKey} dir={sortDir} align="right" onSort={handleSort} width="60px" />
+              <SortTh label="Highcharts %" col="highchartsRatePct" current={sortKey} dir={sortDir} onSort={handleSort} width="148px" />
+              <SortTh label="Viability %" col="viabilityRatePct" current={sortKey} dir={sortDir} onSort={handleSort} width="148px" />
+              <SortTh label="Lead" col="lead" current={sortKey} dir={sortDir} onSort={handleSort} width="80px" />
+              <th className="px-4 py-3 text-xs font-medium" style={{ color: '#7A8E7C', textAlign: 'left' }}>
+                Top rival
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading
+              ? Array.from({ length: 6 }).map((_, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid #F2EDE6' }}>
+                    {Array.from({ length: 8 }).map((__, j) => (
+                      <td key={j} className="px-4 py-4">
+                        <Skeleton className="h-4" />
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              : sorted.map((p, i) => {
+                  const paused = p.isPaused
+                  const delta = p.highchartsRatePct - (p.topCompetitor?.ratePct ?? 0)
+                  const isPending =
+                    toggleMutation.isPending && toggleMutation.variables?.query === p.query
+
+                  return (
+                    <tr
+                      key={p.query}
+                      style={{
+                        borderBottom: i < sorted.length - 1 ? '1px solid #F2EDE6' : 'none',
+                        background: paused ? '#FDFCF8' : 'transparent',
+                        opacity: paused ? 0.65 : 1,
+                        transition: 'opacity 0.15s, background 0.15s',
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!paused) (e.currentTarget as HTMLTableRowElement).style.background = '#F7F3EE'
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLTableRowElement).style.background = paused ? '#FDFCF8' : 'transparent'
+                      }}
+                    >
+                      <td className="px-4 py-3">
+                        <Toggle
+                          active={!paused}
+                          onChange={(v) => toggleMutation.mutate({ query: p.query, active: v })}
+                          disabled={isPending}
+                        />
+                      </td>
+                      <td className="px-4 py-3 text-sm font-medium">
+                        <Link
+                          to={`/prompts/drilldown?query=${encodeURIComponent(p.query)}`}
+                          className="inline-flex items-center gap-1.5"
+                          style={{ color: paused ? '#9AAE9C' : '#2A3A2C' }}
+                        >
+                          <span>{p.query}</span>
+                          <span
+                            className="text-xs"
+                            style={{ color: paused ? '#C8D0C8' : '#8FBB93' }}
+                            aria-hidden
+                          >
+                            ↗
+                          </span>
+                        </Link>
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatusBadge status={p.status} isPaused={paused} />
+                      </td>
+                      <td
+                        className="px-4 py-3 text-right text-sm font-medium tabular-nums"
+                        style={{ color: p.runs > 0 && !paused ? '#2A3A2C' : '#E5DDD0' }}
+                      >
+                        {p.runs > 0 ? p.runs : '–'}
+                      </td>
+                      <td className="px-4 py-3">
+                        {p.status === 'tracked' ? (
+                          <MiniBar pct={p.highchartsRatePct} muted={paused} />
+                        ) : (
+                          <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {p.status === 'tracked' ? (
+                          <MiniBar pct={p.viabilityRatePct} color="#C8A87A" muted={paused} />
+                        ) : (
+                          <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {p.status === 'tracked' ? (
+                          <LeadBadge delta={delta} muted={paused} />
+                        ) : (
+                          <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {p.topCompetitor ? (
+                          <div className="space-y-1">
+                            <div className="text-sm font-medium" style={{ color: paused ? '#9AAE9C' : '#2A3A2C' }}>
+                              {p.topCompetitor.entity}
+                            </div>
+                            <MiniBar pct={p.topCompetitor.ratePct} color="#C8A87A" muted={paused} />
+                          </div>
+                        ) : (
+                          <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+          </tbody>
+        </table>
+      </div>
+
     </div>
   )
 }

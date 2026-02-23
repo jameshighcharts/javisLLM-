@@ -34,18 +34,32 @@ function getAuthToken(req) {
 }
 
 function getClientIp(req) {
-  const forwardedFor =
-    req.headers['x-forwarded-for'] || req.headers['X-Forwarded-For']
-  if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
-    const first = forwardedFor.split(',')[0].trim()
+  const realIp = req.headers['x-real-ip'] || req.headers['X-Real-IP']
+  if (typeof realIp === 'string' && realIp.trim()) {
+    return realIp.trim()
+  }
+
+  const vercelForwardedFor =
+    req.headers['x-vercel-forwarded-for'] || req.headers['X-Vercel-Forwarded-For']
+  if (typeof vercelForwardedFor === 'string' && vercelForwardedFor.trim()) {
+    const first = vercelForwardedFor.split(',')[0].trim()
     if (first) {
       return first
     }
   }
 
-  const realIp = req.headers['x-real-ip'] || req.headers['X-Real-IP']
-  if (typeof realIp === 'string' && realIp.trim()) {
-    return realIp.trim()
+  const trustForwardedFor = String(process.env.TRUST_X_FORWARDED_FOR || '')
+    .trim()
+    .toLowerCase()
+  if (trustForwardedFor === 'true') {
+    const forwardedFor =
+      req.headers['x-forwarded-for'] || req.headers['X-Forwarded-For']
+    if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
+      const first = forwardedFor.split(',')[0].trim()
+      if (first) {
+        return first
+      }
+    }
   }
 
   if (typeof req.socket?.remoteAddress === 'string' && req.socket.remoteAddress) {

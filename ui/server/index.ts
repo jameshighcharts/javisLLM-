@@ -40,9 +40,94 @@ const toggleSchema = z.object({
 });
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+app.disable("x-powered-by");
 const isProduction = process.env.NODE_ENV === "production";
+const configuredCorsOrigins = String(process.env.UI_API_ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const allowedCorsOrigins =
+  configuredCorsOrigins.length > 0
+    ? configuredCorsOrigins
+    : [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+      ];
+const writeToken = String(process.env.UI_API_WRITE_TOKEN ?? "").trim();
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+      callback(null, allowedCorsOrigins.includes(origin));
+    },
+    methods: ["GET", "POST", "PUT", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-UI-Token"],
+  }),
+);
+app.use(express.json({ limit: "2mb" }));
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none';");
+  next();
+});
+
+function getRequestToken(req: express.Request): string {
+  const auth = req.headers.authorization ?? req.headers.Authorization;
+  if (typeof auth === "string" && auth.startsWith("Bearer ")) {
+    return auth.slice("Bearer ".length).trim();
+  }
+  const headerToken = req.headers["x-ui-token"] ?? req.headers["X-UI-Token"];
+  if (typeof headerToken === "string") {
+    return headerToken.trim();
+  }
+  return "";
+}
+
+function isLocalhostRequest(req: express.Request): boolean {
+  const remote = req.socket.remoteAddress;
+  return (
+    remote === "127.0.0.1" ||
+    remote === "::1" ||
+    remote === "::ffff:127.0.0.1" ||
+    remote === "localhost"
+  );
+}
+
+function requireWriteAccess(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+) {
+  if (writeToken) {
+    const provided = getRequestToken(req);
+    if (!provided || provided !== writeToken) {
+      res.status(401).json({ error: "Unauthorized." });
+      return;
+    }
+    next();
+    return;
+  }
+
+  if (isProduction) {
+    res.status(500).json({ error: "Internal server error." });
+    return;
+  }
+
+  if (!isLocalhostRequest(req)) {
+    res.status(401).json({ error: "Unauthorized." });
+    return;
+  }
+
+  next();
+}
 
 function sendApiError(
   res: express.Response,
@@ -196,7 +281,7 @@ app.get("/api/config", async (_req, res) => {
   }
 });
 
-app.put("/api/config", async (req, res) => {
+app.put("/api/config", requireWriteAccess, async (req, res) => {
   try {
     const parsed = configSchema.parse(req.body);
     const normalized = normalizeConfig(parsed);
@@ -222,7 +307,7 @@ app.put("/api/config", async (req, res) => {
   }
 });
 
-app.patch("/api/prompts/toggle", async (req, res) => {
+app.patch("/api/prompts/toggle", requireWriteAccess, async (req, res) => {
   try {
     const { query, active } = toggleSchema.parse(req.body);
     const raw = await fs.readFile(configPath, "utf8");

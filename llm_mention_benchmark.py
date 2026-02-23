@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
-DEFAULT_OUTPUT_DIR = Path("/Users/jamesm/projects/easy_llm_benchmarker/output")
+DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 DEFAULT_CONFIG_PATH = (
     Path(__file__).resolve().parent / "config" / "benchmark_config.json"
 )

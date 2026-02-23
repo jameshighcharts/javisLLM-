@@ -3,10 +3,11 @@
  *
  * Expected POST JSON body:
  * {
- *   "secret": "...",
  *   "sheet_name": "Sheet1",
  *   "run_month": "2026-02",
  *   "run_id": "uuid",
+ *   "ts": "1700000000",
+ *   "sig": "hex_hmac_sha256",
  *   "headers": ["col1", "col2", ...],
  *   "rows": [["v1", "v2", ...], ...]
  * }
@@ -31,11 +32,12 @@ function doPost(e) {
         message: "WEBAPP_SECRET not configured in Script Properties",
       });
     }
-    if (String(body.secret || "") !== String(expectedSecret)) {
+    var authCheck = verifySignedRequest_(body, expectedSecret);
+    if (!authCheck.ok) {
       return json_({
         status: "error",
         rows_appended: 0,
-        message: "Invalid secret",
+        message: authCheck.message,
       });
     }
 
@@ -159,6 +161,90 @@ function sameHeaders_(left, right) {
     }
   }
   return true;
+}
+
+function verifySignedRequest_(body, secret) {
+  var tsRaw = String(body.ts || "").trim();
+  var sig = String(body.sig || "").trim().toLowerCase();
+  if (!tsRaw || !sig) {
+    return { ok: false, message: "Missing signature fields" };
+  }
+  if (!/^\d+$/.test(tsRaw)) {
+    return { ok: false, message: "Invalid timestamp format" };
+  }
+
+  var ts = Number(tsRaw);
+  if (!isFinite(ts)) {
+    return { ok: false, message: "Invalid timestamp" };
+  }
+
+  var now = Math.floor(Date.now() / 1000);
+  var maxSkewSeconds = 5 * 60;
+  if (Math.abs(now - ts) > maxSkewSeconds) {
+    return { ok: false, message: "Request timestamp expired" };
+  }
+
+  var signingMessage = buildSigningMessage_(body, tsRaw);
+  var expectedSig = hmacSha256Hex_(secret, signingMessage);
+  if (!constantTimeEquals_(sig, expectedSig)) {
+    return { ok: false, message: "Invalid signature" };
+  }
+
+  return { ok: true, message: "" };
+}
+
+function buildSigningMessage_(body, tsRaw) {
+  var headersJson = JSON.stringify(body.headers || []);
+  var rowsJson = JSON.stringify(body.rows || []);
+  var bodyHash = sha256Hex_(headersJson + "\n" + rowsJson);
+  return [
+    String(body.sheet_name || "Sheet1"),
+    String(body.run_month || "").trim(),
+    String(body.run_id || "").trim(),
+    bodyHash,
+    String(tsRaw || "").trim(),
+  ].join("\n");
+}
+
+function sha256Hex_(value) {
+  var digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    String(value),
+    Utilities.Charset.UTF_8
+  );
+  return bytesToHex_(digest);
+}
+
+function hmacSha256Hex_(secret, message) {
+  var digest = Utilities.computeHmacSha256Signature(
+    String(message),
+    String(secret),
+    Utilities.Charset.UTF_8
+  );
+  return bytesToHex_(digest);
+}
+
+function bytesToHex_(bytes) {
+  return bytes
+    .map(function (value) {
+      var normalized = value < 0 ? value + 256 : value;
+      var hex = normalized.toString(16);
+      return hex.length === 1 ? "0" + hex : hex;
+    })
+    .join("");
+}
+
+function constantTimeEquals_(left, right) {
+  var a = String(left || "");
+  var b = String(right || "");
+  if (a.length !== b.length) {
+    return false;
+  }
+  var mismatch = 0;
+  for (var i = 0; i < a.length; i += 1) {
+    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return mismatch === 0;
 }
 
 function json_(payload) {

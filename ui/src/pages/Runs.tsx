@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { api } from '../api'
 import type { BenchmarkWorkflowRun } from '../types'
 
@@ -78,19 +78,6 @@ export default function Runs() {
   const [runMonth, setRunMonth] = useState('')
   const [triggerToken, setTriggerToken] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
-
-  useEffect(() => {
-    const saved = window.sessionStorage.getItem('benchmark_trigger_token')
-    if (saved) setTriggerToken(saved)
-  }, [])
-
-  useEffect(() => {
-    if (triggerToken.trim()) {
-      window.sessionStorage.setItem('benchmark_trigger_token', triggerToken.trim())
-    } else {
-      window.sessionStorage.removeItem('benchmark_trigger_token')
-    }
-  }, [triggerToken])
 
   const runsQuery = useQuery({
     queryKey: ['benchmark-runs', triggerToken],

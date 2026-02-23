@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import hmac
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -108,7 +111,6 @@ def read_csv_payload(path: Path) -> Dict[str, Any]:
 
 def build_request_payload(
     csv_payload: Dict[str, Any],
-    secret: str,
     sheet_name: str,
     run_month: str,
     run_id: str,
@@ -122,7 +124,6 @@ def build_request_payload(
         raise RuntimeError("run_id missing in args and CSV.")
 
     return {
-        "secret": secret,
         "sheet_name": sheet_name,
         "run_month": effective_run_month,
         "run_id": effective_run_id,
@@ -131,8 +132,33 @@ def build_request_payload(
     }
 
 
-def post_payload(url: str, payload: Dict[str, Any], timeout: int) -> Dict[str, Any]:
-    body = json.dumps(payload).encode("utf-8")
+def build_signature_payload(payload: Dict[str, Any], secret: str) -> Dict[str, Any]:
+    timestamp = str(int(time.time()))
+    headers_json = json.dumps(
+        payload.get("headers", []), separators=(",", ":"), ensure_ascii=False
+    )
+    rows_json = json.dumps(
+        payload.get("rows", []), separators=(",", ":"), ensure_ascii=False
+    )
+    body_hash = hashlib.sha256(f"{headers_json}\n{rows_json}".encode("utf-8")).hexdigest()
+    signing_message = "\n".join(
+        [
+            str(payload.get("sheet_name", "")),
+            str(payload.get("run_month", "")),
+            str(payload.get("run_id", "")),
+            body_hash,
+            timestamp,
+        ]
+    )
+    signature = hmac.new(
+        secret.encode("utf-8"), signing_message.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return {**payload, "ts": timestamp, "sig": signature}
+
+
+def post_payload(url: str, payload: Dict[str, Any], timeout: int, secret: str) -> Dict[str, Any]:
+    signed_payload = build_signature_payload(payload, secret)
+    body = json.dumps(signed_payload).encode("utf-8")
     request = urllib.request.Request(
         url=url,
         data=body,
@@ -170,7 +196,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     csv_payload = read_csv_payload(csv_path)
     payload = build_request_payload(
         csv_payload=csv_payload,
-        secret=args.secret,
         sheet_name=args.sheet_name,
         run_month=args.run_month.strip(),
         run_id=args.run_id.strip(),
@@ -196,7 +221,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.secret:
         raise RuntimeError("--secret is required (or set GSHEET_WEBAPP_SECRET).")
 
-    result = post_payload(url=args.url, payload=payload, timeout=args.timeout)
+    result = post_payload(url=args.url, payload=payload, timeout=args.timeout, secret=args.secret)
     status = str(result.get("status", "")).strip().lower()
     rows_appended = result.get("rows_appended", 0)
     message = result.get("message", "")

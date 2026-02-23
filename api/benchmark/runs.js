@@ -47,8 +47,15 @@ module.exports = async (req, res) => {
     ) {
       res.setHeader('Retry-After', String(Math.round(Number(error.retryAfterSeconds))))
     }
-    return sendJson(res, statusCode, {
-      error: error instanceof Error ? error.message : String(error),
-    })
+    if (statusCode >= 500) {
+      console.error('[benchmark.runs] request failed', error)
+    }
+    const message =
+      statusCode >= 500
+        ? 'Internal server error.'
+        : error instanceof Error
+          ? error.message
+          : String(error)
+    return sendJson(res, statusCode, { error: message })
   }
 }

@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
+import { useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { api } from '../api'
 
@@ -26,6 +27,16 @@ const NAV = [
     ),
   },
   {
+    to: '/prompt-drilldown',
+    label: 'Prompt Drilldown',
+    icon: (
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h12M4 18h8" />
+        <circle cx="18" cy="18" r="3" />
+      </svg>
+    ),
+  },
+  {
     to: '/runs',
     label: 'Runs',
     icon: (
@@ -45,12 +56,11 @@ const NAV = [
     ),
   },
   {
-    to: '/diagnostics',
-    label: 'Diagnostics',
+    to: '/logics',
+    label: 'Logics',
     icon: (
       <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9 11l3 3L22 4" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 3h6M10 7h4M12 7v5m0 0l-3 3m3-3l3 3M4 21h16" />
       </svg>
     ),
   },
@@ -60,10 +70,10 @@ const PAGE_TITLES: Record<string, string> = {
   '/dashboard': 'Dashboard',
   '/runs': 'Run Benchmarks',
   '/prompts': 'Prompts',
+  '/prompt-drilldown': 'Prompt Drilldown',
   '/prompts/drilldown': 'Prompt Drilldown',
   '/competitors': 'Competitors',
-  '/diagnostics': 'Diagnostics',
-  '/tests': 'Diagnostics',
+  '/logics': 'Logics',
 }
 
 const USING_SUPABASE =
@@ -93,10 +103,90 @@ function ApiStatus() {
 
 export default function Layout({ children }: { children: ReactNode }) {
   const { pathname } = useLocation()
-  const title = PAGE_TITLES[pathname] ?? 'LLM Benchmarker'
+  const title = PAGE_TITLES[pathname] ?? 'Javis'
+  const [iconOpen, setIconOpen] = useState(false)
+  const [clickCount, setClickCount] = useState(0)
+  const videoRef = useRef<HTMLVideoElement>(null)
+
+  const videoSrc = clickCount % 2 === 0 ? '/video.mp4' : '/video2.mp4'
+
+  function openVideo() {
+    setClickCount((c) => c + 1)
+    setIconOpen(true)
+    setTimeout(() => videoRef.current?.play(), 50)
+  }
+
+  function closeVideo() {
+    setIconOpen(false)
+    if (videoRef.current) {
+      videoRef.current.pause()
+      videoRef.current.currentTime = 0
+    }
+  }
 
   return (
     <div className="flex h-screen overflow-hidden">
+      {/* Icon lightbox */}
+      <div
+        onClick={closeVideo}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 50,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'rgba(0,0,0,0.6)',
+          backdropFilter: 'blur(8px)',
+          opacity: iconOpen ? 1 : 0,
+          pointerEvents: iconOpen ? 'auto' : 'none',
+          transition: 'opacity 0.2s ease',
+        }}
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'relative',
+            borderRadius: 20,
+            overflow: 'hidden',
+            boxShadow: '0 32px 80px rgba(0,0,0,0.5)',
+            transform: iconOpen ? 'scale(1)' : 'scale(0.85)',
+            opacity: iconOpen ? 1 : 0,
+            transition: 'transform 0.25s cubic-bezier(0.34,1.56,0.64,1), opacity 0.2s ease',
+          }}
+        >
+          <video
+            ref={videoRef}
+            src={videoSrc}
+            poster="/app-icon.jpg"
+            controls
+            style={{ display: 'block', width: 480, maxWidth: '90vw' }}
+          />
+          <button
+            onClick={closeVideo}
+            style={{
+              position: 'absolute',
+              top: 10,
+              right: 10,
+              width: 28,
+              height: 28,
+              borderRadius: '50%',
+              background: 'rgba(0,0,0,0.45)',
+              color: '#fff',
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: 16,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontWeight: 600,
+            }}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+      </div>
       {/* Sidebar — deep sage shell */}
       <aside
         className="flex flex-col w-[240px] flex-shrink-0"
@@ -107,16 +197,27 @@ export default function Layout({ children }: { children: ReactNode }) {
           className="flex items-center gap-3 px-4 h-14 flex-shrink-0"
           style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}
         >
-          <div
-            className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0"
-            style={{ background: '#4A6B4E', border: '1px solid rgba(255,255,255,0.12)', overflow: 'hidden' }}
+          <button
+            type="button"
+            onClick={openVideo}
+            className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0 transition-opacity"
+            style={{
+              background: '#4A6B4E',
+              border: '1px solid rgba(255,255,255,0.12)',
+              overflow: 'hidden',
+              cursor: 'pointer',
+              padding: 0,
+            }}
+            onMouseEnter={(e) => ((e.currentTarget as HTMLButtonElement).style.opacity = '0.8')}
+            onMouseLeave={(e) => ((e.currentTarget as HTMLButtonElement).style.opacity = '1')}
+            aria-label="View app icon"
           >
             <img
               src="/app-icon.jpg"
               alt="App icon"
               className="w-full h-full object-cover"
             />
-          </div>
+          </button>
           <div>
             <div className="text-[13px] font-semibold leading-snug tracking-tight" style={{ color: '#FEFAE8' }}>Javis</div>
             <div className="text-[10px] leading-snug" style={{ color: '#5A7A5E' }}>The Ai Visability Tracker</div>
