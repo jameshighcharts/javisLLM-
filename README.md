@@ -50,7 +50,7 @@ In Vercel Project Settings -> Environment Variables, set:
 - `GITHUB_TOKEN` (PAT with `repo` + `workflow` access to this repo)
 - `GITHUB_OWNER` (e.g. `jameshighcharts`)
 - `GITHUB_REPO` (e.g. `javisLLM-`)
-- `BENCHMARK_TRIGGER_TOKEN` (required; bearer token for `/api/benchmark/*` and `/api/prompt-lab/*`)
+- `BENCHMARK_TRIGGER_TOKEN` (required; bearer token for `/api/benchmark/*`)
 - Optional: `GITHUB_WORKFLOW_FILE` (default: `run-benchmark.yml`)
 - Optional: `GITHUB_WORKFLOW_REF` (default: `main`)
 - Optional hardening:
@@ -84,7 +84,7 @@ To run a one-off prompt test in Query Lab, open `/prompts`:
 - Uses `/api/prompt-lab/run` (OpenAI Responses API)
 - Uses selected model + web search toggle
 - Displays mention detection across tracked entities
-- Requires the same trigger token input used for `/runs`
+- No trigger token required
 
 ### GitHub Actions secrets (required for `/runs`)
 

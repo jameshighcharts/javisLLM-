@@ -14,7 +14,7 @@ OPENAI_API_KEY=required-for-local-query-lab
 
 When these vars are set, the UI reads/writes prompts/competitors directly in Supabase.
 If missing, it falls back to `/api/*`.
-Run/Prompt-Lab trigger auth uses a token field in the UI and stores it in browser session storage.
+Run trigger auth uses a token field in the UI and stores it in browser session storage.
 
 ## Local run
 

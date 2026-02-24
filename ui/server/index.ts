@@ -662,7 +662,7 @@ app.patch("/api/prompts/toggle", requireWriteAccess, async (req, res) => {
   }
 });
 
-app.post("/api/prompt-lab/run", requireWriteAccess, async (req, res) => {
+app.post("/api/prompt-lab/run", async (req, res) => {
   try {
     const parsed = promptLabRunSchema.parse(req.body ?? {});
     const query = parsed.query.trim();

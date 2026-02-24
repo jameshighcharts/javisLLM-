@@ -805,11 +805,9 @@ function detectMentions(
 function QueryLab({
   trackedEntities,
   aliasesByEntity,
-  triggerToken,
 }: {
   trackedEntities: string[]
   aliasesByEntity: Record<string, string[]>
-  triggerToken: string
 }) {
   const [queryText, setQueryText] = useState('')
   const [status, setStatus] = useState<LabStatus>('idle')
@@ -822,11 +820,8 @@ function QueryLab({
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const aliasLookup = useMemo(() => buildAliasLookup(aliasesByEntity), [aliasesByEntity])
-  const normalizedTriggerToken = triggerToken.trim()
-  const hasTriggerToken = normalizedTriggerToken.length > 0
 
   const canRun =
-    hasTriggerToken &&
     queryText.trim().length > 0 &&
     status !== 'running'
 
@@ -853,7 +848,7 @@ function QueryLab({
         query: queryText.trim(),
         model,
         webSearch,
-      }, normalizedTriggerToken)
+      })
       const responseText =
         result.responseText.trim() || 'Model returned an empty response.'
       const detected = detectMentions(responseText, trackedEntities, aliasLookup)
@@ -1014,19 +1009,6 @@ function QueryLab({
               )}
             </button>
           </div>
-
-          {!hasTriggerToken && (
-            <div
-              className="rounded-lg px-2.5 py-2 text-xs"
-              style={{
-                background: '#FFF8EE',
-                border: '1px solid #F2D4AA',
-                color: '#8A5A21',
-              }}
-            >
-              Enter a trigger token above to run Query Lab.
-            </div>
-          )}
         </div>
 
         {/* ── Right: response / idle / running ── */}
@@ -1537,7 +1519,7 @@ export default function Prompts() {
           </button>
         </div>
         <p className="mt-2 text-xs" style={{ color: '#9AAE9C' }}>
-          Used for Query Lab and Save &amp; Run. Stored in this browser session only.
+          Used for Save &amp; Run benchmark workflow only. Query Lab does not require it.
         </p>
       </div>
 
@@ -1545,7 +1527,6 @@ export default function Prompts() {
       <QueryLab
         trackedEntities={competitors}
         aliasesByEntity={configQuery.data?.config.aliases ?? {}}
-        triggerToken={triggerToken}
       />
 
       {/* ── Section divider ────────────────────────────────────────────────── */}

@@ -1,6 +1,5 @@
 const {
   enforceRateLimit,
-  enforceTriggerToken,
 } = require("../_github")
 
 const OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses"
@@ -254,7 +253,6 @@ module.exports = async (req, res) => {
       windowMs: rateLimitWindowMs,
     })
 
-    enforceTriggerToken(req)
     const body = parseBody(req)
     const query = resolveQuery(body.query)
     const allowedModels = getAllowedModels()

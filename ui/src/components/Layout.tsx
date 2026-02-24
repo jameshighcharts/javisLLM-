@@ -47,7 +47,6 @@ const NAV: NavItem[] = [
     ),
     children: [
       { to: '/okr/kr-2-1', label: 'Key Result 2.1' },
-      { to: '/okr/kr-2-3', label: 'Key Result 2.3' },
     ],
   },
   {
