@@ -1,8 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api'
-import type { BenchmarkConfig, DashboardResponse, PromptStatus } from '../types'
+import type {
+  BenchmarkConfig,
+  BenchmarkWorkflowRun,
+  DashboardResponse,
+  PromptStatus,
+} from '../types'
 
 // ── Toggle Switch ─────────────────────────────────────────────────────────────
 
@@ -626,6 +631,7 @@ function TagInput({
 
 export default function Prompts() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
 
   // ── Dashboard data (grid) ─────────────────────────────────────────────────
   const { data, isLoading, isError, error } = useQuery({
@@ -708,6 +714,11 @@ export default function Prompts() {
   const [dirty, setDirty] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [saveErr, setSaveErr] = useState<string | null>(null)
+  const [saveAndRunPending, setSaveAndRunPending] = useState(false)
+  const [runNotice, setRunNotice] = useState<{
+    type: 'idle' | 'running' | 'success' | 'error'
+    text: string
+  }>({ type: 'idle', text: '' })
 
   useEffect(() => {
     if (configQuery.data) {
@@ -719,16 +730,18 @@ export default function Prompts() {
     }
   }, [configQuery.data])
 
+  function applySavedConfig(updated: Awaited<ReturnType<typeof api.updateConfig>>) {
+    qc.setQueryData(['config'], updated)
+    qc.invalidateQueries({ queryKey: ['dashboard'] })
+    setDirty(false)
+    setSaveErr(null)
+    setSaveSuccess(true)
+    setTimeout(() => setSaveSuccess(false), 3000)
+  }
+
   const configMutation = useMutation({
     mutationFn: (cfg: BenchmarkConfig) => api.updateConfig(cfg),
-    onSuccess: (updated) => {
-      qc.setQueryData(['config'], updated)
-      qc.invalidateQueries({ queryKey: ['dashboard'] })
-      setDirty(false)
-      setSaveErr(null)
-      setSaveSuccess(true)
-      setTimeout(() => setSaveSuccess(false), 3000)
-    },
+    onSuccess: (updated) => applySavedConfig(updated),
     onError: (e) => setSaveErr((e as Error).message),
   })
 
@@ -760,7 +773,103 @@ export default function Prompts() {
   }
 
   const hasHighcharts = competitors.some((c) => c.toLowerCase() === 'highcharts')
-  const canSave = dirty && !configMutation.isPending && queries.length > 0 && hasHighcharts
+  const canSave =
+    dirty &&
+    !configMutation.isPending &&
+    !saveAndRunPending &&
+    queries.length > 0 &&
+    hasHighcharts
+
+  const configPayload: BenchmarkConfig = {
+    queries,
+    queryTags: normalizeQueryTagsMap(queries, queryTags),
+    competitors,
+    aliases: configQuery.data?.config.aliases ?? {},
+  }
+
+  function sleep(ms: number) {
+    return new Promise<void>((resolve) => {
+      window.setTimeout(resolve, ms)
+    })
+  }
+
+  async function waitForRunCompletion(
+    triggerId: string,
+    initialRun: BenchmarkWorkflowRun | null,
+  ): Promise<BenchmarkWorkflowRun> {
+    let currentRun = initialRun
+    const deadlineMs = Date.now() + 30 * 60 * 1000
+
+    while (Date.now() < deadlineMs) {
+      const runsResponse = await api.benchmarkRuns()
+      const matched =
+        currentRun
+          ? runsResponse.runs.find((run) => run.id === currentRun?.id) ??
+            runsResponse.runs.find((run) => run.title.includes(triggerId))
+          : runsResponse.runs.find((run) => run.title.includes(triggerId))
+
+      if (matched) {
+        currentRun = matched
+      }
+
+      if (currentRun?.status === 'completed') {
+        return currentRun
+      }
+
+      const runLabel = currentRun ? ` · Run #${currentRun.runNumber}` : ''
+      setRunNotice({ type: 'running', text: `Running queries${runLabel}…` })
+      await sleep(3000)
+    }
+
+    throw new Error('Run did not complete in time. Open Runs page to check status.')
+  }
+
+  async function handleSaveAndRun() {
+    if (!canSave) return
+    setSaveErr(null)
+    setSaveAndRunPending(true)
+    setRunNotice({ type: 'running', text: 'Saving changes…' })
+
+    try {
+      const updated = await api.updateConfig(configPayload)
+      applySavedConfig(updated)
+      setRunNotice({ type: 'running', text: 'Starting benchmark run…' })
+
+      const triggerResult = await api.triggerBenchmark({
+        model: 'gpt-4o-mini',
+        runs: 3,
+        temperature: 0.7,
+        webSearch: true,
+        ourTerms: 'Highcharts',
+      })
+
+      const completedRun = await waitForRunCompletion(triggerResult.triggerId, triggerResult.run)
+      const conclusion = (completedRun.conclusion ?? '').toLowerCase()
+      if (conclusion !== 'success') {
+        throw new Error(
+          conclusion
+            ? `Run finished with status: ${conclusion}. Open Runs for details.`
+            : 'Run finished without success. Open Runs for details.',
+        )
+      }
+
+      for (let seconds = 5; seconds >= 1; seconds -= 1) {
+        setRunNotice({
+          type: 'success',
+          text: `Run succeeded. Going to dashboard in ${seconds}s…`,
+        })
+        await sleep(1000)
+      }
+
+      navigate('/dashboard')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setSaveErr(message)
+      setRunNotice({ type: 'error', text: message })
+    } finally {
+      setSaveAndRunPending(false)
+    }
+  }
 
   // ── Error state ───────────────────────────────────────────────────────────
   if (isError) {
@@ -947,14 +1056,46 @@ export default function Prompts() {
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() =>
-                configMutation.mutate({
-                  queries,
-                  queryTags: normalizeQueryTagsMap(queries, queryTags),
-                  competitors,
-                  aliases: configQuery.data?.config.aliases ?? {},
-                })
-              }
+              onClick={() => { void handleSaveAndRun() }}
+              disabled={!canSave}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+              style={{
+                background: canSave ? '#2A6032' : '#E8E0D2',
+                color: canSave ? '#FFFFFF' : '#9AAE9C',
+                cursor: canSave ? 'pointer' : 'not-allowed',
+                boxShadow: canSave ? '0 1px 8px rgba(42,96,50,0.28)' : 'none',
+                border: `1.5px solid ${canSave ? '#1E4A26' : 'transparent'}`,
+              }}
+            >
+              {saveAndRunPending ? (
+                <>
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    style={{ animation: 'spin-prompts-save-run 0.9s linear infinite' }}
+                  >
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                  </svg>
+                  Saving &amp; Running…
+                </>
+              ) : (
+                <>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill={canSave ? 'white' : '#9AAE9C'} stroke="none">
+                    <polygon points="5,3 19,12 5,21" />
+                  </svg>
+                  Save &amp; Run
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => configMutation.mutate(configPayload)}
               disabled={!canSave}
               className="px-5 py-2 rounded-lg text-sm font-semibold transition-all"
               style={{
@@ -995,6 +1136,60 @@ export default function Prompts() {
               <span className="text-sm" style={{ color: '#dc2626' }}>{saveErr}</span>
             )}
           </div>
+          {runNotice.type !== 'idle' && (
+            <div
+              className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium"
+              style={{
+                background:
+                  runNotice.type === 'error'
+                    ? '#fef2f2'
+                    : runNotice.type === 'success'
+                      ? '#ecfdf3'
+                      : '#ecfdf3',
+                border:
+                  runNotice.type === 'error'
+                    ? '1px solid #fecaca'
+                    : runNotice.type === 'success'
+                      ? '1px solid #86efac'
+                      : '1px solid #bbf7d0',
+                color:
+                  runNotice.type === 'error'
+                    ? '#991b1b'
+                    : runNotice.type === 'success'
+                      ? '#166534'
+                      : '#166534',
+              }}
+            >
+              {runNotice.type === 'running' && (
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  style={{ animation: 'spin-prompts-save-run 0.9s linear infinite' }}
+                >
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+              )}
+              {runNotice.type === 'success' && (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              )}
+              {runNotice.type === 'error' && (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="8" x2="12" y2="12" />
+                  <line x1="12" y1="16" x2="12.01" y2="16" />
+                </svg>
+              )}
+              {runNotice.text}
+            </div>
+          )}
+          <style>{`@keyframes spin-prompts-save-run { to { transform: rotate(360deg); } }`}</style>
         </>
       )}
 
