@@ -677,7 +677,6 @@ export default function Prompts() {
   }
 
   const prompts = data?.promptStatus ?? []
-  const trackedCount = prompts.filter((p) => p.status === 'tracked' && !p.isPaused).length
   const pausedCount = prompts.filter((p) => p.isPaused).length
 
   const sorted = useMemo(() => {
@@ -885,29 +884,6 @@ export default function Prompts() {
 
   return (
     <div className="max-w-[1360px] space-y-5">
-
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div className="flex items-end justify-between">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight" style={{ color: '#2A3A2C' }}>
-            Prompts
-          </h2>
-          <p className="text-sm mt-0.5" style={{ color: '#7A8E7C' }}>
-            {isLoading
-              ? 'Loading…'
-              : `${trackedCount} tracked · ${pausedCount} paused · ${prompts.length} total`}
-          </p>
-        </div>
-        {pausedCount > 0 && !isLoading && (
-          <span
-            className="text-xs px-2.5 py-1 rounded-full font-medium"
-            style={{ background: '#F2EDE6', color: '#9AAE9C', border: '1px solid #DDD0BC' }}
-          >
-            {pausedCount} paused — excluded from next run
-          </span>
-        )}
-      </div>
-
       {/* ── Section divider ────────────────────────────────────────────────── */}
       <div className="flex items-center gap-4 pt-1">
         <div className="flex-1 h-px" style={{ background: '#DDD0BC' }} />

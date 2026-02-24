@@ -139,9 +139,6 @@ export default function Runs() {
         <h2 className="text-2xl font-bold tracking-tight" style={{ color: '#2A3A2C' }}>
           Run Benchmarks
         </h2>
-        <p className="text-sm mt-0.5" style={{ color: '#7A8E7C' }}>
-          Launch prompts + scoring pipeline. Results sync to Supabase and show up in Dashboard.
-        </p>
       </div>
 
       <div className="grid grid-cols-3 gap-4">
