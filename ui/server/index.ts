@@ -41,6 +41,20 @@ const toggleSchema = z.object({
   active: z.boolean(),
 });
 
+const PROMPT_LAB_DEFAULT_MODEL = "gpt-4o-mini";
+const PROMPT_LAB_FALLBACK_MODELS = [PROMPT_LAB_DEFAULT_MODEL, "gpt-4o"];
+const PROMPT_LAB_SYSTEM_PROMPT =
+  "You are a helpful assistant. Answer with concise bullets and include direct library names.";
+const PROMPT_LAB_USER_PROMPT_TEMPLATE =
+  "Query: {query}\nList relevant libraries/tools with a short rationale for each in bullet points.";
+const OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses";
+
+const promptLabRunSchema = z.object({
+  query: z.string().min(1).max(600),
+  model: z.string().min(1).max(100).optional(),
+  webSearch: z.boolean().optional(),
+});
+
 const app = express();
 app.disable("x-powered-by");
 const isProduction = process.env.NODE_ENV === "production";
@@ -272,6 +286,183 @@ function splitCsvish(value: string): string[] {
     .filter(Boolean);
 }
 
+function getPromptLabAllowedModels(): string[] {
+  const configured = String(process.env.BENCHMARK_ALLOWED_MODELS ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return configured.length > 0 ? configured : PROMPT_LAB_FALLBACK_MODELS;
+}
+
+function resolvePromptLabModel(modelInput: string, allowedModels: string[]): string {
+  const normalizedMap = new Map(allowedModels.map((name) => [name.toLowerCase(), name]));
+  const resolved = normalizedMap.get(modelInput.toLowerCase());
+  if (!resolved) {
+    const error = new Error(
+      `Unsupported model "${modelInput}". Allowed models: ${allowedModels.join(", ")}`,
+    ) as Error & { statusCode?: number };
+    error.statusCode = 400;
+    throw error;
+  }
+  return resolved;
+}
+
+function extractPromptLabResponseText(responsePayload: Record<string, unknown>): string {
+  const outputText = responsePayload.output_text;
+  if (typeof outputText === "string" && outputText.trim()) {
+    return outputText.trim();
+  }
+
+  const texts: string[] = [];
+  const outputItems = Array.isArray(responsePayload.output) ? responsePayload.output : [];
+  for (const outputItem of outputItems) {
+    if (!outputItem || typeof outputItem !== "object") {
+      continue;
+    }
+    const contentItems = Array.isArray((outputItem as { content?: unknown }).content)
+      ? (outputItem as { content: unknown[] }).content
+      : [];
+    for (const content of contentItems) {
+      if (!content || typeof content !== "object") {
+        continue;
+      }
+      const text = (content as { text?: unknown }).text;
+      if (typeof text === "string" && text.trim()) {
+        texts.push(text.trim());
+      }
+    }
+  }
+
+  return texts.join("\n").trim();
+}
+
+function extractPromptLabCitations(responsePayload: Record<string, unknown>): string[] {
+  const citations: string[] = [];
+  const seen = new Set<string>();
+
+  const appendCitation = (candidate: unknown) => {
+    if (!candidate || typeof candidate !== "object") {
+      return;
+    }
+    const entry = candidate as { url?: unknown; uri?: unknown; href?: unknown; source?: unknown };
+    const urlValue = [entry.url, entry.uri, entry.href, entry.source].find(
+      (value) => typeof value === "string" && value.trim(),
+    );
+    if (typeof urlValue !== "string") return;
+    const normalized = urlValue.trim();
+    if (seen.has(normalized)) return;
+    seen.add(normalized);
+    citations.push(normalized);
+  };
+
+  for (const key of ["citations", "sources", "references"] as const) {
+    const topLevelValue = responsePayload[key];
+    if (Array.isArray(topLevelValue)) {
+      for (const item of topLevelValue) {
+        appendCitation(item);
+      }
+    }
+  }
+
+  const outputItems = Array.isArray(responsePayload.output) ? responsePayload.output : [];
+  for (const outputItem of outputItems) {
+    if (!outputItem || typeof outputItem !== "object") continue;
+    const contentItems = Array.isArray((outputItem as { content?: unknown }).content)
+      ? (outputItem as { content: unknown[] }).content
+      : [];
+    for (const content of contentItems) {
+      if (!content || typeof content !== "object") continue;
+
+      const contentCitations = (content as { citations?: unknown }).citations;
+      if (Array.isArray(contentCitations)) {
+        for (const citation of contentCitations) {
+          appendCitation(citation);
+        }
+      }
+
+      const annotations = (content as { annotations?: unknown }).annotations;
+      if (!Array.isArray(annotations)) continue;
+      for (const annotation of annotations) {
+        if (!annotation || typeof annotation !== "object") continue;
+        appendCitation(annotation);
+        const nested = (annotation as { url_citation?: unknown }).url_citation;
+        appendCitation(nested);
+      }
+    }
+  }
+
+  return citations;
+}
+
+async function runPromptLabQuery(
+  query: string,
+  model: string,
+  webSearch: boolean,
+): Promise<{ responseText: string; citations: string[] }> {
+  const apiKey = String(process.env.OPENAI_API_KEY ?? "").trim();
+  if (!apiKey) {
+    const error = new Error("Prompt lab is not configured on the server.") as Error & {
+      statusCode?: number;
+    };
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const body: Record<string, unknown> = {
+    model,
+    temperature: 0.7,
+    input: [
+      { role: "system", content: PROMPT_LAB_SYSTEM_PROMPT },
+      {
+        role: "user",
+        content: PROMPT_LAB_USER_PROMPT_TEMPLATE.replace("{query}", query),
+      },
+    ],
+  };
+  if (webSearch) {
+    body.tools = [{ type: "web_search_preview" }];
+  }
+
+  const upstreamResponse = await fetch(OPENAI_RESPONSES_API_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const raw = await upstreamResponse.text();
+  let payload: unknown = {};
+  if (raw) {
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = {};
+    }
+  }
+
+  if (!upstreamResponse.ok) {
+    const upstreamMessage =
+      typeof payload === "object" &&
+      payload !== null &&
+      typeof (payload as { error?: { message?: unknown } }).error?.message === "string"
+        ? (payload as { error: { message: string } }).error.message
+        : `OpenAI request failed (${upstreamResponse.status}).`;
+    const error = new Error(upstreamMessage) as Error & { statusCode?: number };
+    error.statusCode = upstreamResponse.status >= 500 ? 502 : upstreamResponse.status;
+    throw error;
+  }
+
+  const responsePayload =
+    payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+
+  return {
+    responseText: extractPromptLabResponseText(responsePayload),
+    citations: extractPromptLabCitations(responsePayload),
+  };
+}
+
 function inferPromptResponseCount(row: CsvRow | undefined, competitors: string[]): number | null {
   if (!row) {
     return null;
@@ -468,6 +659,53 @@ app.patch("/api/prompts/toggle", requireWriteAccess, async (req, res) => {
       return;
     }
     sendApiError(res, 500, "Failed to toggle prompt.", error);
+  }
+});
+
+app.post("/api/prompt-lab/run", requireWriteAccess, async (req, res) => {
+  try {
+    const parsed = promptLabRunSchema.parse(req.body ?? {});
+    const query = parsed.query.trim();
+    if (!query) {
+      res.status(400).json({ error: "query is required." });
+      return;
+    }
+    const allowedModels = getPromptLabAllowedModels();
+    const requestedModel =
+      typeof parsed.model === "string" && parsed.model.trim()
+        ? parsed.model.trim()
+        : PROMPT_LAB_DEFAULT_MODEL;
+    const model = resolvePromptLabModel(requestedModel, allowedModels);
+    const webSearch = parsed.webSearch ?? true;
+    const startedAt = Date.now();
+
+    const result = await runPromptLabQuery(query, model, webSearch);
+    res.json({
+      ok: true,
+      query,
+      model,
+      webSearchEnabled: webSearch,
+      responseText: result.responseText,
+      citations: result.citations,
+      durationMs: Date.now() - startedAt,
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: "Invalid payload.", issues: error.issues });
+      return;
+    }
+
+    const statusCode =
+      typeof error === "object" && error !== null && Number((error as { statusCode?: number }).statusCode)
+        ? Number((error as { statusCode?: number }).statusCode)
+        : 500;
+    if (statusCode >= 500) {
+      sendApiError(res, statusCode, "Prompt lab run failed.", error);
+      return;
+    }
+    res
+      .status(statusCode)
+      .json({ error: error instanceof Error ? error.message : String(error) });
   }
 });
 

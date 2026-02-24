@@ -12,6 +12,7 @@ import type {
   KpiRow,
   PromptStatus,
   PromptDrilldownResponse,
+  PromptLabRunResponse,
   TimeSeriesResponse,
 } from './types'
 
@@ -23,9 +24,6 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const SUPABASE_ANON_KEY =
   (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ||
   (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined)
-const DEFAULT_TRIGGER_TOKEN = String(
-  (import.meta.env.VITE_BENCHMARK_TRIGGER_TOKEN as string | undefined) ?? '',
-).trim()
 
 const supabase =
   SUPABASE_URL && SUPABASE_ANON_KEY
@@ -452,7 +450,7 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
 function withOptionalTriggerToken(
   triggerToken?: string,
 ): Record<string, string> | undefined {
-  const trimmed = triggerToken?.trim() || DEFAULT_TRIGGER_TOKEN
+  const trimmed = triggerToken?.trim() ?? ''
   if (!trimmed) {
     return undefined
   }
@@ -1396,8 +1394,12 @@ async function fetchTimeseriesFromSupabase(
           : 0
 
       const derivedAiVisibility = 0.7 * highchartsRatePct + 0.3 * highchartsSovPct
+      // `overall_score` is global per run, not tag-scoped. When tags are selected we must
+      // use the derived value from filtered mentions so segmented trends stay accurate.
       const storedAiVisibility =
-        typeof run.overall_score === 'number' && Number.isFinite(run.overall_score)
+        selectedTagSet.size === 0 &&
+        typeof run.overall_score === 'number' &&
+        Number.isFinite(run.overall_score)
           ? run.overall_score
           : null
 
@@ -2180,6 +2182,21 @@ export const api = {
     triggerToken?: string,
   ) {
     return json<BenchmarkTriggerResponse>('/benchmark/trigger', {
+      method: 'POST',
+      headers: withOptionalTriggerToken(triggerToken),
+      body: JSON.stringify(data),
+    })
+  },
+
+  async promptLabRun(
+    data: {
+      query: string
+      model?: string
+      webSearch?: boolean
+    },
+    triggerToken?: string,
+  ): Promise<PromptLabRunResponse> {
+    return json<PromptLabRunResponse>('/prompt-lab/run', {
       method: 'POST',
       headers: withOptionalTriggerToken(triggerToken),
       body: JSON.stringify(data),

@@ -1,11 +1,33 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../api'
 import type { BenchmarkWorkflowRun } from '../types'
 
-const MANAGED_TRIGGER_TOKEN = String(
-  (import.meta.env.VITE_BENCHMARK_TRIGGER_TOKEN as string | undefined) ?? '',
-).trim()
+const TRIGGER_TOKEN_STORAGE_KEY = 'benchmark_trigger_token'
+
+function canUseSessionStorage(): boolean {
+  return typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined'
+}
+
+function readStoredTriggerToken(): string {
+  if (!canUseSessionStorage()) {
+    return ''
+  }
+  return window.sessionStorage.getItem(TRIGGER_TOKEN_STORAGE_KEY)?.trim() ?? ''
+}
+
+function writeStoredTriggerToken(nextToken: string): void {
+  if (!canUseSessionStorage()) {
+    return
+  }
+  const normalized = nextToken.trim()
+  if (!normalized) {
+    window.sessionStorage.removeItem(TRIGGER_TOKEN_STORAGE_KEY)
+    return
+  }
+  window.sessionStorage.setItem(TRIGGER_TOKEN_STORAGE_KEY, normalized)
+}
 
 function runStatusBadge(run: BenchmarkWorkflowRun) {
   if (run.status === 'completed' && run.conclusion === 'success') {
@@ -23,6 +45,15 @@ function runStatusBadge(run: BenchmarkWorkflowRun) {
 function formatRunDate(value: string) {
   if (!value) return '—'
   return new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+function fingerprintToken(value: string): string {
+  let hash = 2166136261
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
 }
 
 // ── Web Search Toggle ─────────────────────────────────────────────────────────
@@ -74,6 +105,7 @@ function WebSearchToggle({
 export default function Runs() {
   const queryClient = useQueryClient()
 
+  const [triggerToken, setTriggerToken] = useState(() => readStoredTriggerToken())
   const [ourTerms, setOurTerms] = useState('Highcharts')
   const [model, setModel] = useState('gpt-4o-mini')
   const [runs, setRuns] = useState(1)
@@ -81,11 +113,20 @@ export default function Runs() {
   const [webSearch, setWebSearch] = useState(true)
   const [runMonth, setRunMonth] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
-  const hasManagedRunAccess = Boolean(MANAGED_TRIGGER_TOKEN)
+  const normalizedTriggerToken = triggerToken.trim()
+  const hasManagedRunAccess = normalizedTriggerToken.length > 0
+  const triggerTokenFingerprint = useMemo(
+    () => fingerprintToken(normalizedTriggerToken),
+    [normalizedTriggerToken],
+  )
+
+  useEffect(() => {
+    writeStoredTriggerToken(triggerToken)
+  }, [triggerToken])
 
   const runsQuery = useQuery({
-    queryKey: ['benchmark-runs', hasManagedRunAccess],
-    queryFn: () => api.benchmarkRuns(MANAGED_TRIGGER_TOKEN || undefined),
+    queryKey: ['benchmark-runs', hasManagedRunAccess, triggerTokenFingerprint],
+    queryFn: () => api.benchmarkRuns(normalizedTriggerToken || undefined),
     enabled: hasManagedRunAccess,
     refetchInterval: hasManagedRunAccess ? 15_000 : false,
     retry: false,
@@ -95,7 +136,7 @@ export default function Runs() {
     mutationFn: () =>
       api.triggerBenchmark(
         { model, runs, temperature, webSearch, ourTerms, runMonth: runMonth || undefined },
-        MANAGED_TRIGGER_TOKEN || undefined,
+        normalizedTriggerToken || undefined,
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['benchmark-runs'] })
@@ -148,12 +189,58 @@ export default function Runs() {
           style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
         >
           <div className="px-5 py-4" style={{ borderBottom: '1px solid #F2EDE6' }}>
-            <div className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>
-              Trigger New Run
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>
+                Trigger New Run
+              </div>
+              <Link
+                to="/prompts"
+                className="inline-flex items-center gap-1 text-xs font-medium"
+                style={{ color: '#6B8470' }}
+              >
+                Add / Edit Prompts
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                  <path d="M3 9L9 3M9 3H4.5M9 3V7.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </Link>
             </div>
           </div>
 
           <div className="p-5 space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium" style={{ color: '#7A8E7C' }}>
+                Trigger token
+              </label>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <input
+                  type="password"
+                  value={triggerToken}
+                  onChange={(event) => setTriggerToken(event.target.value)}
+                  className="w-full px-3 py-2 rounded-lg text-sm"
+                  style={inputStyle}
+                  placeholder="Paste BENCHMARK_TRIGGER_TOKEN"
+                  autoComplete="off"
+                />
+                <button
+                  type="button"
+                  onClick={() => setTriggerToken('')}
+                  disabled={!hasManagedRunAccess}
+                  className="w-full sm:w-auto px-3 py-2 rounded-lg text-sm font-medium"
+                  style={{
+                    border: '1px solid #DDD0BC',
+                    background: '#FFFFFF',
+                    color: hasManagedRunAccess ? '#536654' : '#9AAE9C',
+                    cursor: hasManagedRunAccess ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+              <p className="text-xs" style={{ color: '#9AAE9C' }}>
+                Stored in this browser session only.
+              </p>
+            </div>
+
             {/* Primary controls row */}
             <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
               <button
@@ -334,7 +421,7 @@ export default function Runs() {
                 className="rounded-lg px-3 py-2 text-sm"
                 style={{ background: '#f0f9ff', border: '1px solid #bae6fd', color: '#075985' }}
               >
-                Run controls are unavailable. Ask an admin to configure benchmark access.
+                Enter a trigger token to enable run controls.
               </div>
             )}
           </div>
@@ -356,7 +443,7 @@ export default function Runs() {
                 className="rounded-lg px-3 py-2"
                 style={{ background: '#f8fafc', border: '1px solid #e2e8f0', color: '#475569' }}
               >
-                Run status is unavailable until benchmark access is configured.
+                Run status is unavailable until a trigger token is set.
               </div>
             ) : (
               <>
@@ -402,13 +489,13 @@ export default function Runs() {
             Recent Workflow Runs
           </div>
           <div className="text-xs" style={{ color: '#9AAE9C' }}>
-            {hasManagedRunAccess ? 'Auto-refresh every 15s' : 'Run access is not configured'}
+            {hasManagedRunAccess ? 'Auto-refresh every 15s' : 'Set trigger token to load runs'}
           </div>
         </div>
 
         {!hasManagedRunAccess ? (
           <div className="p-5 text-sm" style={{ color: '#7A8E7C' }}>
-            Recent runs are unavailable until benchmark access is configured.
+            Recent runs are unavailable until a trigger token is set.
           </div>
         ) : runsQuery.isLoading ? (
           <div className="p-5 space-y-2">

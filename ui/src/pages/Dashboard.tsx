@@ -609,17 +609,42 @@ function ScoreStatCard({ score, isLoading }: { score: number; isLoading: boolean
         >
           AI Visibility Score
         </span>
-        <svg
-          width="13"
-          height="13"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="#7E9882"
-          strokeWidth="2"
-        >
-          <circle cx="12" cy="12" r="10" />
-          <path d="M12 16v-4M12 8h.01" strokeLinecap="round" />
-        </svg>
+        <div className="relative group">
+          <button
+            type="button"
+            className="w-4 h-4 rounded-full border flex items-center justify-center"
+            style={{ color: '#6B8470', borderColor: '#D8CEC0', background: '#FEFCF9' }}
+            aria-label="About AI Visibility Score"
+          >
+            <svg
+              width="11"
+              height="11"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 16v-4M12 8h.01" strokeLinecap="round" />
+            </svg>
+          </button>
+          <div
+            className="pointer-events-none absolute right-0 top-5 z-20 w-72 rounded-md border px-2 py-1.5 text-[10px] leading-snug opacity-0 transition-opacity shadow-sm group-hover:opacity-100 group-focus-within:opacity-100"
+            style={{ background: '#FFFFFF', borderColor: '#DDD0BC', color: '#6E8472' }}
+          >
+            <div>AI Visibility Score (0-100)</div>
+            <div className="mt-1">
+              Presence% = <code>(Highcharts mentions / responses) × 100</code>
+            </div>
+            <div className="mt-1">
+              Share of Voice% = <code>(Highcharts mentions / (Highcharts mentions + competitor mentions)) × 100</code>
+            </div>
+            <div className="mt-1">
+              Score = <code>0.7 × Presence% + 0.3 × Share of Voice%</code>
+            </div>
+            <div className="mt-1">Goal = {SCORE_TARGET}</div>
+          </div>
+        </div>
       </div>
 
       {/* Score hero */}
@@ -729,10 +754,12 @@ function SnapshotTrendCard({
   points,
   hcEntity,
   isLoading,
+  useDerivedAiVisibility,
 }: {
   points: TimeSeriesPoint[]
   hcEntity: string | null
   isLoading: boolean
+  useDerivedAiVisibility: boolean
 }) {
   const resolvedHcEntity = useMemo(() => {
     if (hcEntity) return hcEntity
@@ -770,15 +797,19 @@ function SnapshotTrendCard({
               ? rivalRates.reduce((sum, rate) => sum + rate, 0) / rivalRates.length
               : 0
           const derivedAiVisibilityPct = 0.7 * hcRatePct + 0.3 * shareOfVoicePct
+          const storedAiVisibility =
+            typeof point.aiVisibilityScore === 'number' &&
+            Number.isFinite(point.aiVisibilityScore)
+              ? point.aiVisibilityScore
+              : null
+          const aiVisibilityPct = !useDerivedAiVisibility && storedAiVisibility !== null
+            ? storedAiVisibility
+            : derivedAiVisibilityPct
 
           return {
             x: timestampMs,
             aiVisibilityPct: Number(
-              (
-                typeof point.aiVisibilityScore === 'number'
-                  ? point.aiVisibilityScore
-                  : derivedAiVisibilityPct
-              ).toFixed(2),
+              aiVisibilityPct.toFixed(2),
             ),
             combviPct: Number(
               (
@@ -790,7 +821,7 @@ function SnapshotTrendCard({
           }
         })
         .filter((point): point is NonNullable<typeof point> => point !== null),
-    [points, resolvedHcEntity],
+    [points, resolvedHcEntity, useDerivedAiVisibility],
   )
 
   const aiSeries = useMemo(
@@ -895,20 +926,26 @@ function SnapshotTrendCard({
             i
           </button>
           <div
-            className="pointer-events-none absolute right-0 top-5 z-20 w-72 rounded-md border px-2 py-1.5 text-[10px] leading-snug opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+            className="pointer-events-none absolute right-0 top-5 z-20 w-72 rounded-md border px-2 py-1.5 text-[10px] leading-snug opacity-0 transition-opacity shadow-sm group-hover:opacity-100 group-focus-within:opacity-100"
             style={{ background: '#FFFFFF', borderColor: '#DDD0BC', color: '#6E8472' }}
           >
-            <div>Trend of official AI Visibility score by run. Dashed line is COMBVI.</div>
+            <div>AI Visibility Score (0-100) by run</div>
             <div className="mt-1">
-              COMBVI = <strong>Competitor Mention Viability Index</strong>.
+              Presence% = <code>(Highcharts mentions / responses) × 100</code>
+            </div>
+            <div className="mt-1">
+              Share of Voice% = <code>(Highcharts mentions / (Highcharts mentions + competitor mentions)) × 100</code>
+            </div>
+            <div className="mt-1">
+              Score = <code>0.7 × Presence% + 0.3 × Share of Voice%</code>
+            </div>
+            <div className="mt-1">
+              Dashed line = COMBVI
             </div>
             <div className="mt-1">
               Formula: <code>COMBVI% = (rival mentions / (responses × rival competitors)) × 100</code>.
             </div>
-            <div className="mt-1">Higher COMBVI means stronger competitor presence (excluding Highcharts).</div>
-            <div className="mt-1">
-              Net Advantage = <code>AI Visibility - COMBVI</code>. Positive values mean Highcharts is ahead.
-            </div>
+            <div className="mt-1">Net Advantage = <code>AI Visibility - COMBVI</code></div>
           </div>
         </div>
       </div>
@@ -2122,7 +2159,7 @@ export default function Dashboard() {
     refetchInterval: 60_000,
   })
 
-  const { data: tsData } = useQuery({
+  const { data: tsData, isLoading: isTimeseriesLoading } = useQuery({
     queryKey: ['timeseries', normalizedSelectedTags.join(','), tagFilterMode],
     queryFn: () => api.timeseries({ tags: normalizedSelectedTags, mode: tagFilterMode }),
     retry: false,
@@ -2293,7 +2330,8 @@ export default function Dashboard() {
           <SnapshotTrendCard
             points={timeseriesPoints}
             hcEntity={hcEntry?.entity ?? null}
-            isLoading={isLoading}
+            isLoading={isLoading || isTimeseriesLoading}
+            useDerivedAiVisibility={normalizedSelectedTags.length > 0}
           />
         </div>
         <SovCard sov={hcSov} isLoading={isLoading} />
@@ -2324,7 +2362,7 @@ export default function Dashboard() {
             )
           }
         >
-          {isLoading ? (
+          {isLoading || isTimeseriesLoading ? (
             <Skeleton className="h-64" />
           ) : (
             <>

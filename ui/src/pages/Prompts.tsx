@@ -9,6 +9,31 @@ import type {
   PromptStatus,
 } from '../types'
 
+const TRIGGER_TOKEN_STORAGE_KEY = 'benchmark_trigger_token'
+
+function canUseSessionStorage(): boolean {
+  return typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined'
+}
+
+function readStoredTriggerToken(): string {
+  if (!canUseSessionStorage()) {
+    return ''
+  }
+  return window.sessionStorage.getItem(TRIGGER_TOKEN_STORAGE_KEY)?.trim() ?? ''
+}
+
+function writeStoredTriggerToken(nextToken: string): void {
+  if (!canUseSessionStorage()) {
+    return
+  }
+  const normalized = nextToken.trim()
+  if (!normalized) {
+    window.sessionStorage.removeItem(TRIGGER_TOKEN_STORAGE_KEY)
+    return
+  }
+  window.sessionStorage.setItem(TRIGGER_TOKEN_STORAGE_KEY, normalized)
+}
+
 // ── Toggle Switch ─────────────────────────────────────────────────────────────
 
 function Toggle({
@@ -690,6 +715,472 @@ function TagInput({
   )
 }
 
+// ── Query Lab ─────────────────────────────────────────────────────────────────
+
+type LabStatus = 'idle' | 'running' | 'done' | 'error'
+
+interface LabMention {
+  entity: string
+  count: number
+}
+
+const LAB_SUGGESTIONS = [
+  'best javascript charting library for React',
+  'highcharts vs chart.js comparison',
+  'data visualization library with TypeScript support',
+  'lightweight chart library for dashboards',
+]
+
+function dedupeCaseInsensitive(values: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const value of values) {
+    const trimmed = value.trim()
+    if (!trimmed) continue
+    const key = trimmed.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(trimmed)
+  }
+  return out
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function aliasToMentionPattern(alias: string): RegExp | null {
+  const chunks = alias.trim().split(/\s+/).filter(Boolean).map(escapeRegExp)
+  if (chunks.length === 0) return null
+  const body = chunks.join('\\s+')
+  return new RegExp(`(?<![A-Za-z0-9])${body}(?![A-Za-z0-9])`, 'gi')
+}
+
+function countMentionMatches(text: string, alias: string): number {
+  const pattern = aliasToMentionPattern(alias)
+  if (!pattern) return 0
+  return [...text.matchAll(pattern)].length
+}
+
+function buildAliasLookup(aliasesByEntity: Record<string, string[]>): Map<string, string[]> {
+  const map = new Map<string, string[]>()
+  for (const [entity, aliases] of Object.entries(aliasesByEntity)) {
+    const key = entity.trim().toLowerCase()
+    if (!key) continue
+    const normalizedAliases = dedupeCaseInsensitive((aliases ?? []).map((value) => String(value)))
+    if (normalizedAliases.length > 0) {
+      map.set(key, normalizedAliases)
+    }
+  }
+  return map
+}
+
+function detectMentions(
+  responseText: string,
+  trackedEntities: string[],
+  aliasLookup: Map<string, string[]>,
+): LabMention[] {
+  return trackedEntities
+    .map((entity) => {
+      const normalizedEntity = entity.trim()
+      const aliases = dedupeCaseInsensitive([
+        normalizedEntity,
+        ...(aliasLookup.get(normalizedEntity.toLowerCase()) ?? []),
+      ])
+
+      const canonicalCount = countMentionMatches(responseText, normalizedEntity)
+      const aliasCount = aliases
+        .filter((alias) => alias.toLowerCase() !== normalizedEntity.toLowerCase())
+        .reduce((max, alias) => Math.max(max, countMentionMatches(responseText, alias)), 0)
+
+      return {
+        entity,
+        count: canonicalCount > 0 ? canonicalCount : aliasCount,
+      }
+    })
+    .filter((mention) => mention.count > 0)
+    .sort((left, right) => right.count - left.count)
+}
+
+function QueryLab({
+  trackedEntities,
+  aliasesByEntity,
+  triggerToken,
+}: {
+  trackedEntities: string[]
+  aliasesByEntity: Record<string, string[]>
+  triggerToken: string
+}) {
+  const [queryText, setQueryText] = useState('')
+  const [status, setStatus] = useState<LabStatus>('idle')
+  const [response, setResponse] = useState('')
+  const [mentions, setMentions] = useState<LabMention[]>([])
+  const [errorText, setErrorText] = useState('')
+  const [model, setModel] = useState<'gpt-4o-mini' | 'gpt-4o'>('gpt-4o-mini')
+  const [webSearch, setWebSearch] = useState(true)
+  const [elapsedMs, setElapsedMs] = useState(0)
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const aliasLookup = useMemo(() => buildAliasLookup(aliasesByEntity), [aliasesByEntity])
+  const normalizedTriggerToken = triggerToken.trim()
+  const hasTriggerToken = normalizedTriggerToken.length > 0
+
+  const canRun =
+    hasTriggerToken &&
+    queryText.trim().length > 0 &&
+    status !== 'running'
+
+  function startTimer() {
+    const t0 = Date.now()
+    intervalRef.current = setInterval(() => setElapsedMs(Date.now() - t0), 100)
+  }
+  function stopTimer() {
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null }
+  }
+
+  useEffect(() => () => stopTimer(), [])
+
+  async function handleRun() {
+    if (!canRun) return
+    setStatus('running')
+    setResponse('')
+    setMentions([])
+    setErrorText('')
+    setElapsedMs(0)
+    startTimer()
+    try {
+      const result = await api.promptLabRun({
+        query: queryText.trim(),
+        model,
+        webSearch,
+      }, normalizedTriggerToken)
+      const responseText =
+        result.responseText.trim() || 'Model returned an empty response.'
+      const detected = detectMentions(responseText, trackedEntities, aliasLookup)
+      setResponse(responseText)
+      setMentions(detected)
+      setStatus('done')
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : 'Run failed')
+      setStatus('error')
+    } finally {
+      stopTimer()
+    }
+  }
+
+  const elapsedSec = (elapsedMs / 1000).toFixed(1)
+  const maxCount = mentions.length > 0 ? Math.max(...mentions.map((m) => m.count)) : 1
+
+  return (
+    <div
+      style={{
+        background: '#FFFFFF',
+        border: '1px solid #DDD5C5',
+        borderRadius: 18,
+        overflow: 'hidden',
+        boxShadow: '0 1px 6px rgba(30,40,25,0.06), 0 4px 20px rgba(30,40,25,0.04)',
+      }}
+    >
+      {/* ── Two-column body ── */}
+      <div className="query-lab-grid" style={{ minHeight: 200 }}>
+
+        {/* ── Left: input + controls ── */}
+        <div className="query-lab-left" style={{ display: 'flex', flexDirection: 'column', padding: '20px 22px 18px', gap: 14, borderRight: '1px solid #EDE7DA' }}>
+
+          {/* Title row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span
+              style={{
+                width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+                background: status === 'running' ? '#52A55A' : status === 'done' ? '#7DB882' : '#C5D4C6',
+                boxShadow: status === 'running' ? '0 0 0 3px #52A55A22' : 'none',
+                transition: 'all 0.2s',
+                display: 'inline-block',
+              }}
+            />
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#2A3A2C', letterSpacing: '-0.01em' }}>Query Lab</span>
+            <span style={{ fontSize: 11, color: '#A8B8AA' }}>· test a prompt and see which entities get mentioned</span>
+          </div>
+
+          {/* Input area — white box, no visible border until focus */}
+          <div
+            style={{
+              flex: 1,
+              position: 'relative',
+              borderRadius: 12,
+              background: '#F8F5F0',
+              border: '1px solid #E4DDD0',
+              overflow: 'hidden',
+              transition: 'border-color 0.15s, box-shadow 0.15s',
+            }}
+            onFocusCapture={(e) => {
+              const el = e.currentTarget as HTMLDivElement
+              el.style.borderColor = '#96C49A'
+              el.style.boxShadow = '0 0 0 3px #96C49A1A'
+            }}
+            onBlurCapture={(e) => {
+              const el = e.currentTarget as HTMLDivElement
+              el.style.borderColor = '#E4DDD0'
+              el.style.boxShadow = 'none'
+            }}
+          >
+            <textarea
+              ref={textareaRef}
+              value={queryText}
+              onChange={(e) => setQueryText(e.target.value)}
+              placeholder="e.g. best javascript charting library for React"
+              rows={4}
+              style={{
+                width: '100%',
+                background: 'transparent',
+                border: 'none',
+                outline: 'none',
+                resize: 'none',
+                padding: '12px 14px 10px',
+                fontSize: 14,
+                lineHeight: 1.6,
+                color: '#1E2E20',
+                fontFamily: 'inherit',
+              }}
+              onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { void handleRun() } }}
+            />
+            {/* Char count if user typed */}
+            {queryText.length > 0 && (
+              <div style={{ position: 'absolute', bottom: 8, right: 10, fontSize: 10, color: '#B8C8BA', fontVariantNumeric: 'tabular-nums' }}>
+                {queryText.length}
+              </div>
+            )}
+          </div>
+
+          {/* Controls row */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {/* Model pill */}
+              <select
+                value={model}
+                onChange={(e) => setModel(e.target.value as typeof model)}
+                style={{
+                  appearance: 'none', WebkitAppearance: 'none',
+                  background: '#F2EDE6', border: '1px solid #DCCFBC',
+                  borderRadius: 20, padding: '5px 12px',
+                  fontSize: 11, fontWeight: 600, color: '#4A6050', cursor: 'pointer',
+                  letterSpacing: '0.01em',
+                }}
+              >
+                <option value="gpt-4o-mini">GPT-4o mini</option>
+                <option value="gpt-4o">GPT-4o</option>
+              </select>
+
+              {/* Web search */}
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
+                <Toggle active={webSearch} onChange={setWebSearch} />
+                <span style={{ fontSize: 11, color: '#7A8E7C', fontWeight: 500 }}>Web search</span>
+              </label>
+            </div>
+
+            {/* Run button */}
+            <button
+              type="button"
+              onClick={() => { void handleRun() }}
+              disabled={!canRun}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 7,
+                padding: '9px 20px', borderRadius: 12,
+                background: canRun ? '#2A6032' : '#E8E2D8',
+                color: canRun ? '#FFFFFF' : '#A8B4A4',
+                border: `1.5px solid ${canRun ? '#1C4826' : 'transparent'}`,
+                cursor: canRun ? 'pointer' : 'not-allowed',
+                fontSize: 13, fontWeight: 700,
+                boxShadow: canRun ? '0 2px 12px rgba(42,96,50,0.32)' : 'none',
+                transition: 'all 0.15s',
+                letterSpacing: '-0.01em',
+              }}
+            >
+              {status === 'running' ? (
+                <>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{ animation: 'spin-lab 0.85s linear infinite' }}>
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                  </svg>
+                  <span className="tabular-nums">{elapsedSec}s</span>
+                </>
+              ) : (
+                <>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                    <polygon points="5,3 19,12 5,21" />
+                  </svg>
+                  Run
+                  <span style={{ fontSize: 10, opacity: 0.5, fontWeight: 400 }}>⌘↵</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {!hasTriggerToken && (
+            <div
+              className="rounded-lg px-2.5 py-2 text-xs"
+              style={{
+                background: '#FFF8EE',
+                border: '1px solid #F2D4AA',
+                color: '#8A5A21',
+              }}
+            >
+              Enter a trigger token above to run Query Lab.
+            </div>
+          )}
+        </div>
+
+        {/* ── Right: response / idle / running ── */}
+        <div className="query-lab-right" style={{ display: 'flex', flexDirection: 'column', background: '#FAFAF7' }}>
+
+          {/* IDLE */}
+          {status === 'idle' && (
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, padding: '18px 18px 16px' }}>
+              <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#BCCABE', marginBottom: 12 }}>
+                Try a query
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+                {LAB_SUGGESTIONS.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => { setQueryText(s); setTimeout(() => textareaRef.current?.focus(), 0) }}
+                    style={{
+                      textAlign: 'left', background: '#F2EDE6', border: '1px solid #E4DDD0',
+                      borderRadius: 10, padding: '8px 12px',
+                      fontSize: 12, color: '#5A7060', cursor: 'pointer',
+                      lineHeight: 1.4, fontWeight: 500,
+                      transition: 'background 0.1s, border-color 0.1s',
+                    }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#EAE4DA'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#C8BCA8' }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#F2EDE6'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#E4DDD0' }}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* RUNNING */}
+          {status === 'running' && (
+            <div style={{ flex: 1, padding: '18px 18px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
+                {[0, 0.18, 0.36].map((delay) => (
+                  <span
+                    key={delay}
+                    style={{
+                      width: 6, height: 6, borderRadius: '50%', background: '#8FBB93', display: 'inline-block',
+                      animation: `pulse-lab-dot 1.1s ease-in-out ${delay}s infinite`,
+                    }}
+                  />
+                ))}
+                <span style={{ fontSize: 11, color: '#8EA890', marginLeft: 4 }}>Querying model…</span>
+              </div>
+              {[88, 72, 82, 58, 76, 48].map((w, i) => (
+                <div key={i} style={{ height: 9, width: `${w}%`, borderRadius: 6, background: '#E8E0D4', animation: 'pulse 1.5s ease-in-out infinite', animationDelay: `${i * 0.1}s` }} />
+              ))}
+            </div>
+          )}
+
+          {/* DONE */}
+          {status === 'done' && (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              {/* Response text */}
+              <div
+                style={{
+                  flex: 1, overflowY: 'auto', padding: '14px 16px',
+                  fontSize: 12, lineHeight: 1.65, color: '#2A3A2C',
+                  borderBottom: mentions.length > 0 ? '1px solid #EDE7DA' : 'none',
+                  maxHeight: mentions.length > 0 ? 200 : 'none',
+                }}
+              >
+                {response.split('\n\n').map((para, i, arr) => (
+                  <p key={i} style={{ marginBottom: i < arr.length - 1 ? 8 : 0 }}>{para}</p>
+                ))}
+              </div>
+
+              {/* Entity bars */}
+              {mentions.length > 0 && (
+                <div style={{ padding: '12px 16px', flexShrink: 0 }}>
+                  <p style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.09em', color: '#BCCABE', marginBottom: 10 }}>
+                    Entities detected
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {mentions.map((m) => {
+                      const isHC = m.entity.toLowerCase() === 'highcharts'
+                      return (
+                        <div key={m.entity} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 5, width: 88, flexShrink: 0 }}>
+                            {getEntityLogo(m.entity) && <EntityLogo entity={m.entity} size={12} />}
+                            <span style={{ fontSize: 11, fontWeight: 600, color: isHC ? '#2A5C30' : '#4A6050', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {m.entity}
+                            </span>
+                          </div>
+                          <div style={{ flex: 1, height: 5, borderRadius: 4, background: '#E8E0D4', overflow: 'hidden' }}>
+                            <div
+                              style={{
+                                height: '100%', borderRadius: 4,
+                                width: `${(m.count / maxCount) * 100}%`,
+                                background: isHC ? '#3A7040' : '#8FBB93',
+                                transition: 'width 0.55s cubic-bezier(.4,0,.2,1)',
+                              }}
+                            />
+                          </div>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: '#8EA890', minWidth: 22, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                            ×{m.count}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ERROR */}
+          {status === 'error' && (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center', gap: 6 }}>
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: '#E09090' }}>
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+              <p style={{ fontSize: 13, fontWeight: 600, color: '#A04040' }}>Run failed</p>
+              {errorText && (
+                <p style={{ fontSize: 11, color: '#B34A4A', maxWidth: 360 }}>
+                  {errorText}
+                </p>
+              )}
+              <button type="button" onClick={() => setStatus('idle')} style={{ fontSize: 11, color: '#8FBB93', cursor: 'pointer', background: 'none', border: 'none', marginTop: 2 }}>
+                Dismiss
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <style>{`
+        .query-lab-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(320px, 520px);
+        }
+        @keyframes spin-lab { to { transform: rotate(360deg); } }
+        @keyframes pulse-lab-dot { 0%, 100% { opacity: 0.2; transform: scale(0.7); } 50% { opacity: 1; transform: scale(1); } }
+        @media (max-width: 1100px) {
+          .query-lab-grid {
+            grid-template-columns: 1fr;
+          }
+          .query-lab-left {
+            border-right: none !important;
+            border-bottom: 1px solid #EDE7DA;
+          }
+        }
+      `}</style>
+    </div>
+  )
+}
+
 // ── Prompts Page ──────────────────────────────────────────────────────────────
 
 export default function Prompts() {
@@ -817,6 +1308,7 @@ export default function Prompts() {
   const [queries, setQueries] = useState<string[]>([])
   const [queryTags, setQueryTags] = useState<Record<string, string[]>>({})
   const [competitors, setCompetitors] = useState<string[]>([])
+  const [triggerToken, setTriggerToken] = useState(() => readStoredTriggerToken())
   const [dirty, setDirty] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [saveErr, setSaveErr] = useState<string | null>(null)
@@ -825,6 +1317,8 @@ export default function Prompts() {
     type: 'idle' | 'running' | 'success' | 'error'
     text: string
   }>({ type: 'idle', text: '' })
+  const normalizedTriggerToken = triggerToken.trim()
+  const hasTriggerToken = normalizedTriggerToken.length > 0
 
   useEffect(() => {
     if (configQuery.data) {
@@ -835,6 +1329,10 @@ export default function Prompts() {
       setDirty(false)
     }
   }, [configQuery.data])
+
+  useEffect(() => {
+    writeStoredTriggerToken(triggerToken)
+  }, [triggerToken])
 
   function applySavedConfig(updated: Awaited<ReturnType<typeof api.updateConfig>>) {
     qc.setQueryData(['config'], updated)
@@ -879,12 +1377,13 @@ export default function Prompts() {
   }
 
   const hasHighcharts = competitors.some((c) => c.toLowerCase() === 'highcharts')
-  const canSave =
+  const canSaveChanges =
     dirty &&
     !configMutation.isPending &&
     !saveAndRunPending &&
     queries.length > 0 &&
     hasHighcharts
+  const canSaveAndRun = canSaveChanges && hasTriggerToken
 
   const configPayload: BenchmarkConfig = {
     queries,
@@ -902,12 +1401,13 @@ export default function Prompts() {
   async function waitForRunCompletion(
     triggerId: string,
     initialRun: BenchmarkWorkflowRun | null,
+    triggerTokenValue: string,
   ): Promise<BenchmarkWorkflowRun> {
     let currentRun = initialRun
     const deadlineMs = Date.now() + 30 * 60 * 1000
 
     while (Date.now() < deadlineMs) {
-      const runsResponse = await api.benchmarkRuns()
+      const runsResponse = await api.benchmarkRuns(triggerTokenValue)
       const matched =
         currentRun
           ? runsResponse.runs.find((run) => run.id === currentRun?.id) ??
@@ -931,25 +1431,36 @@ export default function Prompts() {
   }
 
   async function handleSaveAndRun() {
-    if (!canSave) return
+    if (!canSaveAndRun) return
     setSaveErr(null)
     setSaveAndRunPending(true)
     setRunNotice({ type: 'running', text: 'Saving changes…' })
 
     try {
+      if (!normalizedTriggerToken) {
+        throw new Error('Trigger token is required to run benchmarks.')
+      }
+
       const updated = await api.updateConfig(configPayload)
       applySavedConfig(updated)
       setRunNotice({ type: 'running', text: 'Starting benchmark run…' })
 
-      const triggerResult = await api.triggerBenchmark({
-        model: 'gpt-4o-mini',
-        runs: 1,
-        temperature: 0.7,
-        webSearch: true,
-        ourTerms: 'Highcharts',
-      })
+      const triggerResult = await api.triggerBenchmark(
+        {
+          model: 'gpt-4o-mini',
+          runs: 1,
+          temperature: 0.7,
+          webSearch: true,
+          ourTerms: 'Highcharts',
+        },
+        normalizedTriggerToken,
+      )
 
-      const completedRun = await waitForRunCompletion(triggerResult.triggerId, triggerResult.run)
+      const completedRun = await waitForRunCompletion(
+        triggerResult.triggerId,
+        triggerResult.run,
+        normalizedTriggerToken,
+      )
       const conclusion = (completedRun.conclusion ?? '').toLowerCase()
       if (conclusion !== 'success') {
         throw new Error(
@@ -991,6 +1502,52 @@ export default function Prompts() {
 
   return (
     <div className="max-w-[1360px] space-y-5">
+      <div
+        className="rounded-xl border p-4"
+        style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
+      >
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
+          <label className="flex-1 space-y-1.5">
+            <span className="text-xs font-medium" style={{ color: '#7A8E7C' }}>
+              Trigger token
+            </span>
+            <input
+              type="password"
+              value={triggerToken}
+              onChange={(event) => setTriggerToken(event.target.value)}
+              className="w-full px-3 py-2 rounded-lg text-sm"
+              style={{ border: '1px solid #DDD0BC', background: '#FFFFFF', color: '#2A3A2C' }}
+              placeholder="Paste BENCHMARK_TRIGGER_TOKEN"
+              autoComplete="off"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => setTriggerToken('')}
+            disabled={!hasTriggerToken}
+            className="w-full lg:w-auto px-3 py-2 rounded-lg text-sm font-medium"
+            style={{
+              border: '1px solid #DDD0BC',
+              background: '#FFFFFF',
+              color: hasTriggerToken ? '#536654' : '#9AAE9C',
+              cursor: hasTriggerToken ? 'pointer' : 'not-allowed',
+            }}
+          >
+            Clear token
+          </button>
+        </div>
+        <p className="mt-2 text-xs" style={{ color: '#9AAE9C' }}>
+          Used for Query Lab and Save &amp; Run. Stored in this browser session only.
+        </p>
+      </div>
+
+      {/* ── Query Lab ──────────────────────────────────────────────────────── */}
+      <QueryLab
+        trackedEntities={competitors}
+        aliasesByEntity={configQuery.data?.config.aliases ?? {}}
+        triggerToken={triggerToken}
+      />
+
       {/* ── Section divider ────────────────────────────────────────────────── */}
       <div className="flex items-center gap-4 pt-1">
         <div className="flex-1 h-px" style={{ background: '#DDD0BC' }} />
@@ -1141,14 +1698,14 @@ export default function Prompts() {
             <button
               type="button"
               onClick={() => { void handleSaveAndRun() }}
-              disabled={!canSave}
+              disabled={!canSaveAndRun}
               className="inline-flex w-full sm:w-auto justify-center items-center gap-2 px-4 py-2.5 sm:py-2 rounded-lg text-sm font-semibold transition-all"
               style={{
-                background: canSave ? '#2A6032' : '#E8E0D2',
-                color: canSave ? '#FFFFFF' : '#9AAE9C',
-                cursor: canSave ? 'pointer' : 'not-allowed',
-                boxShadow: canSave ? '0 1px 8px rgba(42,96,50,0.28)' : 'none',
-                border: `1.5px solid ${canSave ? '#1E4A26' : 'transparent'}`,
+                background: canSaveAndRun ? '#2A6032' : '#E8E0D2',
+                color: canSaveAndRun ? '#FFFFFF' : '#9AAE9C',
+                cursor: canSaveAndRun ? 'pointer' : 'not-allowed',
+                boxShadow: canSaveAndRun ? '0 1px 8px rgba(42,96,50,0.28)' : 'none',
+                border: `1.5px solid ${canSaveAndRun ? '#1E4A26' : 'transparent'}`,
               }}
             >
               {saveAndRunPending ? (
@@ -1169,7 +1726,7 @@ export default function Prompts() {
                 </>
               ) : (
                 <>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill={canSave ? 'white' : '#9AAE9C'} stroke="none">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill={canSaveAndRun ? 'white' : '#9AAE9C'} stroke="none">
                     <polygon points="5,3 19,12 5,21" />
                   </svg>
                   Save &amp; Run
@@ -1180,18 +1737,18 @@ export default function Prompts() {
             <button
               type="button"
               onClick={() => configMutation.mutate(configPayload)}
-              disabled={!canSave}
+              disabled={!canSaveChanges}
               className="w-full sm:w-auto px-5 py-2.5 sm:py-2 rounded-lg text-sm font-semibold transition-all"
               style={{
-                background: canSave ? '#8FBB93' : '#E8E0D2',
-                color: canSave ? '#FFFFFF' : '#9AAE9C',
-                cursor: canSave ? 'pointer' : 'not-allowed',
+                background: canSaveChanges ? '#8FBB93' : '#E8E0D2',
+                color: canSaveChanges ? '#FFFFFF' : '#9AAE9C',
+                cursor: canSaveChanges ? 'pointer' : 'not-allowed',
               }}
               onMouseEnter={(e) => {
-                if (canSave) (e.currentTarget as HTMLButtonElement).style.background = '#7AAB7E'
+                if (canSaveChanges) (e.currentTarget as HTMLButtonElement).style.background = '#7AAB7E'
               }}
               onMouseLeave={(e) => {
-                if (canSave) (e.currentTarget as HTMLButtonElement).style.background = '#8FBB93'
+                if (canSaveChanges) (e.currentTarget as HTMLButtonElement).style.background = '#8FBB93'
               }}
             >
               {configMutation.isPending ? 'Saving…' : 'Save Changes'}

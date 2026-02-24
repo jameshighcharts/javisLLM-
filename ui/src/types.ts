@@ -186,6 +186,16 @@ export interface PromptDrilldownResponse {
   responses: PromptDrilldownResponseItem[]
 }
 
+export interface PromptLabRunResponse {
+  ok: boolean
+  query: string
+  model: string
+  webSearchEnabled: boolean
+  responseText: string
+  citations: string[]
+  durationMs: number
+}
+
 export interface BenchmarkWorkflowRun {
   id: number
   runNumber: number

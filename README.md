@@ -46,11 +46,11 @@ This repo includes root `/Users/jamesm/projects/easy_llm_benchmarker/vercel.json
 In Vercel Project Settings -> Environment Variables, set:
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
+- `OPENAI_API_KEY` (required for Prompt Query Lab on `/prompts`)
 - `GITHUB_TOKEN` (PAT with `repo` + `workflow` access to this repo)
 - `GITHUB_OWNER` (e.g. `jameshighcharts`)
 - `GITHUB_REPO` (e.g. `javisLLM-`)
-- `BENCHMARK_TRIGGER_TOKEN` (required; bearer token for `/api/benchmark/*`)
-- Optional for internal-only convenience: `VITE_BENCHMARK_TRIGGER_TOKEN` (auto-fills Runs page trigger token so users do not need to paste it)
+- `BENCHMARK_TRIGGER_TOKEN` (required; bearer token for `/api/benchmark/*` and `/api/prompt-lab/*`)
 - Optional: `GITHUB_WORKFLOW_FILE` (default: `run-benchmark.yml`)
 - Optional: `GITHUB_WORKFLOW_REF` (default: `main`)
 - Optional hardening:
@@ -59,6 +59,8 @@ In Vercel Project Settings -> Environment Variables, set:
   - `BENCHMARK_TRIGGER_RATE_WINDOW_MS` (default `60000` ms)
   - `BENCHMARK_RUNS_RATE_MAX` (default `30` requests)
   - `BENCHMARK_RUNS_RATE_WINDOW_MS` (default `60000` ms)
+  - `PROMPT_LAB_RATE_MAX` (default `15` requests)
+  - `PROMPT_LAB_RATE_WINDOW_MS` (default `60000` ms)
 
 Without these vars, the deployed frontend may fail at runtime because `/api` fallback is local-only.
 
@@ -76,6 +78,13 @@ To run real prompt/scoring runs from the app, open `/runs`:
 - Monitor run state (queued/running/success/failure)
 - Open GitHub Actions logs directly
 - Dashboard updates after workflow syncs to Supabase
+- Paste `BENCHMARK_TRIGGER_TOKEN` into the token field (stored in browser session storage only)
+
+To run a one-off prompt test in Query Lab, open `/prompts`:
+- Uses `/api/prompt-lab/run` (OpenAI Responses API)
+- Uses selected model + web search toggle
+- Displays mention detection across tracked entities
+- Requires the same trigger token input used for `/runs`
 
 ### GitHub Actions secrets (required for `/runs`)
 

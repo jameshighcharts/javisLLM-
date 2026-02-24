@@ -8,7 +8,20 @@ import { api } from '../api'
 const HeaderExtraContext = createContext<(node: ReactNode) => void>(() => {})
 export function useHeaderExtra() { return useContext(HeaderExtraContext) }
 
-const NAV = [
+type NavChild = {
+  to: string
+  label: string
+}
+
+type NavItem = {
+  to: string
+  label: string
+  icon: ReactNode
+  soon?: boolean
+  children?: NavChild[]
+}
+
+const NAV: NavItem[] = [
   {
     to: '/dashboard',
     label: 'Dashboard',
@@ -20,6 +33,22 @@ const NAV = [
         <rect x="14" y="14" width="7" height="7" rx="1.5" />
       </svg>
     ),
+  },
+  {
+    to: '/okr',
+    label: 'OKRs',
+    icon: (
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 19h16" />
+        <rect x="4" y="10" width="4" height="9" rx="1" />
+        <rect x="10" y="6" width="4" height="13" rx="1" />
+        <rect x="16" y="3" width="4" height="16" rx="1" />
+      </svg>
+    ),
+    children: [
+      { to: '/okr/kr-2-1', label: 'Key Result 2.1' },
+      { to: '/okr/kr-2-3', label: 'Key Result 2.3' },
+    ],
   },
   {
     to: '/prompts',
@@ -76,6 +105,9 @@ const MOBILE_NAV = NAV.filter((item) => !item.soon).slice(0, 5)
 
 const PAGE_TITLES: Record<string, string> = {
   '/dashboard': 'Dashboard',
+  '/okr': 'OKR',
+  '/okr/kr-2-1': 'OKR / KR 2.1',
+  '/okr/kr-2-3': 'OKR / KR 2.3',
   '/runs': 'Run Benchmarks',
   '/prompts': 'Prompts',
   '/prompts/drilldown': 'Prompt Drilldown',
@@ -112,9 +144,12 @@ function ApiStatus() {
 export default function Layout({ children }: { children: ReactNode }) {
   const { pathname } = useLocation()
   const title = PAGE_TITLES[pathname] ?? 'Javis'
+  const onOkrPath = pathname === '/okr' || pathname.startsWith('/okr/')
   const [iconOpen, setIconOpen] = useState(false)
   const [clickCount, setClickCount] = useState(0)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [okrDesktopOpen, setOkrDesktopOpen] = useState(onOkrPath)
+  const [okrMobileOpen, setOkrMobileOpen] = useState(onOkrPath)
   const videoRef = useRef<HTMLVideoElement>(null)
   const [headerExtra, setHeaderExtraRaw] = useState<ReactNode>(null)
   const setHeaderExtra = useCallback((node: ReactNode) => setHeaderExtraRaw(node), [])
@@ -124,6 +159,13 @@ export default function Layout({ children }: { children: ReactNode }) {
   useEffect(() => {
     setMobileNavOpen(false)
   }, [pathname])
+
+  useEffect(() => {
+    if (onOkrPath) {
+      setOkrDesktopOpen(true)
+      setOkrMobileOpen(true)
+    }
+  }, [onOkrPath])
 
   function openVideo() {
     setClickCount((c) => c + 1)
@@ -270,36 +312,112 @@ export default function Layout({ children }: { children: ReactNode }) {
             </div>
 
             <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
-              {NAV.map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  style={({ isActive }) => ({
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '9px',
-                    padding: '10px 10px',
-                    borderRadius: '8px',
-                    fontSize: '13px',
-                    fontWeight: isActive ? '500' : '400',
-                    color: isActive ? '#FDFCF8' : '#8FBB93',
-                    background: isActive ? 'rgba(255,255,255,0.14)' : 'transparent',
-                    textDecoration: 'none',
-                    transition: 'all 0.1s',
-                  })}
-                >
-                  <span style={{ flexShrink: 0 }}>{item.icon}</span>
-                  <span className="flex-1">{item.label}</span>
-                  {item.soon && (
-                    <span
-                      className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full flex-shrink-0"
-                      style={{ background: 'rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.35)', letterSpacing: '0.06em' }}
-                    >
-                      soon
-                    </span>
-                  )}
-                </NavLink>
-              ))}
+              {NAV.map((item) => {
+                const parentActive =
+                  item.to === '/okr'
+                    ? pathname === '/okr' || pathname.startsWith('/okr/')
+                    : pathname === item.to
+
+                if (item.children) {
+                  return (
+                    <div key={item.to} className="space-y-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setOkrMobileOpen((open) => !open)}
+                        className="w-full"
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '9px',
+                          padding: '10px 10px',
+                          borderRadius: '8px',
+                          fontSize: '13px',
+                          fontWeight: parentActive ? '500' : '400',
+                          color: parentActive ? '#FDFCF8' : '#8FBB93',
+                          background: parentActive ? 'rgba(255,255,255,0.14)' : 'transparent',
+                          border: 'none',
+                          textDecoration: 'none',
+                          transition: 'all 0.1s',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <span style={{ flexShrink: 0 }}>{item.icon}</span>
+                        <span className="flex-1 text-left">{item.label}</span>
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            transform: okrMobileOpen ? 'rotate(90deg)' : 'rotate(0deg)',
+                            transition: 'transform 0.15s ease',
+                          }}
+                        >
+                          <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 6L15 12L9 18" />
+                          </svg>
+                        </span>
+                      </button>
+                      {okrMobileOpen
+                        ? item.children.map((child) => (
+                            <NavLink
+                              key={child.to}
+                              to={child.to}
+                              style={({ isActive }) => ({
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '9px',
+                                padding: '8px 10px 8px 32px',
+                                borderRadius: '8px',
+                                fontSize: '12px',
+                                fontWeight: isActive ? '500' : '400',
+                                color: isActive ? '#FDFCF8' : '#8FBB93',
+                                background: isActive ? 'rgba(255,255,255,0.14)' : 'transparent',
+                                textDecoration: 'none',
+                                transition: 'all 0.1s',
+                              })}
+                            >
+                              <span style={{ flexShrink: 0 }}>
+                                <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <circle cx="12" cy="12" r="2.5" />
+                                </svg>
+                              </span>
+                              <span className="flex-1">{child.label}</span>
+                            </NavLink>
+                          ))
+                        : null}
+                    </div>
+                  )
+                }
+
+                return (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    style={({ isActive }) => ({
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '9px',
+                      padding: '10px 10px',
+                      borderRadius: '8px',
+                      fontSize: '13px',
+                      fontWeight: isActive ? '500' : '400',
+                      color: isActive ? '#FDFCF8' : '#8FBB93',
+                      background: isActive ? 'rgba(255,255,255,0.14)' : 'transparent',
+                      textDecoration: 'none',
+                      transition: 'all 0.1s',
+                    })}
+                  >
+                    <span style={{ flexShrink: 0 }}>{item.icon}</span>
+                    <span className="flex-1">{item.label}</span>
+                    {item.soon && (
+                      <span
+                        className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full flex-shrink-0"
+                        style={{ background: 'rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.35)', letterSpacing: '0.06em' }}
+                      >
+                        soon
+                      </span>
+                    )}
+                  </NavLink>
+                )
+              })}
             </nav>
 
             <div
@@ -351,50 +469,154 @@ export default function Layout({ children }: { children: ReactNode }) {
           </div>
 
           <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
-            {NAV.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                style={({ isActive }) => ({
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '9px',
-                  padding: '7px 10px',
-                  borderRadius: '6px',
-                  fontSize: '13px',
-                  fontWeight: isActive ? '500' : '400',
-                  color: isActive ? '#FDFCF8' : '#8FBB93',
-                  background: isActive ? 'rgba(255,255,255,0.14)' : 'transparent',
-                  textDecoration: 'none',
-                  transition: 'all 0.1s',
-                })}
-                onMouseEnter={(e) => {
-                  const el = e.currentTarget as HTMLAnchorElement
-                  if (!el.getAttribute('aria-current')) {
-                    el.style.color = '#C8A87A'
-                    el.style.background = 'rgba(255,255,255,0.07)'
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  const el = e.currentTarget as HTMLAnchorElement
-                  if (!el.getAttribute('aria-current')) {
-                    el.style.color = '#8FBB93'
-                    el.style.background = 'transparent'
-                  }
-                }}
-              >
-                <span style={{ flexShrink: 0 }}>{item.icon}</span>
-                <span className="flex-1">{item.label}</span>
-                {item.soon && (
-                  <span
-                    className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full flex-shrink-0"
-                    style={{ background: 'rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.35)', letterSpacing: '0.06em' }}
-                  >
-                    soon
-                  </span>
-                )}
-              </NavLink>
-            ))}
+            {NAV.map((item) => {
+              const parentActive =
+                item.to === '/okr'
+                  ? pathname === '/okr' || pathname.startsWith('/okr/')
+                  : pathname === item.to
+
+              if (item.children) {
+                return (
+                  <div key={item.to} className="space-y-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setOkrDesktopOpen((open) => !open)}
+                      className="w-full"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '9px',
+                        padding: '7px 10px',
+                        borderRadius: '6px',
+                        fontSize: '13px',
+                        fontWeight: parentActive ? '500' : '400',
+                        color: parentActive ? '#FDFCF8' : '#8FBB93',
+                        background: parentActive ? 'rgba(255,255,255,0.14)' : 'transparent',
+                        border: 'none',
+                        textDecoration: 'none',
+                        transition: 'all 0.1s',
+                        cursor: 'pointer',
+                      }}
+                      onMouseEnter={(e) => {
+                        const el = e.currentTarget as HTMLButtonElement
+                        if (!parentActive) {
+                          el.style.color = '#C8A87A'
+                          el.style.background = 'rgba(255,255,255,0.07)'
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        const el = e.currentTarget as HTMLButtonElement
+                        if (!parentActive) {
+                          el.style.color = '#8FBB93'
+                          el.style.background = 'transparent'
+                        }
+                      }}
+                    >
+                      <span style={{ flexShrink: 0 }}>{item.icon}</span>
+                      <span className="flex-1 text-left">{item.label}</span>
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          transform: okrDesktopOpen ? 'rotate(90deg)' : 'rotate(0deg)',
+                          transition: 'transform 0.15s ease',
+                        }}
+                      >
+                        <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 6L15 12L9 18" />
+                        </svg>
+                      </span>
+                    </button>
+                    {okrDesktopOpen
+                      ? item.children.map((child) => (
+                          <NavLink
+                            key={child.to}
+                            to={child.to}
+                            style={({ isActive }) => ({
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '9px',
+                              padding: '7px 10px 7px 30px',
+                              borderRadius: '6px',
+                              fontSize: '12px',
+                              fontWeight: isActive ? '500' : '400',
+                              color: isActive ? '#FDFCF8' : '#8FBB93',
+                              background: isActive ? 'rgba(255,255,255,0.14)' : 'transparent',
+                              textDecoration: 'none',
+                              transition: 'all 0.1s',
+                            })}
+                            onMouseEnter={(e) => {
+                              const el = e.currentTarget as HTMLAnchorElement
+                              if (!el.getAttribute('aria-current')) {
+                                el.style.color = '#C8A87A'
+                                el.style.background = 'rgba(255,255,255,0.07)'
+                              }
+                            }}
+                            onMouseLeave={(e) => {
+                              const el = e.currentTarget as HTMLAnchorElement
+                              if (!el.getAttribute('aria-current')) {
+                                el.style.color = '#8FBB93'
+                                el.style.background = 'transparent'
+                              }
+                            }}
+                          >
+                            <span style={{ flexShrink: 0 }}>
+                              <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <circle cx="12" cy="12" r="2.5" />
+                              </svg>
+                            </span>
+                            <span className="flex-1">{child.label}</span>
+                          </NavLink>
+                        ))
+                      : null}
+                  </div>
+                )
+              }
+
+              return (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  style={({ isActive }) => ({
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '9px',
+                    padding: '7px 10px',
+                    borderRadius: '6px',
+                    fontSize: '13px',
+                    fontWeight: isActive ? '500' : '400',
+                    color: isActive ? '#FDFCF8' : '#8FBB93',
+                    background: isActive ? 'rgba(255,255,255,0.14)' : 'transparent',
+                    textDecoration: 'none',
+                    transition: 'all 0.1s',
+                  })}
+                  onMouseEnter={(e) => {
+                    const el = e.currentTarget as HTMLAnchorElement
+                    if (!el.getAttribute('aria-current')) {
+                      el.style.color = '#C8A87A'
+                      el.style.background = 'rgba(255,255,255,0.07)'
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    const el = e.currentTarget as HTMLAnchorElement
+                    if (!el.getAttribute('aria-current')) {
+                      el.style.color = '#8FBB93'
+                      el.style.background = 'transparent'
+                    }
+                  }}
+                >
+                  <span style={{ flexShrink: 0 }}>{item.icon}</span>
+                  <span className="flex-1">{item.label}</span>
+                  {item.soon && (
+                    <span
+                      className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full flex-shrink-0"
+                      style={{ background: 'rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.35)', letterSpacing: '0.06em' }}
+                    >
+                      soon
+                    </span>
+                  )}
+                </NavLink>
+              )
+            })}
           </nav>
 
           <div
