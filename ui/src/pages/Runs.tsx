@@ -38,7 +38,7 @@ function WebSearchToggle({
     <button
       type="button"
       onClick={() => onChange(!checked)}
-      className="inline-flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all"
+      className="inline-flex w-full sm:w-auto justify-center items-center gap-2.5 px-3 py-2.5 sm:py-2 rounded-lg text-sm font-medium transition-all"
       style={{
         background: checked ? '#F0F7F1' : '#F2EDE6',
         border: `1.5px solid ${checked ? '#C8DEC9' : '#DDD0BC'}`,
@@ -141,10 +141,10 @@ export default function Runs() {
         </h2>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         {/* Trigger card */}
         <div
-          className="rounded-xl border shadow-sm col-span-2"
+          className="rounded-xl border shadow-sm xl:col-span-2"
           style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
         >
           <div className="px-5 py-4" style={{ borderBottom: '1px solid #F2EDE6' }}>
@@ -155,12 +155,12 @@ export default function Runs() {
 
           <div className="p-5 space-y-4">
             {/* Primary controls row */}
-            <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
               <button
                 type="button"
                 onClick={() => triggerMutation.mutate()}
                 disabled={!canRun}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+                className="inline-flex w-full sm:w-auto justify-center items-center gap-2 px-4 py-2.5 sm:py-2 rounded-lg text-sm font-semibold transition-all"
                 style={{
                   background: canRun ? '#2A6032' : '#E8E0D2',
                   color: canRun ? '#FFFFFF' : '#9AAE9C',
@@ -192,7 +192,7 @@ export default function Runs() {
                 type="button"
                 onClick={() => runsQuery.refetch()}
                 disabled={!hasManagedRunAccess}
-                className="px-4 py-2 rounded-lg text-sm font-medium"
+                className="w-full sm:w-auto px-4 py-2.5 sm:py-2 rounded-lg text-sm font-medium"
                 style={{
                   border: '1px solid #DDD0BC',
                   color: hasManagedRunAccess ? '#2A3A2C' : '#9AAE9C',
@@ -206,13 +206,13 @@ export default function Runs() {
               <WebSearchToggle checked={webSearch} onChange={setWebSearch} />
 
               {/* Spacer */}
-              <div className="flex-1" />
+              <div className="hidden sm:block sm:flex-1" />
 
               {/* Advanced settings toggle */}
               <button
                 type="button"
                 onClick={() => setShowAdvanced((v) => !v)}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all"
+                className="inline-flex w-full sm:w-auto sm:ml-auto justify-center items-center gap-1.5 px-3 py-2.5 sm:py-2 rounded-lg text-sm sm:text-xs font-medium transition-all"
                 style={{
                   background: showAdvanced ? '#F2EDE6' : 'transparent',
                   border: `1px solid ${showAdvanced ? '#DDD0BC' : '#E8E0D2'}`,
@@ -249,7 +249,7 @@ export default function Runs() {
                 <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#9AAE9C' }}>
                   Advanced settings
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <label className="space-y-1">
                     <span className="text-xs font-medium" style={{ color: '#7A8E7C' }}>Brand terms</span>
                     <input
@@ -395,7 +395,7 @@ export default function Runs() {
         style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
       >
         <div
-          className="px-5 py-4 flex items-center justify-between"
+          className="px-4 sm:px-5 py-4 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between"
           style={{ borderBottom: '1px solid #F2EDE6' }}
         >
           <div className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>
@@ -421,62 +421,64 @@ export default function Runs() {
             No runs found yet.
           </div>
         ) : (
-          <table className="w-full">
-            <thead>
-              <tr style={{ borderBottom: '1px solid #F2EDE6' }}>
-                <th className="px-5 py-3 text-xs font-medium text-left" style={{ color: '#7A8E7C' }}>Run</th>
-                <th className="px-5 py-3 text-xs font-medium text-left" style={{ color: '#7A8E7C' }}>Status</th>
-                <th className="px-5 py-3 text-xs font-medium text-left" style={{ color: '#7A8E7C' }}>Started</th>
-                <th className="px-5 py-3 text-xs font-medium text-left" style={{ color: '#7A8E7C' }}>Updated</th>
-                <th className="px-5 py-3 text-xs font-medium text-right" style={{ color: '#7A8E7C' }}>Logs</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(runsQuery.data?.runs ?? []).map((run, i, all) => {
-                const badge = runStatusBadge(run)
-                return (
-                  <tr
-                    key={run.id}
-                    style={{ borderBottom: i < all.length - 1 ? '1px solid #F2EDE6' : 'none' }}
-                  >
-                    <td className="px-5 py-3.5">
-                      <div className="text-sm font-medium" style={{ color: '#2A3A2C' }}>
-                        #{run.runNumber}
-                      </div>
-                      <div className="text-xs" style={{ color: '#9AAE9C' }}>
-                        {run.title}
-                      </div>
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <span
-                        className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold"
-                        style={{ background: badge.bg, border: `1px solid ${badge.border}`, color: badge.text }}
-                      >
-                        {badge.label}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3.5 text-sm" style={{ color: '#536654' }}>
-                      {formatRunDate(run.createdAt)}
-                    </td>
-                    <td className="px-5 py-3.5 text-sm" style={{ color: '#536654' }}>
-                      {formatRunDate(run.updatedAt)}
-                    </td>
-                    <td className="px-5 py-3.5 text-right">
-                      <a
-                        href={run.htmlUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-sm font-medium underline"
-                        style={{ color: '#3D5C40' }}
-                      >
-                        Open
-                      </a>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px]">
+              <thead>
+                <tr style={{ borderBottom: '1px solid #F2EDE6' }}>
+                  <th className="px-5 py-3 text-xs font-medium text-left" style={{ color: '#7A8E7C' }}>Run</th>
+                  <th className="px-5 py-3 text-xs font-medium text-left" style={{ color: '#7A8E7C' }}>Status</th>
+                  <th className="px-5 py-3 text-xs font-medium text-left" style={{ color: '#7A8E7C' }}>Started</th>
+                  <th className="px-5 py-3 text-xs font-medium text-left" style={{ color: '#7A8E7C' }}>Updated</th>
+                  <th className="px-5 py-3 text-xs font-medium text-right" style={{ color: '#7A8E7C' }}>Logs</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(runsQuery.data?.runs ?? []).map((run, i, all) => {
+                  const badge = runStatusBadge(run)
+                  return (
+                    <tr
+                      key={run.id}
+                      style={{ borderBottom: i < all.length - 1 ? '1px solid #F2EDE6' : 'none' }}
+                    >
+                      <td className="px-5 py-3.5">
+                        <div className="text-sm font-medium" style={{ color: '#2A3A2C' }}>
+                          #{run.runNumber}
+                        </div>
+                        <div className="text-xs" style={{ color: '#9AAE9C' }}>
+                          {run.title}
+                        </div>
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <span
+                          className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold"
+                          style={{ background: badge.bg, border: `1px solid ${badge.border}`, color: badge.text }}
+                        >
+                          {badge.label}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3.5 text-sm" style={{ color: '#536654' }}>
+                        {formatRunDate(run.createdAt)}
+                      </td>
+                      <td className="px-5 py-3.5 text-sm" style={{ color: '#536654' }}>
+                        {formatRunDate(run.updatedAt)}
+                      </td>
+                      <td className="px-5 py-3.5 text-right">
+                        <a
+                          href={run.htmlUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sm font-medium underline"
+                          style={{ color: '#3D5C40' }}
+                        >
+                          Open
+                        </a>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>

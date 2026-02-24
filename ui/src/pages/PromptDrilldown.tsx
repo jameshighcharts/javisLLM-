@@ -488,7 +488,7 @@ function RunHistoryTable({ runPoints }: { runPoints: PromptDrilldownRunPoint[] }
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full border-collapse">
+      <table className="w-full min-w-[720px] border-collapse">
         <thead>
           <tr style={{ borderBottom: '1px solid #F2EDE6', background: '#FDFCF8' }}>
             <th className="px-4 py-3 text-left text-xs font-medium" style={{ color: '#7A8E7C' }}>Run</th>
@@ -637,17 +637,17 @@ function ResponseExplorer({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-xs font-medium" style={{ color: '#7A8E7C' }}>
           Showing {filteredResponses.length} of {responses.length} outputs
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <label className="inline-flex items-center gap-2 text-xs" style={{ color: '#7A8E7C' }}>
+        <div className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:flex sm:flex-wrap sm:items-center">
+          <label className="flex items-center justify-between gap-2 text-sm sm:text-xs sm:inline-flex sm:justify-start" style={{ color: '#7A8E7C' }}>
             Run filter
             <select
               value={effectiveRunId}
               onChange={(event) => setSelectedRunId(event.target.value)}
-              className="px-2.5 py-1.5 rounded-lg text-xs"
+              className="px-2.5 py-2 sm:py-1.5 rounded-lg text-sm sm:text-xs"
               style={{ border: '1px solid #DDD0BC', background: '#FFFFFF', color: '#2A3A2C' }}
             >
               <option value="all">All runs</option>
@@ -661,12 +661,12 @@ function ResponseExplorer({
                 ))}
             </select>
           </label>
-          <label className="inline-flex items-center gap-2 text-xs" style={{ color: '#7A8E7C' }}>
+          <label className="flex items-center justify-between gap-2 text-sm sm:text-xs sm:inline-flex sm:justify-start" style={{ color: '#7A8E7C' }}>
             Tags
             <select
               value={effectiveTag}
               onChange={(event) => setSelectedTag(event.target.value)}
-              className="px-2.5 py-1.5 rounded-lg text-xs"
+              className="px-2.5 py-2 sm:py-1.5 rounded-lg text-sm sm:text-xs"
               style={{ border: '1px solid #DDD0BC', background: '#FFFFFF', color: '#2A3A2C' }}
             >
               <option value="all">All tags</option>
@@ -677,13 +677,13 @@ function ResponseExplorer({
               ))}
             </select>
           </label>
-          <label className="inline-flex items-center gap-2 text-xs" style={{ color: '#7A8E7C' }}>
+          <label className="flex items-center justify-between gap-2 text-sm sm:text-xs sm:inline-flex sm:justify-start" style={{ color: '#7A8E7C' }}>
             Search
             <input
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
               placeholder={effectiveTag === 'all' ? 'Find text in outputs' : `Find text in ${effectiveTag}`}
-              className="px-2.5 py-1.5 rounded-lg text-xs min-w-[220px]"
+              className="w-full px-2.5 py-2 sm:py-1.5 rounded-lg text-sm sm:text-xs sm:min-w-[220px]"
               style={{ border: '1px solid #DDD0BC', background: '#FFFFFF', color: '#2A3A2C' }}
             />
           </label>
@@ -902,7 +902,7 @@ export default function PromptDrilldown() {
       </Link>
 
       <div
-        className="rounded-xl border shadow-sm p-5"
+        className="rounded-xl border shadow-sm p-4 sm:p-5"
         style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
       >
         <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -921,7 +921,7 @@ export default function PromptDrilldown() {
           </div>
 
           {!loading && (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span
                 className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium"
                 style={{
@@ -944,7 +944,7 @@ export default function PromptDrilldown() {
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {Array.from({ length: 4 }).map((_, index) => (
             <div
               key={index}
@@ -954,7 +954,7 @@ export default function PromptDrilldown() {
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <SummaryCard
             label="Highcharts Rate"
             value={`${data.summary.highchartsRatePct.toFixed(1)}%`}

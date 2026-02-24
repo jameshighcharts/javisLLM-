@@ -364,12 +364,12 @@ function QueryTagRow({
 
   return (
     <div
-      className="flex items-center gap-3 px-3 py-2"
+      className="flex flex-col items-start gap-2 px-3 py-2 sm:flex-row sm:items-center sm:gap-3"
       style={{ borderBottom: '1px solid #F2EDE6' }}
     >
       <span
-        className="text-xs font-medium flex-shrink-0 truncate"
-        style={{ color: '#3D5840', width: 200 }}
+        className="text-xs font-medium flex-shrink-0 truncate w-full sm:w-[200px]"
+        style={{ color: '#3D5840' }}
         title={query}
       >
         {query}
@@ -418,14 +418,12 @@ function QueryTagRow({
           <button
             type="button"
             onClick={() => { setEditing(true); setTimeout(() => inputRef.current?.focus(), 0) }}
-            className="inline-flex items-center justify-center rounded-full font-bold leading-none"
+            className="inline-flex w-6 h-6 sm:w-[18px] sm:h-[18px] items-center justify-center rounded-full font-bold leading-none"
             style={{
-              width: 18,
-              height: 18,
               background: '#F2EDE6',
               color: '#8FBB93',
               border: '1px solid #DDD0BC',
-              fontSize: 13,
+              fontSize: 14,
               cursor: 'pointer',
             }}
             onMouseEnter={(e) => ((e.currentTarget as HTMLButtonElement).style.background = '#E8E0D2')}
@@ -664,7 +662,7 @@ function TagInput({
           type="text"
           value={input}
           placeholder={placeholder}
-          className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
+          className="flex-1 px-3 py-2.5 sm:py-2 rounded-lg text-sm outline-none"
           style={{
             border: `1px solid ${err ? '#fca5a5' : focused ? '#8FBB93' : '#DDD0BC'}`,
             background: '#FFFFFF',
@@ -679,7 +677,7 @@ function TagInput({
         <button
           type="button"
           onClick={add}
-          className="px-4 py-2 rounded-lg text-sm font-medium"
+          className="px-4 py-2.5 sm:py-2 rounded-lg text-sm font-medium"
           style={{ background: '#F2EDE6', color: '#3D5840', border: '1px solid #DDD0BC', cursor: 'pointer' }}
           onMouseEnter={(e) => ((e.currentTarget as HTMLButtonElement).style.background = '#E8E0D2')}
           onMouseLeave={(e) => ((e.currentTarget as HTMLButtonElement).style.background = '#F2EDE6')}
@@ -997,14 +995,14 @@ export default function Prompts() {
       <div className="flex items-center gap-4 pt-1">
         <div className="flex-1 h-px" style={{ background: '#DDD0BC' }} />
         <span className="text-xs font-semibold uppercase tracking-wider px-1" style={{ color: '#9AAE9C' }}>
-          Manage Queries &amp; Competitors
+          Manage Queries &amp; Tracked Entities
         </span>
         <div className="flex-1 h-px" style={{ background: '#DDD0BC' }} />
       </div>
 
       {/* ── Config editors ─────────────────────────────────────────────────── */}
       {configQuery.isLoading ? (
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           {[0, 1].map((i) => (
             <div key={i} className="rounded-xl border p-6" style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}>
               <div className="h-4 w-28 rounded animate-pulse mb-5" style={{ background: '#D4BB96' }} />
@@ -1014,7 +1012,7 @@ export default function Prompts() {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             {/* Left card: Queries + Competitors */}
             <div
               className="rounded-xl border shadow-sm"
@@ -1053,10 +1051,10 @@ export default function Prompts() {
               <div className="flex items-center justify-between p-5 pb-0">
                 <div>
                   <div className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>
-                    Entities
+                    Tracked entities
                   </div>
                   <div className="text-xs mt-0.5" style={{ color: '#7A8E7C' }}>
-                    Companies, libraries or tools
+                    Companies, libraries or tools tracked in benchmarks
                   </div>
                 </div>
                 <span
@@ -1139,12 +1137,12 @@ export default function Prompts() {
           </div>
 
           {/* Save row */}
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
               onClick={() => { void handleSaveAndRun() }}
               disabled={!canSave}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+              className="inline-flex w-full sm:w-auto justify-center items-center gap-2 px-4 py-2.5 sm:py-2 rounded-lg text-sm font-semibold transition-all"
               style={{
                 background: canSave ? '#2A6032' : '#E8E0D2',
                 color: canSave ? '#FFFFFF' : '#9AAE9C',
@@ -1183,7 +1181,7 @@ export default function Prompts() {
               type="button"
               onClick={() => configMutation.mutate(configPayload)}
               disabled={!canSave}
-              className="px-5 py-2 rounded-lg text-sm font-semibold transition-all"
+              className="w-full sm:w-auto px-5 py-2.5 sm:py-2 rounded-lg text-sm font-semibold transition-all"
               style={{
                 background: canSave ? '#8FBB93' : '#E8E0D2',
                 color: canSave ? '#FFFFFF' : '#9AAE9C',

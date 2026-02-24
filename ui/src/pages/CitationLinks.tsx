@@ -25,7 +25,7 @@ export default function CitationLinks() {
           aria-hidden="true"
         >
           {/* Stat cards */}
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             {[
               { bg: '#FFFFFF', accent: '#EEF5EF', bar: '#8FBB93', pct: '72%', val: 'w-12' },
               { bg: '#FFFFFF', accent: '#FEF6ED', bar: '#C8A87A', pct: '49%', val: 'w-10' },
@@ -44,8 +44,8 @@ export default function CitationLinks() {
           </div>
 
           {/* Table + sidebar */}
-          <div className="grid grid-cols-5 gap-4">
-            <div className="col-span-3 rounded-xl overflow-hidden" style={{ background: '#FFFFFF', border: '1px solid #DDD0BC' }}>
+          <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
+            <div className="xl:col-span-3 rounded-xl overflow-hidden" style={{ background: '#FFFFFF', border: '1px solid #DDD0BC' }}>
               <div className="px-4 py-3 flex items-center justify-between" style={{ background: '#FDFCF8', borderBottom: '1px solid #F2EDE6' }}>
                 <div className="h-3 w-36 rounded" style={{ background: '#DDD0BC' }} />
                 <div className="h-3 w-14 rounded" style={{ background: '#E8E0D2' }} />
@@ -79,7 +79,7 @@ export default function CitationLinks() {
               ))}
             </div>
 
-            <div className="col-span-2 space-y-4">
+            <div className="xl:col-span-2 space-y-4">
               {/* Bar chart */}
               <div className="rounded-xl p-5" style={{ background: '#FFFFFF', border: '1px solid #DDD0BC' }}>
                 <div className="h-3 w-28 rounded mb-1" style={{ background: '#DDD0BC' }} />
@@ -126,7 +126,7 @@ export default function CitationLinks() {
           style={{ background: 'rgba(242,237,230,0.5)', backdropFilter: 'blur(1px)' }}
         >
           <div
-            className="flex flex-col items-center text-center px-12 py-9 rounded-2xl"
+            className="flex flex-col items-center text-center px-6 py-7 sm:px-12 sm:py-9 rounded-2xl"
             style={{
               background: 'rgba(255,255,255,0.95)',
               border: '1px solid #E8E0D2',

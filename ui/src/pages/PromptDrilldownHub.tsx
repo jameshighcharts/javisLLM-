@@ -213,7 +213,7 @@ export default function PromptDrilldownHub() {
         </p>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <SummaryCard label="Prompts" value={String(prompts.length)} sub="Total configured" />
         <SummaryCard label="Tracked" value={String(tracked.length)} sub="Active with run data" accent="#2A5C2E" />
         <SummaryCard label="Paused" value={String(paused.length)} sub="Excluded from next run" />
@@ -233,7 +233,7 @@ export default function PromptDrilldownHub() {
           <div className="text-xs" style={{ color: '#9AAE9C' }}>
             Click any query to open detailed drilldown.
           </div>
-          <div className="w-full sm:w-[360px]">
+          <div className="w-full sm:w-[320px] lg:w-[360px]">
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}

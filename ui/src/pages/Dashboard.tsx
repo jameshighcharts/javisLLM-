@@ -384,7 +384,7 @@ function DashboardTagFilterBar({
       <button
         type="button"
         onClick={() => setIsOpen((v) => !v)}
-        className="w-full flex items-center justify-center gap-2.5 px-4 py-3"
+        className="w-full flex flex-wrap items-center justify-center gap-2.5 px-4 py-3"
         style={{ background: '#FDFCF8', cursor: 'pointer' }}
       >
         <span className="text-sm font-semibold" style={{ color: '#2A3A2C' }}>
@@ -443,7 +443,7 @@ function DashboardTagFilterBar({
             <div className="px-4 pt-3 pb-2 flex items-center justify-between gap-3 flex-wrap" style={{ background: '#FDFCF8' }}>
               <div className="flex items-center gap-2">
                 <div
-                  className="flex items-center gap-2 rounded-lg px-3 py-1.5"
+                  className="flex items-center gap-2 rounded-lg px-3 py-2 sm:py-1.5"
                   style={{ background: '#FFFFFF', border: '1px solid #E8E0D2' }}
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#C4BAB0" strokeWidth="2">
@@ -453,7 +453,7 @@ function DashboardTagFilterBar({
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
                     placeholder="Search tags"
-                    className="text-xs bg-transparent outline-none"
+                    className="text-sm sm:text-xs bg-transparent outline-none"
                     style={{ color: '#2A3A2C', width: 120 }}
                   />
                 </div>
@@ -461,7 +461,7 @@ function DashboardTagFilterBar({
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
-                  className="px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+                  className="px-3 py-2 sm:px-2.5 sm:py-1.5 rounded-lg text-sm sm:text-xs font-semibold"
                   style={{
                     background: mode === 'any' ? '#3D5C40' : '#FFFFFF',
                     color: mode === 'any' ? '#FEFAE8' : '#7A8E7C',
@@ -473,7 +473,7 @@ function DashboardTagFilterBar({
                 </button>
                 <button
                   type="button"
-                  className="px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+                  className="px-3 py-2 sm:px-2.5 sm:py-1.5 rounded-lg text-sm sm:text-xs font-semibold"
                   style={{
                     background: mode === 'all' ? '#3D5C40' : '#FFFFFF',
                     color: mode === 'all' ? '#FEFAE8' : '#7A8E7C',
@@ -485,7 +485,7 @@ function DashboardTagFilterBar({
                 </button>
                 <button
                   type="button"
-                  className="px-2.5 py-1.5 rounded-lg text-xs font-medium"
+                  className="px-3 py-2 sm:px-2.5 sm:py-1.5 rounded-lg text-sm sm:text-xs font-medium"
                   style={{
                     background: '#FFFFFF',
                     color: hasActiveFilter ? '#2A3A2C' : '#C4BAB0',
@@ -513,7 +513,7 @@ function DashboardTagFilterBar({
                   <button
                     type="button"
                     onClick={onClear}
-                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all"
+                    className="inline-flex items-center gap-2 px-3 py-2 sm:py-1.5 rounded-full text-sm sm:text-xs font-medium transition-all"
                     style={{
                       background: allSelected ? '#3D5C40' : '#F2EDE6',
                       color: allSelected ? '#FEFAE8' : '#5A7060',
@@ -522,7 +522,7 @@ function DashboardTagFilterBar({
                   >
                     <span>All</span>
                     <span
-                      className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold"
+                      className="inline-flex items-center justify-center min-w-[20px] h-[20px] sm:min-w-[18px] sm:h-[18px] px-1 rounded-full text-[10px] font-semibold"
                       style={{
                         background: allSelected ? 'rgba(255,255,255,0.18)' : '#E8E0D2',
                         color: allSelected ? '#FEFAE8' : '#7A8E7C',
@@ -539,7 +539,7 @@ function DashboardTagFilterBar({
                           key={entry.tag}
                           type="button"
                           onClick={() => onToggleTag(entry.tag)}
-                          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all"
+                          className="inline-flex items-center gap-2 px-3 py-2 sm:py-1.5 rounded-full text-sm sm:text-xs font-medium transition-all"
                           style={{
                             background: active ? '#3D5C40' : '#F2EDE6',
                             color: active ? '#FEFAE8' : '#5A7060',
@@ -548,7 +548,7 @@ function DashboardTagFilterBar({
                         >
                           <span>{entry.tag}</span>
                           <span
-                            className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold"
+                            className="inline-flex items-center justify-center min-w-[20px] h-[20px] sm:min-w-[18px] sm:h-[18px] px-1 rounded-full text-[10px] font-semibold"
                             style={{
                               background: active ? 'rgba(255,255,255,0.18)' : '#E8E0D2',
                               color: active ? '#FEFAE8' : '#7A8E7C',
@@ -914,7 +914,7 @@ function SnapshotTrendCard({
       </div>
 
       {/* Latest values + deltas */}
-      <div className="px-5 pt-2 pb-1 grid grid-cols-2 gap-3">
+      <div className="px-5 pt-2 pb-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
         {isLoading ? (
           <>
             <Skeleton className="h-8 w-24" />
@@ -1906,7 +1906,7 @@ function PromptStatusTable({
       style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
     >
       <div className="px-4 py-3" style={{ background: '#FDFCF8', borderBottom: '1px solid #F2EDE6' }}>
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-xs font-medium" style={{ color: '#7A8E7C' }}>
               Prompt table
@@ -1915,7 +1915,7 @@ function PromptStatusTable({
               {rows.length} row{rows.length !== 1 ? 's' : ''} shown
             </p>
           </div>
-          <div className="flex items-center gap-2 min-w-[280px] flex-1 max-w-[420px]">
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:max-w-[420px] sm:flex-1 sm:flex-row sm:items-center">
             <div
               className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg w-full"
               style={{ border: '1px solid #DDD0BC', background: '#FFFFFF' }}
@@ -1934,7 +1934,7 @@ function PromptStatusTable({
             </div>
             <Link
               to="/prompts"
-              className="text-xs font-medium whitespace-nowrap"
+              className="text-xs font-medium whitespace-nowrap self-end sm:self-auto"
               style={{ color: '#8FBB93' }}
               onMouseEnter={(e) => ((e.currentTarget as HTMLAnchorElement).style.color = '#607860')}
               onMouseLeave={(e) => ((e.currentTarget as HTMLAnchorElement).style.color = '#8FBB93')}
@@ -2147,7 +2147,7 @@ export default function Dashboard() {
       webSearch ? `Web search: ${webSearch}` : null,
     ].filter(Boolean) as string[]
     setHeaderExtra(
-      <div className="flex items-center gap-2 ml-auto">
+      <div className="hidden sm:flex items-center gap-2 ml-auto">
         {pills.map((val) => (
           <span
             key={val}
@@ -2285,11 +2285,11 @@ export default function Dashboard() {
       />
 
       {/* KPI row: score (2) + trend chart (2) + sov (1) + prompt avg (1) */}
-      <div className="grid grid-cols-6 gap-4">
-        <div className="col-span-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3 sm:gap-4">
+        <div className="sm:col-span-1 xl:col-span-2">
           <ScoreStatCard score={overallScore} isLoading={isLoading} />
         </div>
-        <div className="col-span-2">
+        <div className="sm:col-span-1 xl:col-span-2">
           <SnapshotTrendCard
             points={timeseriesPoints}
             hcEntity={hcEntry?.entity ?? null}
@@ -2301,10 +2301,10 @@ export default function Dashboard() {
       </div>
 
       {/* Main section — visibility chart + ranking */}
-      <div className="grid grid-cols-12 gap-4">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
         {/* Left: visibility over time + toggles */}
         <Card
-          className="col-span-7"
+          className="xl:col-span-7"
           title="LLM Mention Rate Over Time"
           sub={
             normalizedSelectedTags.length > 0
@@ -2350,7 +2350,7 @@ export default function Dashboard() {
 
         {/* Right: competitor ranking */}
         <Card
-          className="col-span-5"
+          className="xl:col-span-5"
           title="Competitor Ranking"
           sub="Sorted by mention rate · bar = relative share"
         >

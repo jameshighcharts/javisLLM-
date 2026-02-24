@@ -360,10 +360,10 @@ function TagFilterBar({
               {matchedCount} of {totalCount} prompts matched · {trackedCount} tracked
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+              className="px-3 py-2 sm:px-2.5 sm:py-1.5 rounded-lg text-sm sm:text-xs font-semibold"
               style={{
                 background: mode === 'any' ? '#2A3A2C' : '#FFFFFF',
                 color: mode === 'any' ? '#F8F5EF' : '#607860',
@@ -375,7 +375,7 @@ function TagFilterBar({
             </button>
             <button
               type="button"
-              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+              className="px-3 py-2 sm:px-2.5 sm:py-1.5 rounded-lg text-sm sm:text-xs font-semibold"
               style={{
                 background: mode === 'all' ? '#2A3A2C' : '#FFFFFF',
                 color: mode === 'all' ? '#F8F5EF' : '#607860',
@@ -387,7 +387,7 @@ function TagFilterBar({
             </button>
             <button
               type="button"
-              className="px-2.5 py-1.5 rounded-lg text-xs font-medium"
+              className="px-3 py-2 sm:px-2.5 sm:py-1.5 rounded-lg text-sm sm:text-xs font-medium"
               style={{
                 background: selectedTags.length > 0 ? '#FFFFFF' : '#F6F2EB',
                 color: selectedTags.length > 0 ? '#2A3A2C' : '#9AAE9C',
@@ -432,7 +432,7 @@ function TagFilterBar({
             <button
               type="button"
               onClick={onClear}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all"
+              className="inline-flex items-center gap-2 px-3 py-2 sm:py-1.5 rounded-full text-sm sm:text-xs font-medium transition-all"
               style={{
                 background: allSelected ? '#2A3A2C' : '#F8F5EF',
                 color: allSelected ? '#F8F5EF' : '#3D5840',
@@ -441,7 +441,7 @@ function TagFilterBar({
             >
               <span>All</span>
               <span
-                className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold"
+                className="inline-flex items-center justify-center min-w-[20px] h-[20px] sm:min-w-[18px] sm:h-[18px] px-1 rounded-full text-[10px] font-semibold"
                 style={{
                   background: allSelected ? 'rgba(255,255,255,0.18)' : '#EEE5D8',
                   color: allSelected ? '#F8F5EF' : '#607860',
@@ -458,7 +458,7 @@ function TagFilterBar({
                   key={entry.tag}
                   type="button"
                   onClick={() => onToggleTag(entry.tag)}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all"
+                  className="inline-flex items-center gap-2 px-3 py-2 sm:py-1.5 rounded-full text-sm sm:text-xs font-medium transition-all"
                   style={{
                     background: active ? '#2A3A2C' : '#F8F5EF',
                     color: active ? '#F8F5EF' : '#3D5840',
@@ -467,7 +467,7 @@ function TagFilterBar({
                 >
                   <span>{entry.tag}</span>
                   <span
-                    className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold"
+                    className="inline-flex items-center justify-center min-w-[20px] h-[20px] sm:min-w-[18px] sm:h-[18px] px-1 rounded-full text-[10px] font-semibold"
                     style={{
                       background: active ? 'rgba(255,255,255,0.18)' : '#EEE5D8',
                       color: active ? '#F8F5EF' : '#607860',
@@ -737,7 +737,7 @@ export default function Competitors() {
       />
 
       {/* Highcharts summary strip */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
         {isLoading ? (
           Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24" />)
         ) : (
@@ -771,7 +771,7 @@ export default function Competitors() {
       </div>
 
       {/* Charts */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <Card
           title="Mention Rate"
           sub={
@@ -804,140 +804,142 @@ export default function Competitors() {
             Head-to-Head vs Highcharts
           </div>
         </div>
-        <table className="w-full">
-          <thead>
-            <tr style={{ borderBottom: '1px solid #F2EDE6' }}>
-              {['Rank', 'Entity', 'Mention Rate', 'Share of Voice', 'Gap vs Highcharts'].map((h, i) => (
-                <th
-                  key={h}
-                  className="px-5 py-3 text-xs font-medium"
-                  style={{
-                    color: '#7A8E7C',
-                    textAlign: i <= 1 ? 'left' : i < 4 ? 'right' : 'left',
-                  }}
-                >
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading
-              ? Array.from({ length: 6 }).map((_, i) => (
-                  <tr key={i} style={{ borderBottom: '1px solid #F2EDE6' }}>
-                    {Array.from({ length: 5 }).map((__, j) => (
-                      <td key={j} className="px-5 py-4">
-                        <Skeleton className="h-4" />
-                      </td>
-                    ))}
-                  </tr>
-                ))
-              : sorted.map((s, i) => {
-                  const diff = (hc?.mentionRatePct ?? 0) - s.mentionRatePct
-                  const color = getColor(s, i)
-                  const isHC = s.isHighcharts
-                  return (
-                    <tr
-                      key={s.entityKey}
-                      style={{
-                        borderBottom: i < sorted.length - 1 ? '1px solid #F2EDE6' : 'none',
-                        background: isHC ? '#EEF3EE' : 'transparent',
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!isHC)
-                          (e.currentTarget as HTMLTableRowElement).style.background = '#F7F3EE'
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.currentTarget as HTMLTableRowElement).style.background = isHC ? '#EEF3EE' : 'transparent'
-                      }}
-                    >
-                      {/* Rank */}
-                      <td
-                        className="px-5 py-3.5 text-xs font-semibold tabular-nums"
-                        style={{ color: isHC ? HC_COLOR : '#C8C0B8' }}
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px]">
+            <thead>
+              <tr style={{ borderBottom: '1px solid #F2EDE6' }}>
+                {['Rank', 'Entity', 'Mention Rate', 'Share of Voice', 'Gap vs Highcharts'].map((h, i) => (
+                  <th
+                    key={h}
+                    className="px-5 py-3 text-xs font-medium"
+                    style={{
+                      color: '#7A8E7C',
+                      textAlign: i <= 1 ? 'left' : i < 4 ? 'right' : 'left',
+                    }}
+                  >
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {isLoading
+                ? Array.from({ length: 6 }).map((_, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid #F2EDE6' }}>
+                      {Array.from({ length: 5 }).map((__, j) => (
+                        <td key={j} className="px-5 py-4">
+                          <Skeleton className="h-4" />
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                : sorted.map((s, i) => {
+                    const diff = (hc?.mentionRatePct ?? 0) - s.mentionRatePct
+                    const color = getColor(s, i)
+                    const isHC = s.isHighcharts
+                    return (
+                      <tr
+                        key={s.entityKey}
+                        style={{
+                          borderBottom: i < sorted.length - 1 ? '1px solid #F2EDE6' : 'none',
+                          background: isHC ? '#EEF3EE' : 'transparent',
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!isHC)
+                            (e.currentTarget as HTMLTableRowElement).style.background = '#F7F3EE'
+                        }}
+                        onMouseLeave={(e) => {
+                          (e.currentTarget as HTMLTableRowElement).style.background = isHC ? '#EEF3EE' : 'transparent'
+                        }}
                       >
-                        #{i + 1}
-                      </td>
+                        {/* Rank */}
+                        <td
+                          className="px-5 py-3.5 text-xs font-semibold tabular-nums"
+                          style={{ color: isHC ? HC_COLOR : '#C8C0B8' }}
+                        >
+                          #{i + 1}
+                        </td>
 
-                      {/* Entity */}
-                      <td className="px-5 py-3.5">
-                        <div className="flex items-center gap-2.5">
-                          {getEntityLogo(s.entity)
-                            ? <EntityLogo entity={s.entity} size={18} />
-                            : <div
-                                className="w-2 h-2 rounded-full flex-shrink-0"
-                                style={{ background: color, boxShadow: isHC ? `0 0 0 3px #C4DCC6` : 'none' }}
-                              />
-                          }
-                          <span
-                            className="text-sm font-medium"
-                            style={{ color: isHC ? '#2A4A2C' : '#2A3A2C' }}
-                          >
-                            {s.entity}
-                          </span>
-                          {isHC && (
+                        {/* Entity */}
+                        <td className="px-5 py-3.5">
+                          <div className="flex items-center gap-2.5">
+                            {getEntityLogo(s.entity)
+                              ? <EntityLogo entity={s.entity} size={18} />
+                              : <div
+                                  className="w-2 h-2 rounded-full flex-shrink-0"
+                                  style={{ background: color, boxShadow: isHC ? `0 0 0 3px #C4DCC6` : 'none' }}
+                                />
+                            }
                             <span
-                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
-                              style={{
-                                background: '#D4E8D5',
-                                color: HC_COLOR,
-                                border: `1px solid #8FBB93`,
-                              }}
+                              className="text-sm font-medium"
+                              style={{ color: isHC ? '#2A4A2C' : '#2A3A2C' }}
                             >
-                              YOU
+                              {s.entity}
+                            </span>
+                            {isHC && (
+                              <span
+                                className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                                style={{
+                                  background: '#D4E8D5',
+                                  color: HC_COLOR,
+                                  border: `1px solid #8FBB93`,
+                                }}
+                              >
+                                YOU
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Mention Rate */}
+                        <td
+                          className="px-5 py-3.5 text-right text-sm font-medium tabular-nums"
+                          style={{ color: isHC ? '#2A4A2C' : '#2A3A2C' }}
+                        >
+                          {s.mentionRatePct.toFixed(1)}%
+                        </td>
+
+                        {/* Share of Voice */}
+                        <td
+                          className="px-5 py-3.5 text-right text-sm font-medium tabular-nums"
+                          style={{ color: isHC ? '#2A4A2C' : '#2A3A2C' }}
+                        >
+                          {s.shareOfVoicePct > 0 ? `${s.shareOfVoicePct.toFixed(1)}%` : '–'}
+                        </td>
+
+                        {/* Gap */}
+                        <td className="px-5 py-3.5">
+                          {isHC ? (
+                            <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>
+                          ) : diff > 0 ? (
+                            <span
+                              className="inline-flex text-xs font-semibold px-2 py-0.5 rounded-full"
+                              style={{ background: '#F0FAF0', color: '#16a34a', border: '1px solid #BBF7D0' }}
+                            >
+                              +{diff.toFixed(1)}% ahead
+                            </span>
+                          ) : diff < 0 ? (
+                            <span
+                              className="inline-flex text-xs font-semibold px-2 py-0.5 rounded-full"
+                              style={{ background: '#FEF2F2', color: '#dc2626', border: '1px solid #FECACA' }}
+                            >
+                              {diff.toFixed(1)}% behind
+                            </span>
+                          ) : (
+                            <span
+                              className="inline-flex text-xs font-semibold px-2 py-0.5 rounded-full"
+                              style={{ background: '#F2EDE6', color: '#9AAE9C', border: '1px solid #DDD0BC' }}
+                            >
+                              tied
                             </span>
                           )}
-                        </div>
-                      </td>
-
-                      {/* Mention Rate */}
-                      <td
-                        className="px-5 py-3.5 text-right text-sm font-medium tabular-nums"
-                        style={{ color: isHC ? '#2A4A2C' : '#2A3A2C' }}
-                      >
-                        {s.mentionRatePct.toFixed(1)}%
-                      </td>
-
-                      {/* Share of Voice */}
-                      <td
-                        className="px-5 py-3.5 text-right text-sm font-medium tabular-nums"
-                        style={{ color: isHC ? '#2A4A2C' : '#2A3A2C' }}
-                      >
-                        {s.shareOfVoicePct > 0 ? `${s.shareOfVoicePct.toFixed(1)}%` : '–'}
-                      </td>
-
-                      {/* Gap */}
-                      <td className="px-5 py-3.5">
-                        {isHC ? (
-                          <span className="text-sm" style={{ color: '#E5DDD0' }}>–</span>
-                        ) : diff > 0 ? (
-                          <span
-                            className="inline-flex text-xs font-semibold px-2 py-0.5 rounded-full"
-                            style={{ background: '#F0FAF0', color: '#16a34a', border: '1px solid #BBF7D0' }}
-                          >
-                            +{diff.toFixed(1)}% ahead
-                          </span>
-                        ) : diff < 0 ? (
-                          <span
-                            className="inline-flex text-xs font-semibold px-2 py-0.5 rounded-full"
-                            style={{ background: '#FEF2F2', color: '#dc2626', border: '1px solid #FECACA' }}
-                          >
-                            {diff.toFixed(1)}% behind
-                          </span>
-                        ) : (
-                          <span
-                            className="inline-flex text-xs font-semibold px-2 py-0.5 rounded-full"
-                            style={{ background: '#F2EDE6', color: '#9AAE9C', border: '1px solid #DDD0BC' }}
-                          >
-                            tied
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
-          </tbody>
-        </table>
+                        </td>
+                      </tr>
+                    )
+                  })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   )
