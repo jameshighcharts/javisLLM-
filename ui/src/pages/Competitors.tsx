@@ -35,27 +35,33 @@ function getEntityLogo(entity: string): string | null {
   return ENTITY_LOGOS[entity.toLowerCase()] ?? null
 }
 
+const LOGO_SLOT_W = 32
+
 function EntityLogo({ entity, size = 16 }: { entity: string; size?: number }) {
   const src = getEntityLogo(entity)
   if (!src) return null
   const crop = LOGO_CROP[src]
+
   if (crop) {
-    const scale = crop.displayH / crop.h
-    const displayW = Math.round(crop.w * scale)
+    const scale = LOGO_SLOT_W / crop.w
+    const renderH = Math.round(crop.h * scale)
     const imgW = Math.round(crop.srcW * scale)
     const imgH = Math.round(crop.srcH * scale)
     const offX = Math.round(crop.x * scale)
     const offY = Math.round(crop.y * scale)
     return (
-      <div style={{ width: displayW, height: crop.displayH, overflow: 'hidden', position: 'relative', flexShrink: 0 }}>
-        <img src={src} alt={entity}
-          style={{ position: 'absolute', width: imgW, height: imgH, top: -offY, left: -offX, objectFit: 'fill' }} />
+      <div style={{ width: LOGO_SLOT_W, height: size, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ width: LOGO_SLOT_W, height: renderH, overflow: 'hidden', position: 'relative', flexShrink: 0 }}>
+          <img src={src} alt={entity}
+            style={{ position: 'absolute', width: imgW, height: imgH, top: -offY, left: -offX }} />
+        </div>
       </div>
     )
   }
+
   return (
-    <div style={{ width: size, height: size, overflow: 'hidden', borderRadius: 3, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <img src={src} width={size} height={size} style={{ objectFit: 'contain', flexShrink: 0 }} alt={entity} />
+    <div style={{ width: LOGO_SLOT_W, height: size, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <img src={src} width={size} height={size} style={{ objectFit: 'contain', flexShrink: 0, borderRadius: 3 }} alt={entity} />
     </div>
   )
 }
