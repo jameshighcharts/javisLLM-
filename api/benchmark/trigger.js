@@ -174,7 +174,7 @@ module.exports = async (req, res) => {
         : DEFAULT_MODEL
     const model = resolveModel(requestedModel, allowedModels)
     const ourTerms = resolveOurTerms(body.ourTerms)
-    const runs = Math.round(normalizeNumber(body.runs, 3, 1, 3))
+    const runs = Math.round(normalizeNumber(body.runs, 1, 1, 3))
     const temperature = normalizeNumber(body.temperature, 0.7, 0, 2)
     const webSearch = parseWebSearch(body.webSearch)
     const runMonth = resolveRunMonth(body.runMonth)

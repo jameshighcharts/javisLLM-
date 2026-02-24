@@ -535,15 +535,32 @@ function TagInput({
   onChange,
   placeholder,
   showLogos,
+  maxVisibleItems,
 }: {
   items: string[]
   onChange: (next: string[]) => void
   placeholder?: string
   showLogos?: boolean
+  maxVisibleItems?: number
 }) {
   const [input, setInput] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const [focused, setFocused] = useState(false)
+  const [showAllItems, setShowAllItems] = useState(false)
+
+  const hasOverflow =
+    typeof maxVisibleItems === 'number' &&
+    maxVisibleItems > 0 &&
+    items.length > maxVisibleItems
+
+  const visibleItems =
+    hasOverflow && !showAllItems ? items.slice(0, maxVisibleItems) : items
+
+  useEffect(() => {
+    if (!hasOverflow && showAllItems) {
+      setShowAllItems(false)
+    }
+  }, [hasOverflow, showAllItems])
 
   function add() {
     const val = input.trim()
@@ -561,7 +578,7 @@ function TagInput({
     <div className="space-y-3">
       {items.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {items.map((item) => {
+          {visibleItems.map((item) => {
             const logo = showLogos ? getEntityLogo(item) : null
             return (
               <span
@@ -592,6 +609,38 @@ function TagInput({
               </span>
             )
           })}
+          {hasOverflow && !showAllItems && (
+            <button
+              type="button"
+              onClick={() => setShowAllItems(true)}
+              className="inline-flex items-center rounded-full text-xs font-semibold"
+              style={{
+                background: '#EEF5EF',
+                color: '#2A5C2E',
+                border: '1px solid #C8DEC9',
+                padding: '5px 11px',
+                cursor: 'pointer',
+              }}
+            >
+              See all
+            </button>
+          )}
+          {hasOverflow && showAllItems && (
+            <button
+              type="button"
+              onClick={() => setShowAllItems(false)}
+              className="inline-flex items-center rounded-full text-xs font-semibold"
+              style={{
+                background: '#F2EDE6',
+                color: '#607860',
+                border: '1px solid #DDD0BC',
+                padding: '5px 11px',
+                cursor: 'pointer',
+              }}
+            >
+              Show less
+            </button>
+          )}
         </div>
       )}
       <div className="flex gap-2">
@@ -836,7 +885,7 @@ export default function Prompts() {
 
       const triggerResult = await api.triggerBenchmark({
         model: 'gpt-4o-mini',
-        runs: 3,
+        runs: 1,
         temperature: 0.7,
         webSearch: true,
         ourTerms: 'Highcharts',
@@ -933,6 +982,7 @@ export default function Prompts() {
                   items={queries}
                   onChange={handleQueryListChange}
                   placeholder="e.g. javascript charting libraries"
+                  maxVisibleItems={11}
                 />
               </div>
 

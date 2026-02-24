@@ -76,7 +76,7 @@ export default function Runs() {
 
   const [ourTerms, setOurTerms] = useState('Highcharts')
   const [model, setModel] = useState('gpt-4o-mini')
-  const [runs, setRuns] = useState(3)
+  const [runs, setRuns] = useState(1)
   const [temperature, setTemperature] = useState(0.7)
   const [webSearch, setWebSearch] = useState(true)
   const [runMonth, setRunMonth] = useState('')
