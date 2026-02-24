@@ -68,6 +68,18 @@ function StatusBadge({
   status: PromptStatus['status']
   isPaused: boolean
 }) {
+  if (status === 'deleted') {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
+        style={{ background: '#FEF2F2', color: '#B91C1C', border: '1px solid #FECACA' }}
+      >
+        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: '#EF4444' }} />
+        Deleted
+      </span>
+    )
+  }
+
   if (isPaused) {
     return (
       <span
@@ -1287,6 +1299,7 @@ export default function Prompts() {
                   ))
                 : sorted.map((p, i) => {
                     const paused = p.isPaused
+                    const deleted = p.status === 'deleted'
                     const delta = p.highchartsRatePct - (p.topCompetitor?.ratePct ?? 0)
                     const isPending =
                       toggleMutation.isPending && toggleMutation.variables?.query === p.query
@@ -1296,32 +1309,38 @@ export default function Prompts() {
                         key={p.query}
                         style={{
                           borderBottom: i < sorted.length - 1 ? '1px solid #F2EDE6' : 'none',
-                          background: paused ? '#FDFCF8' : 'transparent',
-                          opacity: paused ? 0.65 : 1,
+                          background: paused ? '#FDFCF8' : deleted ? '#FFF9F7' : 'transparent',
+                          opacity: paused ? 0.65 : deleted ? 0.78 : 1,
                           transition: 'opacity 0.15s, background 0.15s',
                         }}
                         onMouseEnter={(e) => {
-                          if (!paused) (e.currentTarget as HTMLTableRowElement).style.background = '#F7F3EE'
+                          if (!paused && !deleted) {
+                            (e.currentTarget as HTMLTableRowElement).style.background = '#F7F3EE'
+                          }
                         }}
                         onMouseLeave={(e) => {
-                          (e.currentTarget as HTMLTableRowElement).style.background = paused ? '#FDFCF8' : 'transparent'
+                          ;(e.currentTarget as HTMLTableRowElement).style.background = paused
+                            ? '#FDFCF8'
+                            : deleted
+                              ? '#FFF9F7'
+                              : 'transparent'
                         }}
                       >
                         <td className="px-4 py-3">
                           <Toggle
-                            active={!paused}
+                            active={!paused && !deleted}
                             onChange={(v) => toggleMutation.mutate({ query: p.query, active: v })}
-                            disabled={isPending}
+                            disabled={isPending || deleted}
                           />
                         </td>
                         <td className="px-4 py-3 text-sm font-medium">
                           <Link
                             to={`/prompts/drilldown?query=${encodeURIComponent(p.query)}`}
                             className="inline-flex max-w-[320px] items-center gap-1.5"
-                            style={{ color: paused ? '#9AAE9C' : '#2A3A2C' }}
+                            style={{ color: paused ? '#9AAE9C' : deleted ? '#B45309' : '#2A3A2C' }}
                           >
                             <span className="block truncate whitespace-nowrap">{p.query}</span>
-                            <span className="text-xs" style={{ color: paused ? '#C8D0C8' : '#8FBB93' }} aria-hidden>↗</span>
+                            <span className="text-xs" style={{ color: paused ? '#C8D0C8' : deleted ? '#F59E0B' : '#8FBB93' }} aria-hidden>↗</span>
                           </Link>
                         </td>
                       <td className="px-4 py-3">

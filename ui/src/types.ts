@@ -35,7 +35,7 @@ export interface PromptStatus {
   query: string
   tags: string[]
   isPaused: boolean
-  status: 'tracked' | 'awaiting_run'
+  status: 'tracked' | 'awaiting_run' | 'deleted'
   runs: number
   highchartsRatePct: number
   highchartsRank: number | null

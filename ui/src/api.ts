@@ -10,6 +10,7 @@ import type {
   DashboardResponse,
   HealthResponse,
   KpiRow,
+  PromptStatus,
   PromptDrilldownResponse,
   TimeSeriesResponse,
 } from './types'
@@ -153,7 +154,9 @@ function inferPromptTags(query: string): string[] {
   return tags
 }
 
-function normalizePromptTags(rawTags: unknown, query: string): string[] {
+const DELETED_PROMPT_TAG = '__deleted__'
+
+function parsePromptTagList(rawTags: unknown): string[] {
   const candidates =
     typeof rawTags === 'string'
       ? rawTags.split(',')
@@ -161,11 +164,29 @@ function normalizePromptTags(rawTags: unknown, query: string): string[] {
         ? rawTags.map((value) => String(value))
         : []
 
-  const normalized = uniqueNonEmpty(
+  return uniqueNonEmpty(
     candidates.map((value) => {
       const normalizedTag = value.trim().toLowerCase()
       return normalizedTag === 'generic' ? 'general' : normalizedTag
     }),
+  )
+}
+
+function hasDeletedPromptTag(rawTags: unknown): boolean {
+  return parsePromptTagList(rawTags).includes(DELETED_PROMPT_TAG)
+}
+
+function withDeletedPromptTag(rawTags: unknown, query: string): string[] {
+  const baseTags = normalizePromptTags(rawTags, query)
+  return uniqueNonEmpty([
+    ...baseTags.filter((tag) => tag !== DELETED_PROMPT_TAG),
+    DELETED_PROMPT_TAG,
+  ])
+}
+
+function normalizePromptTags(rawTags: unknown, query: string): string[] {
+  const normalized = parsePromptTagList(rawTags).filter(
+    (tag) => tag !== DELETED_PROMPT_TAG,
   )
   return normalized.length > 0 ? normalized : inferPromptTags(query)
 }
@@ -580,23 +601,56 @@ async function updateConfigInSupabase(config: BenchmarkConfig): Promise<ConfigRe
     )
   }
 
-  const allPromptRows = await supabase
+  let promptTagsColumnAvailable = true
+  const allPromptRowsWithTags = await supabase
     .from('prompt_queries')
-    .select('id,query_text,is_active')
-  if (allPromptRows.error) {
-    throw asError(allPromptRows.error, 'Unable to refresh prompt list')
-  }
-  const activeQuerySet = new Set(queries.map((query) => query.toLowerCase()))
-  for (const row of (allPromptRows.data ?? []) as Array<{
+    .select('id,query_text,is_active,tags')
+  let allPromptRowsError = allPromptRowsWithTags.error
+  let allPromptRowsData = (allPromptRowsWithTags.data ?? []) as Array<{
     id: string
     query_text: string
     is_active: boolean
-  }>) {
+    tags?: string[] | null
+  }>
+
+  if (allPromptRowsError && isMissingColumn(allPromptRowsError)) {
+    promptTagsColumnAvailable = false
+    const fallbackRows = await supabase
+      .from('prompt_queries')
+      .select('id,query_text,is_active')
+    allPromptRowsError = fallbackRows.error
+    allPromptRowsData = ((fallbackRows.data ?? []) as Array<{
+      id: string
+      query_text: string
+      is_active: boolean
+    }>).map((row) => ({ ...row, tags: null }))
+  }
+
+  if (allPromptRowsError) {
+    throw asError(allPromptRowsError, 'Unable to refresh prompt list')
+  }
+
+  const activeQuerySet = new Set(queries.map((query) => query.toLowerCase()))
+  for (const row of allPromptRowsData) {
     const shouldBeActive = activeQuerySet.has(row.query_text.toLowerCase())
-    if (row.is_active !== shouldBeActive) {
+
+    const shouldMarkDeleted =
+      promptTagsColumnAvailable &&
+      row.is_active &&
+      !shouldBeActive &&
+      !hasDeletedPromptTag(row.tags)
+
+    if (row.is_active !== shouldBeActive || shouldMarkDeleted) {
+      const promptUpdatePayload: Record<string, unknown> = {
+        is_active: shouldBeActive,
+      }
+      if (promptTagsColumnAvailable && !shouldBeActive) {
+        promptUpdatePayload.tags = withDeletedPromptTag(row.tags, row.query_text)
+      }
+
       const updateResult = await supabase
         .from('prompt_queries')
-        .update({ is_active: shouldBeActive })
+        .update(promptUpdatePayload)
         .eq('id', row.id)
       if (updateResult.error) {
         throw asError(updateResult.error, 'Unable to update prompt active state')
@@ -712,11 +766,55 @@ async function updateConfigInSupabase(config: BenchmarkConfig): Promise<ConfigRe
 
 async function togglePromptInSupabase(query: string, active: boolean): Promise<void> {
   if (!supabase) throw new Error('Supabase is not configured.')
-  const { error } = await supabase
+
+  const promptRowWithTags = await supabase
     .from('prompt_queries')
-    .update({ is_active: active })
+    .select('id,query_text,tags')
     .eq('query_text', query)
-  if (error) throw asError(error, 'Failed to toggle prompt active state')
+    .limit(1)
+
+  let promptTagsColumnAvailable = true
+  let promptRowError = promptRowWithTags.error
+  let promptRow = ((promptRowWithTags.data ?? [])[0] ?? null) as {
+    id: string
+    query_text: string
+    tags?: string[] | null
+  } | null
+
+  if (promptRowError && isMissingColumn(promptRowError)) {
+    promptTagsColumnAvailable = false
+    const fallbackRow = await supabase
+      .from('prompt_queries')
+      .select('id,query_text')
+      .eq('query_text', query)
+      .limit(1)
+    promptRowError = fallbackRow.error
+    promptRow = ((fallbackRow.data ?? [])[0] ?? null) as {
+      id: string
+      query_text: string
+    } | null
+  }
+
+  if (promptRowError) {
+    throw asError(promptRowError, 'Failed to load prompt metadata for toggle')
+  }
+  if (!promptRow) {
+    throw new Error(`Prompt not found: ${query}`)
+  }
+
+  const updatePayload: Record<string, unknown> = { is_active: active }
+  if (promptTagsColumnAvailable) {
+    updatePayload.tags = normalizePromptTags(promptRow.tags, promptRow.query_text)
+  }
+
+  const updateResult = await supabase
+    .from('prompt_queries')
+    .update(updatePayload)
+    .eq('id', promptRow.id)
+
+  if (updateResult.error) {
+    throw asError(updateResult.error, 'Failed to toggle prompt active state')
+  }
 }
 
 async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
@@ -996,11 +1094,16 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
         .map((entry) => ({ entity: entry.entity, ratePct: Number(entry.ratePct.toFixed(2)) }))
         .at(0) ?? null
 
+    const isDeleted = hasDeletedPromptTag(queryRow.tags)
+
+    const status: PromptStatus['status'] =
+      isDeleted ? 'deleted' : runs > 0 ? 'tracked' : 'awaiting_run'
+
     return {
       query: queryRow.query_text,
       tags: normalizePromptTags(queryRow.tags, queryRow.query_text),
-      isPaused: !queryRow.is_active,
-      status: (runs > 0 ? 'tracked' : 'awaiting_run') as 'tracked' | 'awaiting_run',
+      isPaused: !isDeleted && !queryRow.is_active,
+      status,
       runs,
       highchartsRatePct: Number(highchartsRatePct.toFixed(2)),
       highchartsRank,
