@@ -302,6 +302,10 @@ function normalizeQueryTagsMap(
   )
 }
 
+function normalizeQueryKey(query: string): string {
+  return query.trim().toLowerCase()
+}
+
 function PromptTagChips({
   tags,
   muted,
@@ -709,21 +713,65 @@ export default function Prompts() {
       api.togglePromptActive(query, active),
     onMutate: async ({ query, active }) => {
       await qc.cancelQueries({ queryKey: ['dashboard'] })
-      const prev = qc.getQueryData<DashboardResponse>(['dashboard'])
+      const prevDashboard = qc.getQueryData<DashboardResponse>(['dashboard'])
+      const prevQueries = queries
+      const prevQueryTags = queryTags
+      const normalizedQuery = normalizeQueryKey(query)
+      const matchingPrompt = prevDashboard?.promptStatus.find(
+        (prompt) => normalizeQueryKey(prompt.query) === normalizedQuery,
+      )
+      const canonicalQuery = matchingPrompt?.query ?? query
+
       qc.setQueryData<DashboardResponse>(['dashboard'], (old) =>
         old
           ? {
               ...old,
               promptStatus: old.promptStatus.map((p) =>
-                p.query === query ? { ...p, isPaused: !active } : p,
+                normalizeQueryKey(p.query) === normalizedQuery
+                  ? { ...p, isPaused: !active }
+                  : p,
               ),
             }
           : old,
       )
-      return { prev }
+
+      setQueries((current) => {
+        const hasQuery = current.some(
+          (existing) => normalizeQueryKey(existing) === normalizedQuery,
+        )
+        if (active) {
+          return hasQuery ? current : [...current, canonicalQuery]
+        }
+        return hasQuery
+          ? current.filter(
+              (existing) => normalizeQueryKey(existing) !== normalizedQuery,
+            )
+          : current
+      })
+
+      if (active) {
+        const tagsForQuery =
+          matchingPrompt?.tags && matchingPrompt.tags.length > 0
+            ? matchingPrompt.tags
+            : inferPromptTags(canonicalQuery)
+        setQueryTags((current) => {
+          const existingKey = Object.keys(current).find(
+            (existing) => normalizeQueryKey(existing) === normalizedQuery,
+          )
+          if (existingKey) return current
+          return {
+            ...current,
+            [canonicalQuery]: normalizePromptTags(tagsForQuery, canonicalQuery),
+          }
+        })
+      }
+
+      return { prevDashboard, prevQueries, prevQueryTags }
     },
     onError: (_err, _vars, ctx) => {
-      if (ctx?.prev) qc.setQueryData(['dashboard'], ctx.prev)
+      if (ctx?.prevDashboard) qc.setQueryData(['dashboard'], ctx.prevDashboard)
+      if (ctx?.prevQueries) setQueries(ctx.prevQueries)
+      if (ctx?.prevQueryTags) setQueryTags(ctx.prevQueryTags)
     },
     onSettled: () => qc.invalidateQueries({ queryKey: ['dashboard'] }),
   })
