@@ -715,6 +715,509 @@ function TagInput({
   )
 }
 
+// ── Query CSV Import ─────────────────────────────────────────────────────────
+
+const QUERY_IMPORT_MAX_LENGTH = 600
+const QUERY_IMPORT_HEADER_KEYS = new Set([
+  'query',
+  'queries',
+  'prompt',
+  'prompts',
+  'query_text',
+  'prompt_text',
+])
+
+interface QueryImportInvalidRow {
+  lineNumber: number
+  value: string
+}
+
+interface QueryImportPreview {
+  parsedQueries: string[]
+  totalRows: number
+  skippedEmptyRows: number
+  duplicateRows: number
+  existingDuplicateRows: number
+  tooLongRows: QueryImportInvalidRow[]
+  headerRowSkipped: boolean
+}
+
+function parseCsvCells(line: string): string[] {
+  const out: string[] = []
+  let current = ''
+  let inQuotes = false
+
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i]
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"'
+        i += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+      continue
+    }
+
+    if (ch === ',' && !inQuotes) {
+      out.push(current)
+      current = ''
+      continue
+    }
+
+    current += ch
+  }
+
+  out.push(current)
+  return out
+}
+
+function escapeCsvCell(value: string): string {
+  const escaped = value.replace(/"/g, '""')
+  if (/[",\n\r]/.test(value)) {
+    return `"${escaped}"`
+  }
+  return escaped
+}
+
+function buildQueryExportCsv(queries: string[]): string {
+  const lines = ['query', ...queries.map((query) => escapeCsvCell(query))]
+  return `${lines.join('\n')}\n`
+}
+
+function parseQueryImportText(rawText: string, existingQueries: string[]): QueryImportPreview {
+  const lines = rawText.split(/\r?\n/)
+  const existingKeys = new Set(existingQueries.map((query) => normalizeQueryKey(query)))
+  const seenImported = new Set<string>()
+  const parsedQueries: string[] = []
+  const tooLongRows: QueryImportInvalidRow[] = []
+
+  let totalRows = 0
+  let skippedEmptyRows = 0
+  let duplicateRows = 0
+  let existingDuplicateRows = 0
+  let headerRowSkipped = false
+  let firstContentRowSeen = false
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index]
+    if (!rawLine.trim()) {
+      skippedEmptyRows += 1
+      continue
+    }
+
+    totalRows += 1
+    const lineNumber = index + 1
+    const cells = parseCsvCells(rawLine).map((cell) => cell.trim())
+    const firstValue = cells.find((cell) => cell.length > 0) ?? ''
+
+    if (!firstValue) {
+      skippedEmptyRows += 1
+      continue
+    }
+
+    if (!firstContentRowSeen) {
+      firstContentRowSeen = true
+      const normalizedHeader = firstValue.toLowerCase()
+      if (QUERY_IMPORT_HEADER_KEYS.has(normalizedHeader)) {
+        headerRowSkipped = true
+        continue
+      }
+    }
+
+    if (firstValue.length > QUERY_IMPORT_MAX_LENGTH) {
+      tooLongRows.push({
+        lineNumber,
+        value: firstValue.slice(0, 120),
+      })
+      continue
+    }
+
+    const key = normalizeQueryKey(firstValue)
+    if (seenImported.has(key)) {
+      duplicateRows += 1
+      continue
+    }
+    seenImported.add(key)
+
+    if (existingKeys.has(key)) {
+      existingDuplicateRows += 1
+    }
+
+    parsedQueries.push(firstValue)
+  }
+
+  return {
+    parsedQueries,
+    totalRows,
+    skippedEmptyRows,
+    duplicateRows,
+    existingDuplicateRows,
+    tooLongRows,
+    headerRowSkipped,
+  }
+}
+
+function QueryCsvImporter({
+  existingQueries,
+  onApply,
+}: {
+  existingQueries: string[]
+  onApply: (nextQueries: string[]) => void
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [rawText, setRawText] = useState('')
+  const [sourceLabel, setSourceLabel] = useState('')
+  const [mode, setMode] = useState<'append' | 'replace'>('append')
+  const [status, setStatus] = useState<{ type: 'idle' | 'success' | 'error'; text: string }>({
+    type: 'idle',
+    text: '',
+  })
+
+  const preview = useMemo(
+    () => parseQueryImportText(rawText, existingQueries),
+    [rawText, existingQueries],
+  )
+
+  const mergedAppendQueries = useMemo(
+    () => dedupeCaseInsensitive([...existingQueries, ...preview.parsedQueries]),
+    [existingQueries, preview.parsedQueries],
+  )
+  const replaceQueries = useMemo(
+    () => dedupeCaseInsensitive(preview.parsedQueries),
+    [preview.parsedQueries],
+  )
+
+  const appendNewCount = Math.max(0, mergedAppendQueries.length - existingQueries.length)
+  const hasImportText = rawText.trim().length > 0
+  const canApply =
+    mode === 'append'
+      ? preview.parsedQueries.length > 0 && appendNewCount > 0
+      : replaceQueries.length > 0
+
+  async function handleFileInputChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      const text = await file.text()
+      setRawText(text)
+      setSourceLabel(file.name)
+      setStatus({ type: 'idle', text: '' })
+    } catch {
+      setStatus({ type: 'error', text: 'Could not read file. Try another CSV.' })
+    }
+  }
+
+  function clearImport() {
+    setRawText('')
+    setSourceLabel('')
+    setStatus({ type: 'idle', text: '' })
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  function applyImport() {
+    if (!canApply) return
+
+    if (mode === 'append') {
+      onApply(mergedAppendQueries)
+      setStatus({
+        type: 'success',
+        text: `Added ${appendNewCount} prompt${appendNewCount === 1 ? '' : 's'} from import.`,
+      })
+    } else {
+      onApply(replaceQueries)
+      setStatus({
+        type: 'success',
+        text: `Replaced prompt list with ${replaceQueries.length} imported prompt${replaceQueries.length === 1 ? '' : 's'}.`,
+      })
+    }
+  }
+
+  function handleExportCsv() {
+    if (existingQueries.length === 0) {
+      setStatus({ type: 'error', text: 'No prompts to export yet.' })
+      return
+    }
+
+    try {
+      const csv = buildQueryExportCsv(existingQueries)
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+      const url = URL.createObjectURL(blob)
+      const stamp = new Date().toISOString().slice(0, 10)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `prompt-queries-${stamp}.csv`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+      setStatus({
+        type: 'success',
+        text: `Exported ${existingQueries.length} prompt${existingQueries.length === 1 ? '' : 's'} to CSV.`,
+      })
+    } catch {
+      setStatus({ type: 'error', text: 'Could not export CSV. Try again.' })
+    }
+  }
+
+  return (
+    <div
+      className="mt-4 rounded-xl"
+      style={{
+        background: '#F9F6F0',
+        border: '1px solid #E6DCCB',
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.55)',
+      }}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-3 pb-2">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.08em]" style={{ color: '#7A8E7C' }}>
+            Import Prompt CSV
+          </p>
+          <p className="text-xs mt-0.5" style={{ color: '#8C9D8E' }}>
+            Upload a CSV/text list where each row contains one prompt query.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv,text/csv,.txt,text/plain"
+            onChange={(event) => { void handleFileInputChange(event) }}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="inline-flex items-center rounded-lg text-xs font-semibold"
+            style={{
+              background: '#EEF5EF',
+              color: '#2C5D30',
+              border: '1px solid #C8DEC9',
+              padding: '7px 10px',
+              cursor: 'pointer',
+            }}
+          >
+            Choose CSV
+          </button>
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            disabled={existingQueries.length === 0}
+            className="inline-flex items-center rounded-lg text-xs font-semibold"
+            style={{
+              background: existingQueries.length > 0 ? '#F5F9FF' : '#EEEAE3',
+              color: existingQueries.length > 0 ? '#355A80' : '#AAB7AC',
+              border: '1px solid #CBDCEF',
+              padding: '7px 10px',
+              cursor: existingQueries.length > 0 ? 'pointer' : 'not-allowed',
+            }}
+          >
+            Export CSV
+          </button>
+          <button
+            type="button"
+            onClick={clearImport}
+            disabled={!hasImportText}
+            className="inline-flex items-center rounded-lg text-xs font-semibold"
+            style={{
+              background: hasImportText ? '#F2EDE6' : '#EEEAE3',
+              color: hasImportText ? '#6D7F6F' : '#AAB7AC',
+              border: '1px solid #DDD0BC',
+              padding: '7px 10px',
+              cursor: hasImportText ? 'pointer' : 'not-allowed',
+            }}
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+
+      <div className="px-4 pb-3">
+        <textarea
+          value={rawText}
+          onChange={(event) => {
+            setRawText(event.target.value)
+            setSourceLabel('')
+            setStatus({ type: 'idle', text: '' })
+          }}
+          rows={4}
+          placeholder={'Paste CSV here (one query per row)\nquery\nbest charting library for react\njavascript graphing tool'}
+          className="w-full rounded-lg p-3 text-sm outline-none resize-y"
+          style={{
+            border: '1px solid #D8CCB8',
+            background: '#FFFFFF',
+            color: '#2A3A2C',
+            minHeight: 96,
+          }}
+        />
+
+        {sourceLabel && (
+          <div className="mt-2 text-xs" style={{ color: '#6D8170' }}>
+            Loaded: <span className="font-semibold">{sourceLabel}</span>
+          </div>
+        )}
+
+        {hasImportText && (
+          <div className="mt-3 space-y-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+              <span className="rounded-md px-2 py-1" style={{ background: '#EEF5EF', color: '#2C5D30' }}>
+                Parsed: {preview.parsedQueries.length}
+              </span>
+              <span className="rounded-md px-2 py-1" style={{ background: '#F3F7FB', color: '#2F5B84' }}>
+                Rows: {preview.totalRows}
+              </span>
+              <span className="rounded-md px-2 py-1" style={{ background: '#FFF6E8', color: '#A66619' }}>
+                Empty skipped: {preview.skippedEmptyRows}
+              </span>
+              <span className="rounded-md px-2 py-1" style={{ background: '#FFF4EC', color: '#B56A2A' }}>
+                In-file duplicates: {preview.duplicateRows}
+              </span>
+              <span className="rounded-md px-2 py-1" style={{ background: '#F4F1FF', color: '#6A4EB0' }}>
+                Already tracked: {preview.existingDuplicateRows}
+              </span>
+              <span className="rounded-md px-2 py-1" style={{ background: '#FEF2F2', color: '#B45353' }}>
+                Too long (&gt;{QUERY_IMPORT_MAX_LENGTH}): {preview.tooLongRows.length}
+              </span>
+            </div>
+
+            {preview.headerRowSkipped && (
+              <div
+                className="rounded-lg px-3 py-2 text-xs"
+                style={{ background: '#F2EDE6', border: '1px solid #DDD0BC', color: '#6D7F6F' }}
+              >
+                Header row detected and skipped.
+              </div>
+            )}
+
+            {preview.tooLongRows.length > 0 && (
+              <div
+                className="rounded-lg px-3 py-2 text-xs"
+                style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: '#B91C1C' }}
+              >
+                Some rows are too long and were skipped:
+                <div className="mt-1.5 space-y-1">
+                  {preview.tooLongRows.slice(0, 4).map((row) => (
+                    <div key={row.lineNumber}>
+                      Line {row.lineNumber}: {row.value}
+                      {row.value.length >= 120 ? '…' : ''}
+                    </div>
+                  ))}
+                  {preview.tooLongRows.length > 4 && (
+                    <div>+{preview.tooLongRows.length - 4} more rows</div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {preview.parsedQueries.length > 0 && (
+              <div
+                className="rounded-lg p-2.5"
+                style={{
+                  background: '#FFFFFF',
+                  border: '1px solid #E7DDCE',
+                  maxHeight: 150,
+                  overflowY: 'auto',
+                }}
+              >
+                <div className="text-[11px] font-semibold uppercase tracking-[0.06em] mb-2" style={{ color: '#90A292' }}>
+                  Import Preview
+                </div>
+                <div className="space-y-1.5">
+                  {preview.parsedQueries.slice(0, 30).map((query) => (
+                    <div
+                      key={query}
+                      className="text-xs rounded-md px-2 py-1"
+                      style={{ background: '#F8F5EE', color: '#3D5840' }}
+                    >
+                      {query}
+                    </div>
+                  ))}
+                  {preview.parsedQueries.length > 30 && (
+                    <div className="text-xs" style={{ color: '#8EA08F' }}>
+                      +{preview.parsedQueries.length - 30} more prompts
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="inline-flex rounded-lg overflow-hidden" style={{ border: '1px solid #D9CCB7' }}>
+                <button
+                  type="button"
+                  onClick={() => setMode('append')}
+                  className="px-3 py-1.5 text-xs font-semibold"
+                  style={{
+                    background: mode === 'append' ? '#2A6032' : '#F7F3EB',
+                    color: mode === 'append' ? '#FFFFFF' : '#5D7260',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Append
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode('replace')}
+                  className="px-3 py-1.5 text-xs font-semibold"
+                  style={{
+                    background: mode === 'replace' ? '#A35D2A' : '#F7F3EB',
+                    color: mode === 'replace' ? '#FFFFFF' : '#6D6B62',
+                    borderLeft: '1px solid #D9CCB7',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Replace
+                </button>
+              </div>
+
+              <button
+                type="button"
+                disabled={!canApply}
+                onClick={applyImport}
+                className="inline-flex items-center rounded-lg text-xs font-semibold"
+                style={{
+                  background: canApply ? '#2A6032' : '#EDEBE6',
+                  color: canApply ? '#FFFFFF' : '#B0BAB2',
+                  border: `1px solid ${canApply ? '#1F4A26' : '#DDD8CE'}`,
+                  padding: '7px 11px',
+                  cursor: canApply ? 'pointer' : 'not-allowed',
+                }}
+              >
+                {mode === 'append'
+                  ? `Apply import (+${appendNewCount})`
+                  : `Replace with ${replaceQueries.length}`}
+              </button>
+            </div>
+
+            <div className="text-xs" style={{ color: '#8C9D8E' }}>
+              {mode === 'append'
+                ? 'Append keeps existing prompts and adds only new ones.'
+                : 'Replace discards current prompts and keeps only imported prompts.'}
+            </div>
+          </div>
+        )}
+
+        {status.type !== 'idle' && (
+          <div
+            className="mt-3 rounded-lg px-3 py-2 text-xs font-medium"
+            style={{
+              background: status.type === 'success' ? '#EEF5EF' : '#FEF2F2',
+              border: `1px solid ${status.type === 'success' ? '#C8DEC9' : '#FECACA'}`,
+              color: status.type === 'success' ? '#2C5D30' : '#B91C1C',
+            }}
+          >
+            {status.text}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Query Lab ─────────────────────────────────────────────────────────────────
 
 type LabStatus = 'idle' | 'running' | 'done' | 'error'
@@ -830,9 +1333,11 @@ function normalizeQueryLabErrorMessage(error: unknown): string {
 function QueryLab({
   trackedEntities,
   aliasesByEntity,
+  onQueryRun,
 }: {
   trackedEntities: string[]
   aliasesByEntity: Record<string, string[]>
+  onQueryRun?: (query: string) => Promise<void> | void
 }) {
   const [queryText, setQueryText] = useState('')
   const [status, setStatus] = useState<LabStatus>('idle')
@@ -862,6 +1367,7 @@ function QueryLab({
 
   async function handleRun() {
     if (!canRun) return
+    const normalizedQuery = queryText.trim()
     setStatus('running')
     setResponse('')
     setMentions([])
@@ -870,10 +1376,13 @@ function QueryLab({
     startTimer()
     try {
       const result = await api.promptLabRun({
-        query: queryText.trim(),
+        query: normalizedQuery,
         model,
         webSearch,
       })
+      if (onQueryRun) {
+        await onQueryRun(normalizedQuery)
+      }
       const responseText =
         result.responseText.trim() || 'Model returned an empty response.'
       const detected = detectMentions(responseText, trackedEntities, aliasLookup)
@@ -1341,13 +1850,69 @@ export default function Prompts() {
     writeStoredTriggerToken(triggerToken)
   }, [triggerToken])
 
-  function applySavedConfig(updated: Awaited<ReturnType<typeof api.updateConfig>>) {
+  async function invalidateBenchmarkDataQueries() {
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ['dashboard'] }),
+      qc.invalidateQueries({ queryKey: ['timeseries'] }),
+      qc.invalidateQueries({ queryKey: ['prompt-drilldown'] }),
+    ])
+  }
+
+  function applySavedConfig(
+    updated: Awaited<ReturnType<typeof api.updateConfig>>,
+    options?: { showSuccess?: boolean },
+  ) {
     qc.setQueryData(['config'], updated)
-    qc.invalidateQueries({ queryKey: ['dashboard'] })
+    void invalidateBenchmarkDataQueries()
     setDirty(false)
     setSaveErr(null)
-    setSaveSuccess(true)
-    setTimeout(() => setSaveSuccess(false), 3000)
+    const showSuccess = options?.showSuccess ?? true
+    setSaveSuccess(showSuccess)
+    if (showSuccess) {
+      setTimeout(() => setSaveSuccess(false), 3000)
+    }
+  }
+
+  async function handleQueryLabRun(rawQuery: string) {
+    const query = rawQuery.trim()
+    if (!query) return
+
+    const latestConfigResponse = configQuery.data ?? (await api.config())
+    const latestConfig = latestConfigResponse.config
+
+    const baseQueries = dirty ? queries : latestConfig.queries
+    const baseQueryTags = dirty
+      ? normalizeQueryTagsMap(baseQueries, queryTags)
+      : normalizeQueryTagsMap(baseQueries, latestConfig.queryTags)
+    const baseCompetitors = dirty ? competitors : latestConfig.competitors
+
+    const alreadyTracked = baseQueries.some(
+      (candidate) => normalizeQueryKey(candidate) === normalizeQueryKey(query),
+    )
+
+    if (!alreadyTracked) {
+      const nextQueries = [...baseQueries, query]
+      const nextQueryTags = normalizeQueryTagsMap(nextQueries, {
+        ...baseQueryTags,
+        [query]: inferPromptTags(query),
+      })
+
+      const updated = await api.updateConfig({
+        queries: nextQueries,
+        queryTags: nextQueryTags,
+        competitors: baseCompetitors,
+        aliases: latestConfig.aliases,
+        pausedQueries: latestConfig.pausedQueries,
+      })
+
+      applySavedConfig(updated, { showSuccess: false })
+      setQueries(updated.config.queries)
+      setQueryTags(normalizeQueryTagsMap(updated.config.queries, updated.config.queryTags))
+      setCompetitors(updated.config.competitors)
+      return
+    }
+
+    await invalidateBenchmarkDataQueries()
   }
 
   const configMutation = useMutation({
@@ -1513,6 +2078,7 @@ export default function Prompts() {
       <QueryLab
         trackedEntities={competitors}
         aliasesByEntity={configQuery.data?.config.aliases ?? {}}
+        onQueryRun={handleQueryLabRun}
       />
 
       {/* ── Section divider ────────────────────────────────────────────────── */}
@@ -1565,6 +2131,10 @@ export default function Prompts() {
                   onChange={handleQueryListChange}
                   placeholder="e.g. javascript charting libraries"
                   maxVisibleItems={11}
+                />
+                <QueryCsvImporter
+                  existingQueries={queries}
+                  onApply={handleQueryListChange}
                 />
               </div>
 
