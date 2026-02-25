@@ -839,7 +839,7 @@ function WorkstreamCard({
 
 export default function OKR() {
   const [krTitle, setKrTitle] = useState(
-    'KR 2.1: Create and launch 10 LLM-optimized comparison pages (individual pages, e.g. "AG charts vs Highcharts") that score >= 80% on the quality checklist by May 31, 2026.',
+    'KR 2.1: Create and launch 10 LLM-optimized comparison pages by May 31, 2026. Checklist score of +80%',
   )
   const [targetPages, setTargetPages] = useState(10)
   const [qualityThreshold, setQualityThreshold] = useState(80)
@@ -1581,153 +1581,16 @@ export default function OKR() {
 
   return (
     <div className="space-y-4 pb-4">
-      {/* ── KR header ──────────────────────────────────────────────────────── */}
-      <section
-        style={{
-          background: '#FFFFFF',
-          border: '1px solid #DDD0BC',
-          borderTop: '2px solid #4A6B4E',
-          borderRadius: 14,
-          padding: '18px 22px 20px',
-        }}
-      >
-        {/* Top row: breadcrumb + edit */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ fontSize: 11, color: '#9AAE9C', fontWeight: 500 }}>Objective 2</span>
-            <span style={{ color: '#C8C0B4', fontSize: 11 }}>›</span>
-            <span style={{ fontSize: 11, fontWeight: 600, color: '#4A6B4E' }}>KR 2.1</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setKrEditing((v) => !v)}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4,
-              padding: '4px 12px',
-              borderRadius: 20,
-              border: `1px solid ${krEditing ? '#4A6B4E' : '#DDD0BC'}`,
-              background: krEditing ? '#4A6B4E' : '#FFFFFF',
-              color: krEditing ? '#FDFCF8' : '#7A8A7C',
-              fontSize: 11,
-              fontWeight: 600,
-              cursor: 'pointer',
-              transition: 'all 0.15s',
-            }}
-          >
-            {krEditing ? (
-              <>
-                <svg width="9" height="9" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
-                Done
-              </>
-            ) : (
-              <>
-                <svg width="9" height="9" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536M9 11l6.768-6.768a2 2 0 012.828 2.828L11.828 13.828a2 2 0 01-1.414.586H8v-2.414A2 2 0 018.586 10.6z" /></svg>
-                Edit
-              </>
-            )}
-          </button>
-        </div>
-
-        {/* KR statement */}
-        {krEditing ? (
-          <textarea
-            value={krTitle}
-            onChange={(e) => setKrTitle(e.target.value)}
-            rows={2}
-            autoFocus
-            style={{ ...INPUT_STYLE, resize: 'none', fontSize: 13, lineHeight: 1.5, background: '#FDFCF8', marginBottom: 14, width: '100%' }}
-          />
-        ) : (
-          <p style={{ fontSize: 14, fontWeight: 600, color: '#1A2B1C', lineHeight: 1.5, marginBottom: 14, letterSpacing: '-0.01em' }}>
-            {krTitle}
-          </p>
-        )}
-
-        {/* Param chips */}
-        {krEditing ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            {([
-              {
-                label: 'Pages',
-                el: (
-                  <input type="number" min={1} value={targetPages}
-                    onChange={(e) => setTargetPages(clamp(Number(e.target.value) || 0, 1, 50))}
-                    style={{ width: 42, borderRadius: 6, border: '1px solid #DDD0BC', background: '#FFF', color: '#2A3A2C', padding: '3px 5px', fontSize: 12, fontWeight: 700, textAlign: 'center' }}
-                  />
-                ),
-              },
-              {
-                label: 'Threshold',
-                el: (
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <input type="number" min={0} max={100} value={qualityThreshold}
-                      onChange={(e) => setQualityThreshold(clamp(Number(e.target.value) || 0, 0, 100))}
-                      style={{ width: 42, borderRadius: 6, border: '1px solid #DDD0BC', background: '#FFF', color: '#2A3A2C', padding: '3px 5px', fontSize: 12, fontWeight: 700, textAlign: 'center' }}
-                    />
-                    <span style={{ fontSize: 11, color: '#9AAE9C' }}>%</span>
-                  </span>
-                ),
-              },
-              {
-                label: 'Deadline',
-                el: (
-                  <input type="date" value={deadline}
-                    onChange={(e) => setDeadline(e.target.value || todayIso)}
-                    style={{ borderRadius: 6, border: '1px solid #DDD0BC', background: '#FFF', color: '#2A3A2C', padding: '3px 6px', fontSize: 11 }}
-                  />
-                ),
-              },
-              {
-                label: 'Checklist',
-                el: (
-                  <input value={checklistName}
-                    onChange={(e) => setChecklistName(e.target.value)}
-                    style={{ width: 160, borderRadius: 6, border: '1px solid #DDD0BC', background: '#FFF', color: '#2A3A2C', padding: '3px 7px', fontSize: 11 }}
-                  />
-                ),
-              },
-            ] as { label: string; el: ReactNode }[]).map(({ label, el }) => (
-              <span key={label} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#9AAE9C' }}>{label}</span>
-                {el}
-              </span>
-            ))}
-          </div>
-        ) : (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            {[
-              { label: 'Pages', value: `${targetPages} pages` },
-              { label: 'Quality', value: `≥${qualityThreshold}%` },
-              {
-                label: 'Deadline',
-                value: new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(`${deadline}T00:00:00`)),
-              },
-              { label: 'Checklist', value: checklistName },
-            ].map(({ label, value }) => (
-              <span
-                key={label}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  background: '#F2EDE6',
-                  border: '1px solid #E0D8CC',
-                  borderRadius: 6,
-                  padding: '3px 9px',
-                }}
-              >
-                <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#9AAE9C' }}>{label}</span>
-                <span style={{ fontSize: 12, fontWeight: 600, color: '#2A3A2C' }}>{value}</span>
-              </span>
-            ))}
-          </div>
-        )}
-      </section>
 
       {/* ── Metric cards ───────────────────────────────────────────────────── */}
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <MetricCard
+          label="Avg quality"
+          value={`${avgLaunchedQuality.toFixed(1)}%`}
+          sub={`${qualityPassCount} of ${launchedCount || 0} launched pages pass ≥${qualityThreshold}%`}
+          tone={avgLaunchedQuality >= qualityThreshold ? 'positive' : 'warning'}
+          bar={{ pct: avgLaunchedQuality, color: avgLaunchedQuality >= qualityThreshold ? '#4A6B4E' : '#C8A87A' }}
+        />
         <MetricCard
           label="Status"
           value={onTrack ? 'On track' : 'At risk'}
@@ -1741,13 +1604,6 @@ export default function OKR() {
           sub={`Need ${velocityLabel(requiredVelocity)} pages/wk · ${remainingPages} pages remaining`}
           tone={statusTone}
           bar={{ pct: Number.isFinite(requiredVelocity) && requiredVelocity > 0 ? clamp((currentVelocity / requiredVelocity) * 100, 0, 100) : 100, color: statusTone === 'positive' ? '#4A6B4E' : '#C06040' }}
-        />
-        <MetricCard
-          label="Avg quality"
-          value={`${avgLaunchedQuality.toFixed(1)}%`}
-          sub={`${qualityPassCount} of ${launchedCount || 0} launched pages pass ≥${qualityThreshold}%`}
-          tone={avgLaunchedQuality >= qualityThreshold ? 'positive' : 'warning'}
-          bar={{ pct: avgLaunchedQuality, color: avgLaunchedQuality >= qualityThreshold ? '#4A6B4E' : '#C8A87A' }}
         />
         <MetricCard
           label="Days remaining"

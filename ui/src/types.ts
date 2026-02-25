@@ -125,6 +125,42 @@ export interface TimeSeriesResponse {
   points: TimeSeriesPoint[]
 }
 
+export interface CompetitorBlogPost {
+  id: string
+  title: string
+  type: string
+  source: string
+  sourceKey: string
+  description: string
+  author: string | null
+  link: string
+  publishDate: string | null
+  publishedAt: string | null
+}
+
+export interface CompetitorBlogTimelinePoint {
+  month: string
+  label: string
+  total: number
+  bySource: Record<string, number>
+}
+
+export interface CompetitorBlogsResponse {
+  generatedAt: string
+  totalPosts: number
+  sourceTotals: Array<{
+    source: string
+    sourceKey: string
+    count: number
+  }>
+  typeTotals: Array<{
+    type: string
+    count: number
+  }>
+  posts: CompetitorBlogPost[]
+  timeline: CompetitorBlogTimelinePoint[]
+}
+
 export interface PromptDrilldownCompetitor {
   id: string
   entity: string

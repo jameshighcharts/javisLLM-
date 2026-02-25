@@ -3,6 +3,7 @@ import type {
   BenchmarkRunsResponse,
   BenchmarkTriggerResponse,
   BenchmarkConfig,
+  CompetitorBlogsResponse,
   ConfigResponse,
   DiagnosticsCheck,
   DiagnosticsResponse,
@@ -127,6 +128,20 @@ type PromptDrilldownRunRow = {
   started_at: string | null
   ended_at: string | null
   overall_score: number | null
+  created_at: string | null
+}
+
+type CompetitorBlogPostRow = {
+  id: string
+  source: string | null
+  source_slug: string | null
+  title: string | null
+  content_theme: string | null
+  description: string | null
+  author: string | null
+  link: string | null
+  publish_date: string | null
+  published_at: string | null
   created_at: string | null
 }
 
@@ -302,6 +317,31 @@ function slugifyEntity(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
+}
+
+function monthKeyFromDate(value: string | null): string | null {
+  if (!value) return null
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return null
+  const year = parsed.getUTCFullYear()
+  const month = String(parsed.getUTCMonth() + 1).padStart(2, '0')
+  return `${year}-${month}`
+}
+
+function formatMonthLabel(monthKey: string): string {
+  const [yearRaw, monthRaw] = monthKey.split('-')
+  const year = Number(yearRaw)
+  const month = Number(monthRaw)
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+    return monthKey
+  }
+
+  const dt = new Date(Date.UTC(year, month - 1, 1))
+  return dt.toLocaleDateString(undefined, {
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  })
 }
 
 function hasSupabaseConfig() {
@@ -1442,6 +1482,144 @@ async function fetchTimeseriesFromSupabase(
   }
 }
 
+function emptyCompetitorBlogsResponse(): CompetitorBlogsResponse {
+  return {
+    generatedAt: new Date().toISOString(),
+    totalPosts: 0,
+    sourceTotals: [],
+    typeTotals: [],
+    posts: [],
+    timeline: [],
+  }
+}
+
+async function fetchCompetitorBlogsFromSupabase(
+  limit = 500,
+): Promise<CompetitorBlogsResponse> {
+  if (!supabase) {
+    throw new Error('Supabase is not configured.')
+  }
+
+  const clampedLimit = Math.max(1, Math.min(limit, 1000))
+  const result = await supabase
+    .from('competitor_blog_posts')
+    .select(
+      'id,source,source_slug,title,content_theme,description,author,link,publish_date,published_at,created_at',
+    )
+    .order('publish_date', { ascending: false, nullsFirst: false })
+    .order('published_at', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false })
+    .limit(clampedLimit)
+
+  if (result.error) {
+    if (isMissingRelation(result.error)) {
+      return emptyCompetitorBlogsResponse()
+    }
+    throw asError(result.error, 'Failed to load competitor_blog_posts from Supabase')
+  }
+
+  const rows = (result.data ?? []) as CompetitorBlogPostRow[]
+  if (rows.length === 0) {
+    return emptyCompetitorBlogsResponse()
+  }
+
+  const posts = rows
+    .filter((row) => {
+      const title = String(row.title ?? '').trim()
+      const link = String(row.link ?? '').trim()
+      return Boolean(title && link)
+    })
+    .map((row) => {
+      const source = String(row.source ?? '').trim() || 'Unknown'
+      const sourceKey = String(row.source_slug ?? '').trim() || slugifyEntity(source) || 'unknown'
+      const type = String(row.content_theme ?? '').trim() || 'General'
+      const publishDate = String(row.publish_date ?? '').trim() || null
+      const publishedAt = String(row.published_at ?? '').trim() || null
+      return {
+        id: row.id,
+        title: String(row.title ?? '').trim(),
+        type,
+        source,
+        sourceKey,
+        description: String(row.description ?? '').trim(),
+        author: String(row.author ?? '').trim() || null,
+        link: String(row.link ?? '').trim(),
+        publishDate,
+        publishedAt,
+      }
+    })
+
+  const sourceTotals = new Map<string, { source: string; sourceKey: string; count: number }>()
+  const typeTotals = new Map<string, number>()
+  const timelineBuckets = new Map<string, { total: number; bySource: Map<string, number> }>()
+
+  for (const post of posts) {
+    const sourceEntry = sourceTotals.get(post.sourceKey)
+    if (sourceEntry) {
+      sourceEntry.count += 1
+    } else {
+      sourceTotals.set(post.sourceKey, {
+        source: post.source,
+        sourceKey: post.sourceKey,
+        count: 1,
+      })
+    }
+
+    typeTotals.set(post.type, (typeTotals.get(post.type) ?? 0) + 1)
+
+    const monthKey = monthKeyFromDate(post.publishDate ?? post.publishedAt)
+    if (!monthKey) {
+      continue
+    }
+
+    const monthBucket = timelineBuckets.get(monthKey) ?? {
+      total: 0,
+      bySource: new Map<string, number>(),
+    }
+    monthBucket.total += 1
+    monthBucket.bySource.set(
+      post.source,
+      (monthBucket.bySource.get(post.source) ?? 0) + 1,
+    )
+    timelineBuckets.set(monthKey, monthBucket)
+  }
+
+  const sortedSourceTotals = [...sourceTotals.values()].sort((left, right) => {
+    if (right.count !== left.count) return right.count - left.count
+    return left.source.localeCompare(right.source)
+  })
+
+  const sourceOrder = sortedSourceTotals.map((entry) => entry.source)
+  const timeline = [...timelineBuckets.entries()]
+    .sort(([leftMonth], [rightMonth]) => leftMonth.localeCompare(rightMonth))
+    .map(([month, bucket]) => {
+      const bySource: Record<string, number> = {}
+      for (const source of sourceOrder) {
+        bySource[source] = bucket.bySource.get(source) ?? 0
+      }
+      return {
+        month,
+        label: formatMonthLabel(month),
+        total: bucket.total,
+        bySource,
+      }
+    })
+
+  return {
+    generatedAt: new Date().toISOString(),
+    totalPosts: posts.length,
+    sourceTotals: sortedSourceTotals,
+    typeTotals: [...typeTotals.entries()]
+      .map(([type, count]) => ({ type, count }))
+      .sort((left, right) => {
+        if (right.count !== left.count) return right.count - left.count
+        return left.type.localeCompare(right.type)
+      }),
+    posts,
+    timeline,
+  }
+}
+
 async function fetchPromptDrilldownFromSupabase(
   queryText: string,
 ): Promise<PromptDrilldownResponse> {
@@ -2279,6 +2457,18 @@ export const api = {
       return await json<TimeSeriesResponse>(`/timeseries${suffix}`)
     } catch {
       return { ok: false, competitors: [], points: [] }
+    }
+  },
+
+  async competitorBlogs(limit = 500): Promise<CompetitorBlogsResponse> {
+    if (!hasSupabaseConfig()) {
+      return emptyCompetitorBlogsResponse()
+    }
+
+    try {
+      return await fetchCompetitorBlogsFromSupabase(limit)
+    } catch (error) {
+      throw asError(error, 'Supabase competitor blog query failed')
     }
   },
 

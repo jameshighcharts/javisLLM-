@@ -4,13 +4,14 @@ import { buildTaskColorMap, getTaskColorById } from '../utils/taskColors'
 const DAY_MS = 24 * 60 * 60 * 1000
 const ROW_HEIGHT = 110
 const HEADER_HEIGHT = 48
-const DAY_WIDTH = 50
+const DAY_WIDTH = 45
 const MIN_TIMELINE_DAYS = 14
 const EXTRA_SCOPE_WEEKS = 1
 const TODAY_LEFT_MARGIN_DAYS = 1
 const CLOSE_MASK_DURATION_MS = 560
 const DRAG_CLICK_THRESHOLD_PX = 5
 const TASK_POPUP_WIDTH = 278
+const SPLIT_INSERT_SNAP_DAYS = 0.46
 const UI_FONT = "'Avenir Next', 'Manrope', 'Segoe UI', sans-serif"
 const ROW_PADDING_Y = 10
 const LANE_GAP = 4
@@ -46,6 +47,7 @@ interface DragState {
   originStartDay: number
   originEndDay: number
   originMemberId: MemberId
+  originTasks: ResourceTask[]
   pointerId: number
 }
 
@@ -53,6 +55,11 @@ interface DragBadge {
   left: number
   top: number
   days: number
+}
+
+interface SplitInsertPreview {
+  memberId: MemberId
+  day: number
 }
 
 interface TaskStackLayout {
@@ -258,6 +265,63 @@ function buildTaskStackLayout(tasks: ResourceTask[]): Map<string, TaskStackLayou
   return layouts
 }
 
+function sortTasksByStart(tasks: ResourceTask[]): ResourceTask[] {
+  return [...tasks].sort((a, b) => {
+    if (a.startDay !== b.startDay) return a.startDay - b.startDay
+    return a.endDay - b.endDay
+  })
+}
+
+function findSplitInsertDay(
+  tasks: ResourceTask[],
+  movingTaskId: string,
+  targetMemberId: MemberId,
+  proposedStartDay: number,
+  span: number,
+  timelineDayCount: number,
+): number | null {
+  if (span < 1) return null
+
+  const rowTasks = sortTasksByStart(
+    tasks.filter((task) => task.memberId === targetMemberId && task.id !== movingTaskId),
+  )
+  if (rowTasks.length === 0) return null
+
+  const candidateDays = new Set<number>()
+  candidateDays.add(rowTasks[0].startDay)
+
+  for (let index = 1; index < rowTasks.length; index += 1) {
+    const previous = rowTasks[index - 1]
+    const next = rowTasks[index]
+    if (previous.endDay <= next.startDay) {
+      candidateDays.add(next.startDay)
+    }
+  }
+
+  candidateDays.add(rowTasks[rowTasks.length - 1].endDay)
+
+  let bestDay: number | null = null
+  let bestDistance = Number.POSITIVE_INFINITY
+
+  for (const day of candidateDays) {
+    if (day < 0 || day + span > timelineDayCount) continue
+
+    const shiftTargets = rowTasks.filter((task) => task.startDay >= day)
+    if (shiftTargets.length === 0) continue
+
+    const maxShiftedEnd = Math.max(...shiftTargets.map((task) => task.endDay))
+    if (maxShiftedEnd + span > timelineDayCount) continue
+
+    const distance = Math.abs(proposedStartDay - day)
+    if (distance > SPLIT_INSERT_SNAP_DAYS || distance >= bestDistance) continue
+
+    bestDay = day
+    bestDistance = distance
+  }
+
+  return bestDay
+}
+
 export default function KR21ResourcePlanner({ tasks: plannerTasks, onPatchTask }: KR21ResourcePlannerProps) {
   const [tasks, setTasks] = useState<ResourceTask[]>([])
   const [hoveredTaskId, setHoveredTaskId] = useState<string | null>(null)
@@ -265,6 +329,7 @@ export default function KR21ResourcePlanner({ tasks: plannerTasks, onPatchTask }
   const [subtaskChecks, setSubtaskChecks] = useState<Record<string, boolean[]>>({})
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [dragBadge, setDragBadge] = useState<DragBadge | null>(null)
+  const [splitInsertPreview, setSplitInsertPreview] = useState<SplitInsertPreview | null>(null)
   const [todayUtcMs, setTodayUtcMs] = useState<number>(getTodayUtcMs)
 
   const [focusMemberId, setFocusMemberId] = useState<MemberId | null>(null)
@@ -319,7 +384,7 @@ export default function KR21ResourcePlanner({ tasks: plannerTasks, onPatchTask }
   const timelineDayCount = timelineScope.dayCount
   const timelineWidth = timelineDayCount * DAY_WIDTH
   const timelineHeight = TEAM_MEMBERS.length * ROW_HEIGHT
-const taskColorMap = useMemo(
+  const taskColorMap = useMemo(
     () => buildTaskColorMap(plannerTasks.map((task) => task.id)),
     [plannerTasks],
   )
@@ -591,16 +656,23 @@ const taskColorMap = useMemo(
         return
       }
 
-      const deltaDays = Math.round((event.clientX - dragState.startClientX) / DAY_WIDTH)
+      const deltaDaysRaw = (event.clientX - dragState.startClientX) / DAY_WIDTH
+      const deltaDays = Math.round(deltaDaysRaw)
       const minEnd = dragState.mode === 'resize-left' ? dragState.originEndDay - 1 : 1
 
       let nextStart = dragState.originStartDay
       let nextEnd = dragState.originEndDay
       let nextMemberId = dragState.originMemberId
+      let splitInsertDay: number | null = null
 
       if (dragState.mode === 'move') {
         const span = dragState.originEndDay - dragState.originStartDay
-        nextStart = clamp(dragState.originStartDay + deltaDays, 0, timelineDayCount - span)
+        const proposedStartDay = clamp(
+          dragState.originStartDay + deltaDaysRaw,
+          0,
+          timelineDayCount - span,
+        )
+        nextStart = clamp(Math.round(proposedStartDay), 0, timelineDayCount - span)
         nextEnd = nextStart + span
 
         const rect = body.getBoundingClientRect()
@@ -610,6 +682,25 @@ const taskColorMap = useMemo(
           TEAM_MEMBERS.length - 1,
         )
         nextMemberId = TEAM_MEMBERS[rowIndex].id
+
+        splitInsertDay = findSplitInsertDay(
+          dragState.originTasks,
+          dragState.taskId,
+          nextMemberId,
+          proposedStartDay,
+          span,
+          timelineDayCount,
+        )
+
+        if (splitInsertDay !== null) {
+          nextStart = splitInsertDay
+          nextEnd = nextStart + span
+          setSplitInsertPreview({ memberId: nextMemberId, day: splitInsertDay })
+        } else {
+          setSplitInsertPreview(null)
+        }
+      } else {
+        setSplitInsertPreview(null)
       }
 
       if (dragState.mode === 'resize-left') {
@@ -624,18 +715,35 @@ const taskColorMap = useMemo(
         )
       }
 
-      setTasks((current) =>
-        current.map((task) =>
-          task.id === dragState.taskId
-            ? {
-                ...task,
-                memberId: nextMemberId,
-                startDay: nextStart,
-                endDay: nextEnd,
-              }
-            : task,
-        ),
-      )
+      const span = dragState.originEndDay - dragState.originStartDay
+      const nextTasks = dragState.originTasks.map((task) => {
+        if (task.id === dragState.taskId) {
+          return {
+            ...task,
+            memberId: nextMemberId,
+            startDay: nextStart,
+            endDay: nextEnd,
+          }
+        }
+
+        if (
+          dragState.mode === 'move' &&
+          splitInsertDay !== null &&
+          task.memberId === nextMemberId &&
+          task.startDay >= splitInsertDay
+        ) {
+          return {
+            ...task,
+            startDay: task.startDay + span,
+            endDay: task.endDay + span,
+          }
+        }
+
+        return task
+      })
+
+      tasksRef.current = nextTasks
+      setTasks(nextTasks)
 
       const days = Math.max(1, nextEnd - nextStart)
       setDragBadge({ left: event.clientX, top: event.clientY - 22, days })
@@ -646,8 +754,18 @@ const taskColorMap = useMemo(
       if (!hasMoved && dragState.mode === 'move') {
         setSelectedTaskId((current) => (current === dragState.taskId ? null : dragState.taskId))
       } else {
-        const committed = tasksRef.current.find((task) => task.id === dragState.taskId)
-        if (committed) {
+        const baselineById = new Map(dragState.originTasks.map((task) => [task.id, task]))
+        for (const committed of tasksRef.current) {
+          const baseline = baselineById.get(committed.id)
+          if (!baseline) continue
+          if (
+            baseline.memberId === committed.memberId &&
+            baseline.startDay === committed.startDay &&
+            baseline.endDay === committed.endDay
+          ) {
+            continue
+          }
+
           onPatchTask(committed.sourceTaskId, {
             owner: committed.memberId,
             start: toIsoDateFromUtcMs(timelineStartMs + committed.startDay * DAY_MS),
@@ -657,6 +775,7 @@ const taskColorMap = useMemo(
       }
       setDragState(null)
       setDragBadge(null)
+      setSplitInsertPreview(null)
     }
 
     window.addEventListener('pointermove', onPointerMove)
@@ -697,8 +816,10 @@ const taskColorMap = useMemo(
       originStartDay: task.startDay,
       originEndDay: task.endDay,
       originMemberId: task.memberId,
+      originTasks: tasks,
       pointerId: event.pointerId,
     })
+    setSplitInsertPreview(null)
     if (mode === 'move') setDragBadge(null)
     else setDragBadge({ left: event.clientX, top: event.clientY - 22, days: getTaskDurationDays(task) })
   }
@@ -811,9 +932,6 @@ const taskColorMap = useMemo(
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-semibold" style={{ color: THEME.timelineText }}>
                         {member.name}
-                      </span>
-                      <span className="block truncate text-xs" style={{ color: THEME.timelineTextMuted }}>
-                        {member.role}
                       </span>
                     </span>
                     <span
@@ -944,6 +1062,22 @@ const taskColorMap = useMemo(
                       }}
                     />
                   ))}
+
+                  {splitInsertPreview ? (
+                    <div
+                      className="pointer-events-none absolute"
+                      style={{
+                        left: splitInsertPreview.day * DAY_WIDTH,
+                        top: (memberIndex.get(splitInsertPreview.memberId) ?? 0) * ROW_HEIGHT + 8,
+                        width: 2,
+                        height: ROW_HEIGHT - 16,
+                        background: '#E45F3E',
+                        boxShadow: '0 0 0 4px rgba(228,95,62,0.15), 0 0 14px rgba(228,95,62,0.35)',
+                        borderRadius: 999,
+                        zIndex: 8,
+                      }}
+                    />
+                  ) : null}
 
                   {tasks.map((task) => {
                     const frame = taskFrames.get(task.id)

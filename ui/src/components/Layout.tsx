@@ -76,6 +76,10 @@ const NAV: NavItem[] = [
         <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
       </svg>
     ),
+    children: [
+      { to: '/competitors', label: 'AI Visibility' },
+      { to: '/competitor-blogs', label: 'Blogs' },
+    ],
   },
   {
     to: '/citation-links',
@@ -105,12 +109,13 @@ const MOBILE_NAV = NAV.filter((item) => !item.soon).slice(0, 5)
 const PAGE_TITLES: Record<string, string> = {
   '/dashboard': 'Dashboard',
   '/okr': 'OKR',
-  '/okr/kr-2-1': 'OKR / KR 2.1',
+  '/okr/kr-2-1': 'KR 2.1: Create and launch 10 LLM-optimized comparison pages by May 31, 2026. Checklist score of +80%',
   '/okr/kr-2-3': 'OKR / KR 2.3',
   '/runs': 'Run Benchmarks',
   '/prompts': 'Prompts',
   '/prompts/drilldown': 'Prompt Drilldown',
   '/competitors': 'Competitors',
+  '/competitor-blogs': 'Competitor Blogs',
   '/citation-links': 'Citation Links',
   '/logics': 'Appendix',
 }
@@ -144,11 +149,14 @@ export default function Layout({ children }: { children: ReactNode }) {
   const { pathname } = useLocation()
   const title = PAGE_TITLES[pathname] ?? 'Javis'
   const onOkrPath = pathname === '/okr' || pathname.startsWith('/okr/')
+  const onCompetitorsPath = pathname === '/competitors' || pathname === '/competitor-blogs'
   const [iconOpen, setIconOpen] = useState(false)
   const [clickCount, setClickCount] = useState(0)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [okrDesktopOpen, setOkrDesktopOpen] = useState(onOkrPath)
   const [okrMobileOpen, setOkrMobileOpen] = useState(onOkrPath)
+  const [competitorsDesktopOpen, setCompetitorsDesktopOpen] = useState(onCompetitorsPath)
+  const [competitorsMobileOpen, setCompetitorsMobileOpen] = useState(onCompetitorsPath)
   const videoRef = useRef<HTMLVideoElement>(null)
   const [headerExtra, setHeaderExtraRaw] = useState<ReactNode>(null)
   const setHeaderExtra = useCallback((node: ReactNode) => setHeaderExtraRaw(node), [])
@@ -165,6 +173,13 @@ export default function Layout({ children }: { children: ReactNode }) {
       setOkrMobileOpen(true)
     }
   }, [onOkrPath])
+
+  useEffect(() => {
+    if (onCompetitorsPath) {
+      setCompetitorsDesktopOpen(true)
+      setCompetitorsMobileOpen(true)
+    }
+  }, [onCompetitorsPath])
 
   function openVideo() {
     setClickCount((c) => c + 1)
@@ -315,14 +330,18 @@ export default function Layout({ children }: { children: ReactNode }) {
                 const parentActive =
                   item.to === '/okr'
                     ? pathname === '/okr' || pathname.startsWith('/okr/')
+                    : item.to === '/competitors'
+                    ? pathname === '/competitors' || pathname === '/competitor-blogs'
                     : pathname === item.to
 
                 if (item.children) {
+                  const isOpen = item.to === '/competitors' ? competitorsMobileOpen : okrMobileOpen
+                  const setOpen = item.to === '/competitors' ? setCompetitorsMobileOpen : setOkrMobileOpen
                   return (
                     <div key={item.to} className="space-y-0.5">
                       <button
                         type="button"
-                        onClick={() => setOkrMobileOpen((open) => !open)}
+                        onClick={() => setOpen((open) => !open)}
                         className="w-full"
                         style={{
                           display: 'flex',
@@ -345,7 +364,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                         <span
                           style={{
                             display: 'inline-flex',
-                            transform: okrMobileOpen ? 'rotate(90deg)' : 'rotate(0deg)',
+                            transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)',
                             transition: 'transform 0.15s ease',
                           }}
                         >
@@ -354,7 +373,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                           </svg>
                         </span>
                       </button>
-                      {okrMobileOpen
+                      {isOpen
                         ? item.children.map((child) => (
                             <NavLink
                               key={child.to}
@@ -472,14 +491,18 @@ export default function Layout({ children }: { children: ReactNode }) {
               const parentActive =
                 item.to === '/okr'
                   ? pathname === '/okr' || pathname.startsWith('/okr/')
+                  : item.to === '/competitors'
+                  ? pathname === '/competitors' || pathname === '/competitor-blogs'
                   : pathname === item.to
 
               if (item.children) {
+                const isOpen = item.to === '/competitors' ? competitorsDesktopOpen : okrDesktopOpen
+                const setOpen = item.to === '/competitors' ? setCompetitorsDesktopOpen : setOkrDesktopOpen
                 return (
                   <div key={item.to} className="space-y-0.5">
                     <button
                       type="button"
-                      onClick={() => setOkrDesktopOpen((open) => !open)}
+                      onClick={() => setOpen((open) => !open)}
                       className="w-full"
                       style={{
                         display: 'flex',
@@ -516,7 +539,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                       <span
                         style={{
                           display: 'inline-flex',
-                          transform: okrDesktopOpen ? 'rotate(90deg)' : 'rotate(0deg)',
+                          transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)',
                           transition: 'transform 0.15s ease',
                         }}
                       >
@@ -525,7 +548,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                         </svg>
                       </span>
                     </button>
-                    {okrDesktopOpen
+                    {isOpen
                       ? item.children.map((child) => (
                           <NavLink
                             key={child.to}

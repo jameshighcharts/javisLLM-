@@ -175,8 +175,11 @@ See `/Users/jamesm/projects/easy_llm_benchmarker/docs/monthly_automation.md`.
 
 Schema SQL:
 - `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/001_init_schema.sql`
-- Policy hardening patch (authenticated-only writes for config tables):
-  - `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/002_allow_anon_config_writes.sql`
+- `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/002_allow_anon_config_writes.sql`
+- `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/003_restrict_public_response_reads.sql`
+- `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/004_prompt_query_tags.sql`
+- `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/005_competitor_blog_posts.sql`
+Apply in numeric order when provisioning a new project.
 
 Environment variables:
 - `SUPABASE_URL`
@@ -188,6 +191,12 @@ Manual sync to Supabase:
 cd /Users/jamesm/projects/easy_llm_benchmarker
 python3 -m pip install -r requirements.txt
 python3 /Users/jamesm/projects/easy_llm_benchmarker/scripts/push_to_supabase.py
+```
+
+Push competitor blog feed output to Supabase:
+```bash
+cd /Users/jamesm/projects/easy_llm_benchmarker
+python3 /Users/jamesm/projects/easy_llm_benchmarker/scripts/push_competitor_blogs_to_supabase.py --input /path/to/competitor_blog_posts.json
 ```
 
 Frontend local env (for direct Supabase reads/writes in UI):

@@ -871,16 +871,16 @@ function QueryLab({
       style={{
         background: '#FFFFFF',
         border: '1px solid #DDD5C5',
-        borderRadius: 18,
+        borderRadius: 20,
         overflow: 'hidden',
-        boxShadow: '0 1px 6px rgba(30,40,25,0.06), 0 4px 20px rgba(30,40,25,0.04)',
+        boxShadow: '0 2px 8px rgba(30,40,25,0.07), 0 6px 28px rgba(30,40,25,0.05)',
       }}
     >
       {/* ── Two-column body ── */}
-      <div className="query-lab-grid" style={{ minHeight: 200 }}>
+      <div className="query-lab-grid" style={{ minHeight: 260 }}>
 
         {/* ── Left: input + controls ── */}
-        <div className="query-lab-left" style={{ display: 'flex', flexDirection: 'column', padding: '20px 22px 18px', gap: 14, borderRight: '1px solid #EDE7DA' }}>
+        <div className="query-lab-left" style={{ display: 'flex', flexDirection: 'column', padding: '22px 24px 20px', gap: 16, borderRight: '1px solid #EDE7DA' }}>
 
           {/* Title row */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -894,7 +894,7 @@ function QueryLab({
               }}
             />
             <span style={{ fontSize: 12, fontWeight: 700, color: '#2A3A2C', letterSpacing: '-0.01em' }}>Query Lab</span>
-            <span style={{ fontSize: 11, color: '#A8B8AA' }}>· test a prompt and see which entities get mentioned</span>
+            <span style={{ fontSize: 11, color: '#B4C4B6', fontWeight: 400 }}>· test a prompt and see which entities get mentioned</span>
           </div>
 
           {/* Input area — white box, no visible border until focus */}
@@ -923,17 +923,17 @@ function QueryLab({
               ref={textareaRef}
               value={queryText}
               onChange={(e) => setQueryText(e.target.value)}
-              placeholder="e.g. best javascript charting library for React"
-              rows={4}
+              placeholder="add a prompt"
+              rows={5}
               style={{
                 width: '100%',
                 background: 'transparent',
                 border: 'none',
                 outline: 'none',
                 resize: 'none',
-                padding: '12px 14px 10px',
+                padding: '14px 16px 12px',
                 fontSize: 14,
-                lineHeight: 1.6,
+                lineHeight: 1.65,
                 color: '#1E2E20',
                 fontFamily: 'inherit',
               }}
@@ -980,13 +980,13 @@ function QueryLab({
               disabled={!canRun}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 7,
-                padding: '9px 20px', borderRadius: 12,
-                background: canRun ? '#2A6032' : '#E8E2D8',
-                color: canRun ? '#FFFFFF' : '#A8B4A4',
+                padding: '9px 22px', borderRadius: 12,
+                background: canRun ? '#2A6032' : '#EDEBE6',
+                color: canRun ? '#FFFFFF' : '#B0BAB2',
                 border: `1.5px solid ${canRun ? '#1C4826' : 'transparent'}`,
                 cursor: canRun ? 'pointer' : 'not-allowed',
                 fontSize: 13, fontWeight: 700,
-                boxShadow: canRun ? '0 2px 12px rgba(42,96,50,0.32)' : 'none',
+                boxShadow: canRun ? '0 2px 14px rgba(42,96,50,0.28)' : 'none',
                 transition: 'all 0.15s',
                 letterSpacing: '-0.01em',
               }}
@@ -1012,29 +1012,29 @@ function QueryLab({
         </div>
 
         {/* ── Right: response / idle / running ── */}
-        <div className="query-lab-right" style={{ display: 'flex', flexDirection: 'column', background: '#FAFAF7' }}>
+        <div className="query-lab-right" style={{ display: 'flex', flexDirection: 'column', background: '#F9F8F5' }}>
 
           {/* IDLE */}
           {status === 'idle' && (
-            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, padding: '18px 18px 16px' }}>
-              <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#BCCABE', marginBottom: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, padding: '20px 20px 18px' }}>
+              <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#C8D6CA', marginBottom: 14 }}>
                 Try a query
               </p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 7, flex: 1 }}>
                 {LAB_SUGGESTIONS.map((s) => (
                   <button
                     key={s}
                     type="button"
                     onClick={() => { setQueryText(s); setTimeout(() => textareaRef.current?.focus(), 0) }}
                     style={{
-                      textAlign: 'left', background: '#F2EDE6', border: '1px solid #E4DDD0',
-                      borderRadius: 10, padding: '8px 12px',
-                      fontSize: 12, color: '#5A7060', cursor: 'pointer',
-                      lineHeight: 1.4, fontWeight: 500,
-                      transition: 'background 0.1s, border-color 0.1s',
+                      textAlign: 'left', background: 'transparent', border: '1px solid #E8E2D8',
+                      borderRadius: 10, padding: '9px 13px',
+                      fontSize: 12, color: '#6A8070', cursor: 'pointer',
+                      lineHeight: 1.45, fontWeight: 500,
+                      transition: 'background 0.12s, border-color 0.12s, color 0.12s',
                     }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#EAE4DA'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#C8BCA8' }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#F2EDE6'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#E4DDD0' }}
+                    onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = '#F2EDE6'; b.style.borderColor = '#CBBFAC'; b.style.color = '#3A5040' }}
+                    onMouseLeave={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = 'transparent'; b.style.borderColor = '#E8E2D8'; b.style.color = '#6A8070' }}
                   >
                     {s}
                   </button>
@@ -1484,45 +1484,6 @@ export default function Prompts() {
 
   return (
     <div className="max-w-[1360px] space-y-5">
-      <div
-        className="rounded-xl border p-4"
-        style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
-      >
-        <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
-          <label className="flex-1 space-y-1.5">
-            <span className="text-xs font-medium" style={{ color: '#7A8E7C' }}>
-              Trigger token
-            </span>
-            <input
-              type="password"
-              value={triggerToken}
-              onChange={(event) => setTriggerToken(event.target.value)}
-              className="w-full px-3 py-2 rounded-lg text-sm"
-              style={{ border: '1px solid #DDD0BC', background: '#FFFFFF', color: '#2A3A2C' }}
-              placeholder="Paste BENCHMARK_TRIGGER_TOKEN"
-              autoComplete="off"
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() => setTriggerToken('')}
-            disabled={!hasTriggerToken}
-            className="w-full lg:w-auto px-3 py-2 rounded-lg text-sm font-medium"
-            style={{
-              border: '1px solid #DDD0BC',
-              background: '#FFFFFF',
-              color: hasTriggerToken ? '#536654' : '#9AAE9C',
-              cursor: hasTriggerToken ? 'pointer' : 'not-allowed',
-            }}
-          >
-            Clear token
-          </button>
-        </div>
-        <p className="mt-2 text-xs" style={{ color: '#9AAE9C' }}>
-          Used for Save &amp; Run benchmark workflow only. Query Lab does not require it.
-        </p>
-      </div>
-
       {/* ── Query Lab ──────────────────────────────────────────────────────── */}
       <QueryLab
         trackedEntities={competitors}
