@@ -55,6 +55,11 @@ const promptLabRunSchema = z.object({
   webSearch: z.boolean().optional(),
 });
 
+type HttpError = Error & {
+  statusCode?: number;
+  exposeMessage?: boolean;
+};
+
 const app = express();
 app.disable("x-powered-by");
 const isProduction = process.env.NODE_ENV === "production";
@@ -401,10 +406,11 @@ async function runPromptLabQuery(
 ): Promise<{ responseText: string; citations: string[] }> {
   const apiKey = String(process.env.OPENAI_API_KEY ?? "").trim();
   if (!apiKey) {
-    const error = new Error("Prompt lab is not configured on the server.") as Error & {
-      statusCode?: number;
-    };
-    error.statusCode = 500;
+    const error = new Error(
+      "Prompt lab is not configured. Set OPENAI_API_KEY on the server.",
+    ) as HttpError;
+    error.statusCode = 503;
+    error.exposeMessage = true;
     throw error;
   }
 
@@ -695,11 +701,13 @@ app.post("/api/prompt-lab/run", async (req, res) => {
       return;
     }
 
+    const httpError =
+      typeof error === "object" && error !== null ? (error as HttpError) : null;
     const statusCode =
-      typeof error === "object" && error !== null && Number((error as { statusCode?: number }).statusCode)
-        ? Number((error as { statusCode?: number }).statusCode)
+      httpError && Number(httpError.statusCode)
+        ? Number(httpError.statusCode)
         : 500;
-    if (statusCode >= 500) {
+    if (statusCode >= 500 && !httpError?.exposeMessage) {
       sendApiError(res, statusCode, "Prompt lab run failed.", error);
       return;
     }

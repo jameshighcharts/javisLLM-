@@ -802,6 +802,31 @@ function detectMentions(
     .sort((left, right) => right.count - left.count)
 }
 
+function normalizeQueryLabErrorMessage(error: unknown): string {
+  const raw =
+    error instanceof Error
+      ? error.message.trim()
+      : String(error ?? '').trim()
+
+  if (!raw) {
+    return 'Run failed. Check Query Lab server logs.'
+  }
+
+  const normalized = raw.toLowerCase()
+  if (
+    normalized === 'internal server error.' ||
+    normalized === 'prompt lab run failed.'
+  ) {
+    return 'Query Lab server error. If this is a new setup, set OPENAI_API_KEY on the server.'
+  }
+
+  if (normalized.includes('not configured')) {
+    return `${raw} Add OPENAI_API_KEY to your server environment and retry.`
+  }
+
+  return raw
+}
+
 function QueryLab({
   trackedEntities,
   aliasesByEntity,
@@ -856,7 +881,7 @@ function QueryLab({
       setMentions(detected)
       setStatus('done')
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : 'Run failed')
+      setErrorText(normalizeQueryLabErrorMessage(error))
       setStatus('error')
     } finally {
       stopTimer()

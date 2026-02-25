@@ -183,8 +183,9 @@ function extractCitations(responsePayload) {
 async function runPromptLabQuery({ query, model, webSearch }) {
   const apiKey = String(process.env.OPENAI_API_KEY || "").trim()
   if (!apiKey) {
-    const error = new Error("Prompt lab is not configured on the server.")
-    error.statusCode = 500
+    const error = new Error("Prompt lab is not configured. Set OPENAI_API_KEY on the server.")
+    error.statusCode = 503
+    error.exposeMessage = true
     throw error
   }
 
@@ -279,6 +280,10 @@ module.exports = async (req, res) => {
       typeof error === "object" && error !== null && Number(error.statusCode)
         ? Number(error.statusCode)
         : 500
+    const exposeMessage =
+      typeof error === "object" &&
+      error !== null &&
+      Boolean(error.exposeMessage)
     if (
       typeof error === "object" &&
       error !== null &&
@@ -290,7 +295,7 @@ module.exports = async (req, res) => {
       console.error("[prompt-lab.run] request failed", error)
     }
     const message =
-      statusCode >= 500
+      statusCode >= 500 && !exposeMessage
         ? "Internal server error."
         : error instanceof Error
           ? error.message
