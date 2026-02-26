@@ -164,7 +164,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default="gpt-4o-mini",
         help=(
             "LLM model name, or a comma-separated model list. "
-            "Example: gpt-4o-mini,claude-3-5-sonnet-latest"
+            "Example: gpt-4o-mini,claude-sonnet-4-5-20250929"
         ),
     )
     parser.add_argument(

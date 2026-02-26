@@ -1,7 +1,7 @@
 import cors from "cors";
 import { parse } from "csv-parse/sync";
 import express from "express";
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
@@ -20,6 +20,50 @@ const serverDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(serverDir, "..", "..");
 const configPath = path.join(repoRoot, "config", "benchmark_config.json");
 const outputDir = path.join(repoRoot, "output");
+const localEnvPaths = [
+  path.join(repoRoot, ".env.monthly"),
+  path.join(repoRoot, ".env"),
+  path.join(repoRoot, "ui", ".env.local"),
+];
+
+function loadLocalEnvFile(filePath: string): void {
+  if (!existsSync(filePath)) {
+    return;
+  }
+
+  const raw = readFileSync(filePath, "utf8");
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    const withoutExport = trimmed.startsWith("export ")
+      ? trimmed.slice("export ".length).trim()
+      : trimmed;
+    const separatorIndex = withoutExport.indexOf("=");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    const key = withoutExport.slice(0, separatorIndex).trim();
+    if (!key || process.env[key]) {
+      continue;
+    }
+
+    let value = withoutExport.slice(separatorIndex + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    process.env[key] = value;
+  }
+}
+
+for (const envPath of localEnvPaths) {
+  loadLocalEnvFile(envPath);
+}
 
 const dashboardFiles = {
   comparison: path.join(outputDir, "comparison_table.csv"),
@@ -42,17 +86,25 @@ const toggleSchema = z.object({
 });
 
 const PROMPT_LAB_DEFAULT_MODEL = "gpt-4o-mini";
-const PROMPT_LAB_DEFAULT_CLAUDE_MODEL = "claude-3-5-sonnet-latest";
-const PROMPT_LAB_DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
+const PROMPT_LAB_DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5-20250929";
+const PROMPT_LAB_DEFAULT_CLAUDE_OPUS_MODEL = "claude-opus-4-5-20251101";
+const PROMPT_LAB_DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+const PROMPT_LAB_MODEL_ALIASES: Record<string, string> = {
+  "claude-3-5-sonnet-latest": PROMPT_LAB_DEFAULT_CLAUDE_MODEL,
+  "claude-4-6-sonnet-latest": PROMPT_LAB_DEFAULT_CLAUDE_MODEL,
+  "claude-sonnet-4-6": PROMPT_LAB_DEFAULT_CLAUDE_MODEL,
+  "claude-4-6-opus-latest": PROMPT_LAB_DEFAULT_CLAUDE_OPUS_MODEL,
+  "claude-opus-4-6": PROMPT_LAB_DEFAULT_CLAUDE_OPUS_MODEL,
+  "gemini-3.0-flash": PROMPT_LAB_DEFAULT_GEMINI_MODEL,
+  "gemini-3-flash-preview": PROMPT_LAB_DEFAULT_GEMINI_MODEL,
+};
 const PROMPT_LAB_FALLBACK_MODELS = [
   PROMPT_LAB_DEFAULT_MODEL,
   "gpt-4o",
   "gpt-5.2",
   PROMPT_LAB_DEFAULT_CLAUDE_MODEL,
-  "claude-4-6-sonnet-latest",
-  "claude-4-6-opus-latest",
+  PROMPT_LAB_DEFAULT_CLAUDE_OPUS_MODEL,
   PROMPT_LAB_DEFAULT_GEMINI_MODEL,
-  "gemini-3.0-flash",
 ];
 const PROMPT_LAB_SYSTEM_PROMPT =
   "You are a helpful assistant. Answer with concise bullets and include direct library names.";
@@ -391,17 +443,41 @@ function buildModelOwnerSummaryFromRows(rows: Array<Record<string, unknown>>): {
   return { modelOwners, modelOwnerMap, modelOwnerStats };
 }
 
+function normalizePromptLabModelAlias(value: string): string {
+  const normalized = value.trim();
+  if (!normalized) {
+    return "";
+  }
+  return PROMPT_LAB_MODEL_ALIASES[normalized.toLowerCase()] ?? normalized;
+}
+
+function normalizePromptLabModelList(values: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const normalized = normalizePromptLabModelAlias(value);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+  }
+  return out;
+}
+
 function getPromptLabAllowedModels(): string[] {
   const configured = String(process.env.BENCHMARK_ALLOWED_MODELS ?? "")
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
-  return configured.length > 0 ? configured : PROMPT_LAB_FALLBACK_MODELS;
+  return normalizePromptLabModelList(
+    configured.length > 0 ? configured : PROMPT_LAB_FALLBACK_MODELS,
+  );
 }
 
 function resolvePromptLabModel(modelInput: string, allowedModels: string[]): string {
   const normalizedMap = new Map(allowedModels.map((name) => [name.toLowerCase(), name]));
-  const resolved = normalizedMap.get(modelInput.toLowerCase());
+  const resolved = normalizedMap.get(normalizePromptLabModelAlias(modelInput).toLowerCase());
   if (!resolved) {
     const error = new Error(
       `Unsupported model "${modelInput}". Allowed models: ${allowedModels.join(", ")}`,

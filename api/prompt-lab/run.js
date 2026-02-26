@@ -6,17 +6,25 @@ const OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses"
 const ANTHROPIC_MESSAGES_API_URL = "https://api.anthropic.com/v1/messages"
 const GEMINI_GENERATE_CONTENT_API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models"
 const DEFAULT_MODEL = "gpt-4o-mini"
-const DEFAULT_CLAUDE_MODEL = "claude-3-5-sonnet-latest"
-const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
+const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
+const DEFAULT_CLAUDE_OPUS_MODEL = "claude-opus-4-5-20251101"
+const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+const MODEL_ALIASES = {
+  "claude-3-5-sonnet-latest": DEFAULT_CLAUDE_MODEL,
+  "claude-4-6-sonnet-latest": DEFAULT_CLAUDE_MODEL,
+  "claude-sonnet-4-6": DEFAULT_CLAUDE_MODEL,
+  "claude-4-6-opus-latest": DEFAULT_CLAUDE_OPUS_MODEL,
+  "claude-opus-4-6": DEFAULT_CLAUDE_OPUS_MODEL,
+  "gemini-3.0-flash": DEFAULT_GEMINI_MODEL,
+  "gemini-3-flash-preview": DEFAULT_GEMINI_MODEL,
+}
 const FALLBACK_ALLOWED_MODELS = [
   DEFAULT_MODEL,
   "gpt-4o",
   "gpt-5.2",
   DEFAULT_CLAUDE_MODEL,
-  "claude-4-6-sonnet-latest",
-  "claude-4-6-opus-latest",
+  DEFAULT_CLAUDE_OPUS_MODEL,
   DEFAULT_GEMINI_MODEL,
-  "gemini-3.0-flash",
 ]
 const QUERY_MAX_LENGTH = 600
 const SYSTEM_PROMPT =
@@ -56,17 +64,46 @@ function normalizeNumber(value, fallback, min, max) {
   return Math.max(min, Math.min(max, parsed))
 }
 
+function normalizeModelAlias(value) {
+  const normalized = String(value || "").trim()
+  if (!normalized) {
+    return ""
+  }
+  return MODEL_ALIASES[normalized.toLowerCase()] || normalized
+}
+
+function normalizeModelList(values) {
+  const out = []
+  const seen = new Set()
+  for (const value of values) {
+    const normalized = normalizeModelAlias(value)
+    if (!normalized) {
+      continue
+    }
+    const key = normalized.toLowerCase()
+    if (seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    out.push(normalized)
+  }
+  return out
+}
+
 function getAllowedModels() {
   const configured = String(process.env.BENCHMARK_ALLOWED_MODELS || "")
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean)
-  return configured.length > 0 ? configured : FALLBACK_ALLOWED_MODELS
+  return normalizeModelList(
+    configured.length > 0 ? configured : FALLBACK_ALLOWED_MODELS,
+  )
 }
 
 function resolveModel(modelInput, allowedModels) {
   const normalizedMap = new Map(allowedModels.map((name) => [name.toLowerCase(), name]))
-  const resolved = normalizedMap.get(String(modelInput).toLowerCase())
+  const normalizedInput = normalizeModelAlias(modelInput).toLowerCase()
+  const resolved = normalizedMap.get(normalizedInput)
   if (!resolved) {
     const error = new Error(
       `Unsupported model "${modelInput}". Allowed models: ${allowedModels.join(", ")}`,

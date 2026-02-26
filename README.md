@@ -56,7 +56,7 @@ In Vercel Project Settings -> Environment Variables, set:
 - Optional: `GITHUB_WORKFLOW_FILE` (default: `run-benchmark.yml`)
 - Optional: `GITHUB_WORKFLOW_REF` (default: `main`)
 - Optional hardening:
-  - `BENCHMARK_ALLOWED_MODELS` (comma-separated model allowlist; default `gpt-4o-mini,gpt-4o,gpt-5.2,claude-3-5-sonnet-latest,claude-4-6-sonnet-latest,claude-4-6-opus-latest,gemini-2.0-flash,gemini-3.0-flash`)
+  - `BENCHMARK_ALLOWED_MODELS` (comma-separated model allowlist; default `gpt-4o-mini,gpt-4o,gpt-5.2,claude-sonnet-4-5-20250929,claude-opus-4-5-20251101,gemini-2.5-flash`)
   - `BENCHMARK_TRIGGER_RATE_MAX` (default `5` requests)
   - `BENCHMARK_TRIGGER_RATE_WINDOW_MS` (default `60000` ms)
   - `BENCHMARK_RUNS_RATE_MAX` (default `30` requests)

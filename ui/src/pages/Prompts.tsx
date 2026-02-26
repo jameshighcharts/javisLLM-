@@ -1379,6 +1379,14 @@ function normalizeQueryLabErrorMessage(error: unknown): string {
     return `${raw} Add OPENAI_API_KEY (GPT), ANTHROPIC_API_KEY (Claude), or GEMINI_API_KEY (Gemini) to your server environment and retry.`
   }
 
+  if (
+    normalized.includes('quota') ||
+    normalized.includes('billing') ||
+    normalized.includes('rate-limit')
+  ) {
+    return `${raw} Query Lab reached provider quota/rate limits. Verify billing/quota for the selected model and retry.`
+  }
+
   return raw
 }
 
