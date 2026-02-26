@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { BENCHMARK_MODEL_OPTIONS, BENCHMARK_MODEL_VALUES, dedupeModels } from '../modelOptions'
 import { formatUsd } from '../utils/modelPricing'
-import type { BenchmarkWorkflowRun } from '../types'
+import type { BenchmarkQueueRun, BenchmarkWorkflowRun } from '../types'
 
 const TRIGGER_TOKEN_STORAGE_KEY = 'benchmark_trigger_token'
 const MAX_PROMPT_LIMIT = 10000
@@ -32,7 +32,26 @@ function writeStoredTriggerToken(nextToken: string): void {
   window.sessionStorage.setItem(TRIGGER_TOKEN_STORAGE_KEY, normalized)
 }
 
-function runStatusBadge(run: BenchmarkWorkflowRun) {
+function isWorkflowRun(run: BenchmarkWorkflowRun | BenchmarkQueueRun): run is BenchmarkWorkflowRun {
+  return typeof (run as BenchmarkWorkflowRun).runNumber === 'number'
+}
+
+function isQueueRun(run: BenchmarkWorkflowRun | BenchmarkQueueRun): run is BenchmarkQueueRun {
+  return typeof (run as BenchmarkQueueRun).id === 'string' && !isWorkflowRun(run)
+}
+
+function isWorkflowRunsResponse(value: unknown): value is { workflow: string; runs: BenchmarkWorkflowRun[] } {
+  return Boolean(value && typeof value === 'object' && 'workflow' in value)
+}
+
+function isTerminalRun(run: BenchmarkWorkflowRun | BenchmarkQueueRun): boolean {
+  if (isWorkflowRun(run)) {
+    return run.status === 'completed'
+  }
+  return run.status === 'completed' || run.status === 'failed'
+}
+
+function workflowRunStatusBadge(run: BenchmarkWorkflowRun) {
   if (run.status === 'completed' && run.conclusion === 'success') {
     return { label: 'Succeeded', bg: '#ecfdf3', border: '#bbf7d0', text: '#166534' }
   }
@@ -43,6 +62,19 @@ function runStatusBadge(run: BenchmarkWorkflowRun) {
     return { label: 'Cancelled', bg: '#f8fafc', border: '#e2e8f0', text: '#475569' }
   }
   return { label: 'Running', bg: '#fffbeb', border: '#fde68a', text: '#92400e' }
+}
+
+function queueRunStatusBadge(run: BenchmarkQueueRun) {
+  if (run.status === 'completed') {
+    return { label: 'Completed', bg: '#ecfdf3', border: '#bbf7d0', text: '#166534' }
+  }
+  if (run.status === 'failed') {
+    return { label: 'Failed', bg: '#fef2f2', border: '#fecaca', text: '#991b1b' }
+  }
+  if (run.status === 'running') {
+    return { label: 'Running', bg: '#fffbeb', border: '#fde68a', text: '#92400e' }
+  }
+  return { label: 'Pending', bg: '#f8fafc', border: '#e2e8f0', text: '#475569' }
 }
 
 function formatRunDate(value: string) {
@@ -222,9 +254,32 @@ export default function Runs() {
   })
 
   const activeRun = useMemo(
-    () => runsQuery.data?.runs.find((run) => run.status !== 'completed') ?? null,
+    () => runsQuery.data?.runs.find((run) => !isTerminalRun(run)) ?? null,
     [runsQuery.data?.runs],
   )
+  const queueContractEnabled = useMemo(
+    () => Boolean(runsQuery.data && !isWorkflowRunsResponse(runsQuery.data)),
+    [runsQuery.data],
+  )
+  const hasActiveQueueRun = useMemo(
+    () =>
+      (runsQuery.data?.runs ?? []).some(
+        (run) => isQueueRun(run) && run.status !== 'completed' && run.status !== 'failed',
+      ),
+    [runsQuery.data?.runs],
+  )
+
+  useEffect(() => {
+    if (!hasManagedRunAccess || !hasActiveQueueRun) {
+      return
+    }
+    const intervalId = window.setInterval(() => {
+      void runsQuery.refetch()
+    }, 3000)
+    return () => {
+      window.clearInterval(intervalId)
+    }
+  }, [hasManagedRunAccess, hasActiveQueueRun, runsQuery.refetch])
 
   const canRun =
     !triggerMutation.isPending &&
@@ -658,7 +713,13 @@ export default function Runs() {
                     className="rounded-lg px-3 py-2"
                     style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}
                   >
-                    Run #{activeRun.runNumber} is in progress.
+                    {isWorkflowRun(activeRun)
+                      ? `Run #${activeRun.runNumber} is in progress.`
+                      : `Run ${activeRun.models ?? shortRunId(activeRun.id)} is in progress${
+                          activeRun.progress
+                            ? ` (${Math.round(activeRun.progress.completionPct)}% complete)`
+                            : ''
+                        }.`}
                   </div>
                 ) : (
                   <div
@@ -703,10 +764,14 @@ export default function Runs() {
           style={{ borderBottom: '1px solid #F2EDE6' }}
         >
           <div className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>
-            Recent Workflow Runs
+            {queueContractEnabled ? 'Recent Queue Runs' : 'Recent Workflow Runs'}
           </div>
           <div className="text-xs" style={{ color: '#9AAE9C' }}>
-            {hasManagedRunAccess ? 'Auto-refresh every 15s' : 'Set trigger token to load runs'}
+            {hasManagedRunAccess
+              ? hasActiveQueueRun
+                ? 'Auto-refresh every 3s while running'
+                : 'Auto-refresh every 15s'
+              : 'Set trigger token to load runs'}
           </div>
         </div>
 
@@ -733,12 +798,25 @@ export default function Runs() {
                   <th className="px-5 py-3 text-xs font-medium text-left" style={{ color: '#7A8E7C' }}>Status</th>
                   <th className="px-5 py-3 text-xs font-medium text-left" style={{ color: '#7A8E7C' }}>Started</th>
                   <th className="px-5 py-3 text-xs font-medium text-left" style={{ color: '#7A8E7C' }}>Updated</th>
-                  <th className="px-5 py-3 text-xs font-medium text-right" style={{ color: '#7A8E7C' }}>Logs</th>
+                  <th className="px-5 py-3 text-xs font-medium text-right" style={{ color: '#7A8E7C' }}>Progress / Logs</th>
                 </tr>
               </thead>
               <tbody>
                 {(runsQuery.data?.runs ?? []).map((run, i, all) => {
-                  const badge = runStatusBadge(run)
+                  const badge = isWorkflowRun(run)
+                    ? workflowRunStatusBadge(run)
+                    : queueRunStatusBadge(run)
+                  const queueProgress =
+                    isQueueRun(run) && run.progress
+                      ? {
+                          totalJobs: Math.max(0, Math.round(run.progress.totalJobs)),
+                          completedJobs: Math.max(0, Math.round(run.progress.completedJobs)),
+                          completionPct: Math.max(
+                            0,
+                            Math.min(100, Number(run.progress.completionPct || 0)),
+                          ),
+                        }
+                      : null
                   return (
                     <tr
                       key={run.id}
@@ -746,10 +824,16 @@ export default function Runs() {
                     >
                       <td className="px-5 py-3.5">
                         <div className="text-sm font-medium" style={{ color: '#2A3A2C' }}>
-                          #{run.runNumber}
+                          {isWorkflowRun(run)
+                            ? `#${run.runNumber}`
+                            : run.models || shortRunId(run.id)}
                         </div>
                         <div className="text-xs" style={{ color: '#9AAE9C' }}>
-                          {run.title}
+                          {isWorkflowRun(run)
+                            ? run.title
+                            : run.runMonth
+                              ? `Run month ${run.runMonth}`
+                              : shortRunId(run.id)}
                         </div>
                       </td>
                       <td className="px-5 py-3.5">
@@ -761,21 +845,50 @@ export default function Runs() {
                         </span>
                       </td>
                       <td className="px-5 py-3.5 text-sm" style={{ color: '#536654' }}>
-                        {formatRunDate(run.createdAt)}
+                        {formatRunDate(isWorkflowRun(run) ? run.createdAt : run.createdAt ?? '')}
                       </td>
                       <td className="px-5 py-3.5 text-sm" style={{ color: '#536654' }}>
-                        {formatRunDate(run.updatedAt)}
+                        {isWorkflowRun(run) ? formatRunDate(run.updatedAt) : '—'}
                       </td>
                       <td className="px-5 py-3.5 text-right">
-                        <a
-                          href={run.htmlUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-sm font-medium underline"
-                          style={{ color: '#3D5C40' }}
-                        >
-                          Open
-                        </a>
+                        {isWorkflowRun(run) ? (
+                          <a
+                            href={run.htmlUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-sm font-medium underline"
+                            style={{ color: '#3D5C40' }}
+                          >
+                            Open
+                          </a>
+                        ) : queueProgress ? (
+                          <div className="flex min-w-[180px] items-center justify-end gap-2">
+                            <div
+                              className="h-2 w-28 overflow-hidden rounded-full"
+                              style={{ background: '#E8E0D2' }}
+                            >
+                              <div
+                                className="h-full rounded-full"
+                                style={{
+                                  width: `${queueProgress.completionPct}%`,
+                                  background:
+                                    run.status === 'failed'
+                                      ? '#dc2626'
+                                      : run.status === 'completed'
+                                        ? '#15803d'
+                                        : '#8FBB93',
+                                }}
+                              />
+                            </div>
+                            <span className="text-xs tabular-nums" style={{ color: '#607860' }}>
+                              {queueProgress.completedJobs}/{queueProgress.totalJobs}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-xs" style={{ color: '#9AAE9C' }}>
+                            Pending
+                          </span>
+                        )}
                       </td>
                     </tr>
                   )

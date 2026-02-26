@@ -1,6 +1,6 @@
 const {
   enforceRateLimit,
-} = require("../_github")
+} = require("../_rate-limit")
 
 const OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses"
 const ANTHROPIC_MESSAGES_API_URL = "https://api.anthropic.com/v1/messages"

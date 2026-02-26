@@ -1,7 +1,6 @@
+const { enforceRateLimit, enforceTriggerToken } = require('../_rate-limit')
 const {
   dispatchWorkflow,
-  enforceRateLimit,
-  enforceTriggerToken,
   getGitHubConfig,
   listWorkflowRuns,
 } = require('../_github')
@@ -277,6 +276,131 @@ async function findTriggeredRun(triggerId) {
   return null
 }
 
+function isQueueTriggerEnabled() {
+  return parseBoolean(process.env.USE_QUEUE_TRIGGER, false)
+}
+
+function getSupabaseRestConfig() {
+  const supabaseUrl = String(process.env.SUPABASE_URL || '').trim().replace(/\/$/, '')
+  const anonKey = String(
+    process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || '',
+  ).trim()
+  const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()
+
+  if (!supabaseUrl || !anonKey || !serviceRoleKey) {
+    const error = new Error(
+      'Missing Supabase env config. Set SUPABASE_URL, SUPABASE_ANON_KEY (or SUPABASE_PUBLISHABLE_KEY), and SUPABASE_SERVICE_ROLE_KEY.',
+    )
+    error.statusCode = 500
+    throw error
+  }
+
+  return {
+    supabaseUrl,
+    headers: {
+      apikey: anonKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    },
+  }
+}
+
+async function supabaseRestRequest(config, path, method, body, contextLabel) {
+  const response = await fetch(`${config.supabaseUrl}${path}`, {
+    method,
+    headers: config.headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+
+  const raw = await response.text()
+  let payload = null
+  if (raw) {
+    try {
+      payload = JSON.parse(raw)
+    } catch {
+      payload = raw
+    }
+  }
+
+  if (!response.ok) {
+    const message =
+      (payload && typeof payload === 'object' && (payload.message || payload.error || payload.hint)) ||
+      `${contextLabel} failed (${response.status})`
+    const error = new Error(String(message))
+    error.statusCode = response.status >= 500 ? 502 : response.status
+    error.payload = payload
+    throw error
+  }
+
+  return payload
+}
+
+async function triggerViaQueue(body, models, runs, temperature, webSearch, ourTerms, runMonth, promptLimit) {
+  const restConfig = getSupabaseRestConfig()
+  const effectiveRunMonth = runMonth || new Date().toISOString().slice(0, 7)
+
+  const runPayload = {
+    run_month: effectiveRunMonth,
+    model: models.join(','),
+    web_search_enabled: Boolean(webSearch),
+    started_at: new Date().toISOString(),
+  }
+
+  const runInsertPayload = await supabaseRestRequest(
+    restConfig,
+    '/rest/v1/benchmark_runs',
+    'POST',
+    runPayload,
+    'Insert benchmark run',
+  )
+
+  const insertedRun = Array.isArray(runInsertPayload)
+    ? runInsertPayload[0]
+    : runInsertPayload
+  const runId = insertedRun && typeof insertedRun === 'object'
+    ? String(insertedRun.id || '')
+    : ''
+
+  if (!runId) {
+    const error = new Error('Supabase did not return benchmark run id.')
+    error.statusCode = 502
+    throw error
+  }
+
+  const enqueuePayload = await supabaseRestRequest(
+    restConfig,
+    '/rest/v1/rpc/enqueue_benchmark_run',
+    'POST',
+    {
+      p_run_id: runId,
+      p_models: models,
+      p_our_terms: ourTerms,
+      p_runs_per_model: runs,
+      p_temperature: temperature,
+      p_web_search: webSearch,
+      p_prompt_limit: promptLimit,
+    },
+    'Enqueue benchmark jobs',
+  )
+
+  const enqueueResult = Array.isArray(enqueuePayload)
+    ? enqueuePayload[0]
+    : enqueuePayload
+  const jobsEnqueued =
+    enqueueResult && typeof enqueueResult === 'object'
+      ? Number(enqueueResult.jobs_enqueued || 0)
+      : 0
+
+  return {
+    runId,
+    jobsEnqueued,
+    models,
+    promptLimit,
+    runMonth: effectiveRunMonth,
+  }
+}
+
 module.exports = async (req, res) => {
   try {
     if (req.method !== 'POST') {
@@ -301,9 +425,7 @@ module.exports = async (req, res) => {
     })
 
     enforceTriggerToken(req)
-    const config = getGitHubConfig()
     const body = parseBody(req)
-    const triggerId = `ui-${Date.now()}`
     const allowedModels = getAllowedModels()
 
     const models = resolveModels(body, allowedModels)
@@ -315,6 +437,32 @@ module.exports = async (req, res) => {
     const runMonth = resolveRunMonth(body.runMonth)
     const promptLimit = resolvePromptLimit(body.promptLimit ?? body.prompt_limit)
 
+    if (isQueueTriggerEnabled()) {
+      const queueResult = await triggerViaQueue(
+        body,
+        models,
+        runs,
+        temperature,
+        webSearch,
+        ourTerms,
+        runMonth,
+        promptLimit,
+      )
+
+      return sendJson(res, 200, {
+        ok: true,
+        runId: queueResult.runId,
+        jobsEnqueued: queueResult.jobsEnqueued,
+        models: queueResult.models,
+        promptLimit: queueResult.promptLimit,
+        runMonth: queueResult.runMonth,
+        message: 'Benchmark jobs enqueued.',
+      })
+    }
+
+    // Legacy GitHub Actions path (feature-flag fallback).
+    const config = getGitHubConfig()
+    const triggerId = `ui-${Date.now()}`
     const workflowInputs = {
       trigger_id: triggerId,
       model,
@@ -330,7 +478,6 @@ module.exports = async (req, res) => {
     }
 
     await dispatchWorkflow(workflowInputs)
-
     const matchedRun = await findTriggeredRun(triggerId)
 
     return sendJson(res, 200, {

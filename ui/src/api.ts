@@ -116,6 +116,81 @@ type TimeSeriesResponseRow = {
   query_id: string
 }
 
+type MvRunSummaryRow = {
+  run_id: string
+  run_month: string | null
+  model: string | null
+  models?: string[] | string | null
+  models_csv?: string | null
+  model_owners?: string[] | string | null
+  model_owners_csv?: string | null
+  model_owner_map?: string | null
+  web_search_enabled: boolean | null
+  overall_score: number | null
+  created_at: string | null
+  started_at: string | null
+  ended_at: string | null
+  response_count: number | null
+  query_count: number | null
+  competitor_count: number | null
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  total_duration_ms: number | null
+  avg_duration_ms: number | null
+}
+
+type MvModelPerformanceRow = {
+  run_id: string
+  model: string
+  owner: string
+  response_count: number | null
+  success_count: number | null
+  failure_count: number | null
+  web_search_enabled_count: number | null
+  total_duration_ms: number | null
+  avg_duration_ms: number | null
+  p95_duration_ms: number | null
+  total_input_tokens: number | null
+  total_output_tokens: number | null
+  total_tokens: number | null
+  avg_input_tokens: number | null
+  avg_output_tokens: number | null
+  avg_total_tokens: number | null
+  created_at?: string | null
+}
+
+type MvCompetitorMentionRateRow = {
+  run_id: string
+  query_id: string | null
+  query_key: string
+  query_text: string
+  competitor_id: string
+  entity: string
+  entity_key: string
+  is_highcharts: boolean
+  is_overall_row: boolean
+  response_count: number | null
+  input_tokens?: number | null
+  output_tokens?: number | null
+  total_tokens?: number | null
+  total_duration_ms?: number | null
+  mentions_count: number | null
+  mentions_rate_pct: number | null
+  share_of_voice_rate_pct: number | null
+  created_at?: string | null
+}
+
+type MvVisibilityScoreRow = {
+  run_id: string
+  query_id: string | null
+  query_key: string
+  query_text: string
+  is_overall_row: boolean
+  ai_visibility_score: number | null
+  created_at: string | null
+}
+
 type TimeSeriesOptions = {
   tags?: string[]
   mode?: 'any' | 'all'
@@ -176,6 +251,37 @@ type CompetitorBlogPostRow = {
 function uniqueNonEmpty(values: string[]): string[] {
   const normalized = values.map((value) => value.trim()).filter(Boolean)
   return [...new Set(normalized)]
+}
+
+function toFiniteNumber(value: unknown, fallback = 0): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function parseCsvList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return uniqueNonEmpty(value.map((item) => String(item)))
+  }
+  if (typeof value === 'string') {
+    return uniqueNonEmpty(value.split(',').map((item) => item.trim()))
+  }
+  return []
+}
+
+function parseModelOwnerMap(value: unknown): Record<string, string> {
+  if (typeof value !== 'string' || !value.trim()) {
+    return {}
+  }
+
+  const output: Record<string, string> = {}
+  for (const pair of value.split(';')) {
+    const [modelRaw, ownerRaw] = pair.split('=>')
+    const model = String(modelRaw ?? '').trim()
+    const owner = String(ownerRaw ?? '').trim()
+    if (!model || !owner) continue
+    output[model] = owner
+  }
+  return output
 }
 
 function inferPromptTags(query: string): string[] {
@@ -2365,6 +2471,267 @@ async function fetchTimeseriesFromSupabase(
   }
 }
 
+function roundTo(value: number, decimals = 2): number {
+  const factor = 10 ** decimals
+  return Math.round(value * factor) / factor
+}
+
+function resolveRunModels(row: MvRunSummaryRow): string[] {
+  if (Array.isArray(row.models)) {
+    const fromArray = parseCsvList(row.models)
+    if (fromArray.length > 0) return fromArray
+  }
+
+  const fromCsv = parseCsvList(row.models_csv)
+  if (fromCsv.length > 0) return fromCsv
+  return parseCsvList(row.model)
+}
+
+function resolveRunModelOwners(row: MvRunSummaryRow): string[] {
+  if (Array.isArray(row.model_owners)) {
+    const fromArray = parseCsvList(row.model_owners)
+    if (fromArray.length > 0) return fromArray
+  }
+  return parseCsvList(row.model_owners_csv)
+}
+
+function buildModelSummaryFromViewRows(rows: MvModelPerformanceRow[]): {
+  modelStats: DashboardModelStat[]
+  tokenTotals: { inputTokens: number; outputTokens: number; totalTokens: number }
+  durationTotals: { totalDurationMs: number; avgDurationMs: number }
+  modelOwners: string[]
+  modelOwnerMap: Record<string, string>
+  modelOwnerStats: ModelOwnerStat[]
+} {
+  const modelOwnerMap: Record<string, string> = {}
+  const ownerResponseCount = new Map<string, number>()
+  const ownerModels = new Map<string, Set<string>>()
+
+  let totalResponses = 0
+  let totalInputTokens = 0
+  let totalOutputTokens = 0
+  let totalTokens = 0
+  let totalDurationMs = 0
+
+  const modelStats = rows
+    .map((row) => {
+      const model = String(row.model ?? '').trim()
+      const owner =
+        String(row.owner ?? '').trim() || inferModelOwnerFromModel(model)
+      const responseCount = Math.max(0, Math.round(toFiniteNumber(row.response_count)))
+      const successCount = Math.max(0, Math.round(toFiniteNumber(row.success_count)))
+      const failureCount = Math.max(0, Math.round(toFiniteNumber(row.failure_count)))
+      const webSearchEnabledCount = Math.max(
+        0,
+        Math.round(toFiniteNumber(row.web_search_enabled_count)),
+      )
+      const modelTotalDurationMs = Math.max(
+        0,
+        Math.round(toFiniteNumber(row.total_duration_ms)),
+      )
+      const modelInputTokens = Math.max(0, Math.round(toFiniteNumber(row.total_input_tokens)))
+      const modelOutputTokens = Math.max(
+        0,
+        Math.round(toFiniteNumber(row.total_output_tokens)),
+      )
+      const modelTotalTokens = Math.max(0, Math.round(toFiniteNumber(row.total_tokens)))
+
+      modelOwnerMap[model] = owner
+      ownerResponseCount.set(owner, (ownerResponseCount.get(owner) ?? 0) + responseCount)
+      const ownerModelSet = ownerModels.get(owner) ?? new Set<string>()
+      ownerModelSet.add(model)
+      ownerModels.set(owner, ownerModelSet)
+
+      totalResponses += responseCount
+      totalInputTokens += modelInputTokens
+      totalOutputTokens += modelOutputTokens
+      totalTokens += modelTotalTokens
+      totalDurationMs += modelTotalDurationMs
+
+      return {
+        model,
+        owner,
+        responseCount,
+        successCount,
+        failureCount,
+        webSearchEnabledCount,
+        totalDurationMs: modelTotalDurationMs,
+        avgDurationMs: roundTo(toFiniteNumber(row.avg_duration_ms), 2),
+        p95DurationMs: roundTo(toFiniteNumber(row.p95_duration_ms), 2),
+        totalInputTokens: modelInputTokens,
+        totalOutputTokens: modelOutputTokens,
+        totalTokens: modelTotalTokens,
+        avgInputTokens: roundTo(toFiniteNumber(row.avg_input_tokens), 2),
+        avgOutputTokens: roundTo(toFiniteNumber(row.avg_output_tokens), 2),
+        avgTotalTokens: roundTo(toFiniteNumber(row.avg_total_tokens), 2),
+      } satisfies DashboardModelStat
+    })
+    .sort((left, right) => {
+      if (right.responseCount !== left.responseCount) {
+        return right.responseCount - left.responseCount
+      }
+      return left.model.localeCompare(right.model)
+    })
+
+  const modelOwners = [...new Set(Object.values(modelOwnerMap))].sort((a, b) =>
+    a.localeCompare(b),
+  )
+  const modelOwnerStats = [...ownerResponseCount.entries()]
+    .map(([owner, responseCount]) => ({
+      owner,
+      models: [...(ownerModels.get(owner) ?? new Set<string>())].sort((a, b) =>
+        a.localeCompare(b),
+      ),
+      responseCount,
+    }))
+    .sort((left, right) => {
+      if (right.responseCount !== left.responseCount) {
+        return right.responseCount - left.responseCount
+      }
+      return left.owner.localeCompare(right.owner)
+    })
+
+  return {
+    modelStats,
+    tokenTotals: {
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      totalTokens,
+    },
+    durationTotals: {
+      totalDurationMs,
+      avgDurationMs: totalResponses > 0 ? roundTo(totalDurationMs / totalResponses, 2) : 0,
+    },
+    modelOwners,
+    modelOwnerMap,
+    modelOwnerStats,
+  }
+}
+
+async function fetchModelPerformanceRowsByRunIds(
+  runIds: string[],
+): Promise<MvModelPerformanceRow[]> {
+  if (!supabase || runIds.length === 0) {
+    return []
+  }
+
+  const rows: MvModelPerformanceRow[] = []
+  const chunkSize = 100
+  for (let index = 0; index < runIds.length; index += chunkSize) {
+    const runIdChunk = runIds.slice(index, index + chunkSize)
+    let offset = 0
+    while (true) {
+      const result = await supabase
+        .from('mv_model_performance')
+        .select(
+          'run_id,model,owner,response_count,success_count,failure_count,web_search_enabled_count,total_duration_ms,avg_duration_ms,p95_duration_ms,total_input_tokens,total_output_tokens,total_tokens,avg_input_tokens,avg_output_tokens,avg_total_tokens,created_at',
+        )
+        .in('run_id', runIdChunk)
+        .order('run_id', { ascending: true })
+        .order('model', { ascending: true })
+        .range(offset, offset + SUPABASE_PAGE_SIZE - 1)
+
+      if (result.error) {
+        throw asError(result.error, 'Failed to load mv_model_performance rows')
+      }
+
+      const pageRows = (result.data ?? []) as MvModelPerformanceRow[]
+      if (pageRows.length === 0) {
+        break
+      }
+      rows.push(...pageRows)
+      offset += pageRows.length
+    }
+  }
+  return rows
+}
+
+async function fetchMentionRateRowsByRunIds(
+  runIds: string[],
+  options: { overallOnly?: boolean } = {},
+): Promise<MvCompetitorMentionRateRow[]> {
+  if (!supabase || runIds.length === 0) {
+    return []
+  }
+
+  const rows: MvCompetitorMentionRateRow[] = []
+  const chunkSize = 100
+  for (let index = 0; index < runIds.length; index += chunkSize) {
+    const runIdChunk = runIds.slice(index, index + chunkSize)
+    let offset = 0
+    while (true) {
+      let query = supabase
+        .from('mv_competitor_mention_rates')
+        .select(
+          'run_id,query_id,query_key,query_text,competitor_id,entity,entity_key,is_highcharts,is_overall_row,response_count,input_tokens,output_tokens,total_tokens,total_duration_ms,mentions_count,mentions_rate_pct,share_of_voice_rate_pct,created_at',
+        )
+        .in('run_id', runIdChunk)
+        .order('run_id', { ascending: true })
+        .order('query_key', { ascending: true })
+        .order('entity_key', { ascending: true })
+        .range(offset, offset + SUPABASE_PAGE_SIZE - 1)
+
+      if (typeof options.overallOnly === 'boolean') {
+        query = query.eq('is_overall_row', options.overallOnly)
+      }
+
+      const result = await query
+      if (result.error) {
+        throw asError(result.error, 'Failed to load mv_competitor_mention_rates rows')
+      }
+
+      const pageRows = (result.data ?? []) as MvCompetitorMentionRateRow[]
+      if (pageRows.length === 0) {
+        break
+      }
+      rows.push(...pageRows)
+      offset += pageRows.length
+    }
+  }
+
+  return rows
+}
+
+async function fetchHistoricalRunsByQueryIds(
+  queryIds: string[],
+): Promise<Map<string, Set<string>>> {
+  const runsByQuery = new Map<string, Set<string>>()
+  if (!supabase || queryIds.length === 0) {
+    return runsByQuery
+  }
+
+  let offset = 0
+  while (true) {
+    const result = await supabase
+      .from('mv_competitor_mention_rates')
+      .select('run_id,query_id')
+      .eq('is_overall_row', false)
+      .in('query_id', queryIds)
+      .order('run_id', { ascending: true })
+      .range(offset, offset + SUPABASE_PAGE_SIZE - 1)
+
+    if (result.error) {
+      throw asError(result.error, 'Failed to load historical run counts from mv_competitor_mention_rates')
+    }
+
+    const pageRows = (result.data ?? []) as Array<{ run_id: string; query_id: string | null }>
+    if (pageRows.length === 0) {
+      break
+    }
+
+    for (const row of pageRows) {
+      if (!row.query_id) continue
+      const runSet = runsByQuery.get(row.query_id) ?? new Set<string>()
+      runSet.add(row.run_id)
+      runsByQuery.set(row.query_id, runSet)
+    }
+
+    offset += pageRows.length
+  }
+
+  return runsByQuery
+}
+
 function emptyCompetitorBlogsResponse(): CompetitorBlogsResponse {
   return {
     generatedAt: new Date().toISOString(),
@@ -2897,6 +3264,880 @@ async function fetchPromptDrilldownFromSupabase(
   }
 }
 
+async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
+  if (!supabase) {
+    throw new Error('Supabase is not configured.')
+  }
+
+  const configResponse = await fetchConfigFromSupabase()
+  const config = configResponse.config
+
+  const queryResultWithTags = await fetchAllSupabasePages<PromptQueryRow>((from, to) =>
+    supabase
+      .from('prompt_queries')
+      .select('id,query_text,sort_order,is_active,tags')
+      .order('sort_order', { ascending: true })
+      .range(from, to),
+  )
+
+  let queryRowsError = queryResultWithTags.error
+  let queryRows = queryResultWithTags.rows
+  if (queryRowsError && isMissingColumn(queryRowsError)) {
+    const fallbackRows = await fetchAllSupabasePages<PromptQueryRow>((from, to) =>
+      supabase
+        .from('prompt_queries')
+        .select('id,query_text,sort_order,is_active')
+        .order('sort_order', { ascending: true })
+        .range(from, to),
+    )
+    queryRowsError = fallbackRows.error
+    queryRows = fallbackRows.rows.map((row) => ({ ...row, tags: null }))
+  }
+  if (queryRowsError) {
+    throw asError(queryRowsError, 'Failed to load prompt metadata for dashboard')
+  }
+
+  const competitorResult = await supabase
+    .from('competitors')
+    .select('id,name,slug,is_primary,sort_order')
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true })
+  if (competitorResult.error) {
+    throw asError(competitorResult.error, 'Failed to load competitors for dashboard')
+  }
+
+  const latestRunResult = await supabase
+    .from('mv_run_summary')
+    .select(
+      'run_id,run_month,model,models,models_csv,model_owners,model_owners_csv,model_owner_map,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,query_count,competitor_count,input_tokens,output_tokens,total_tokens,total_duration_ms,avg_duration_ms',
+    )
+    .order('created_at', { ascending: false })
+    .limit(1)
+
+  if (latestRunResult.error) {
+    if (isMissingRelation(latestRunResult.error)) {
+      return emptyDashboard(config)
+    }
+    throw asError(latestRunResult.error, 'Failed to load mv_run_summary for dashboard')
+  }
+
+  const latestRun = ((latestRunResult.data ?? [])[0] ?? null) as MvRunSummaryRow | null
+  if (!latestRun) {
+    return emptyDashboard(config)
+  }
+
+  const runId = latestRun.run_id
+  const allQueryRows = queryRows as Array<{
+    id: string
+    query_text: string
+    sort_order: number
+    is_active: boolean
+    tags?: string[] | null
+  }>
+  const competitorRows = (competitorResult.data ?? []) as Array<{
+    id: string
+    name: string
+    slug: string
+    is_primary: boolean
+    sort_order: number
+  }>
+
+  const [mentionRows, modelRows, historicalRunsByQuery] = await Promise.all([
+    fetchMentionRateRowsByRunIds([runId]),
+    fetchModelPerformanceRowsByRunIds([runId]),
+    fetchHistoricalRunsByQueryIds(allQueryRows.map((row) => row.id)),
+  ])
+
+  const modelSummary = buildModelSummaryFromViewRows(modelRows)
+  const runModels = resolveRunModels(latestRun)
+  const runModelOwners = resolveRunModelOwners(latestRun)
+  const ownerMapFromRun = parseModelOwnerMap(latestRun.model_owner_map)
+  const modelOwnerMap =
+    Object.keys(modelSummary.modelOwnerMap).length > 0
+      ? modelSummary.modelOwnerMap
+      : ownerMapFromRun
+
+  for (const model of runModels) {
+    if (!modelOwnerMap[model]) {
+      modelOwnerMap[model] = inferModelOwnerFromModel(model)
+    }
+  }
+
+  const modelOwners =
+    modelSummary.modelOwners.length > 0
+      ? modelSummary.modelOwners
+      : runModelOwners.length > 0
+        ? runModelOwners
+        : [...new Set(Object.values(modelOwnerMap))].sort((a, b) => a.localeCompare(b))
+
+  const mentionRowsForRun = mentionRows.filter((row) => row.run_id === runId)
+  const mentionByQueryAndCompetitor = new Map<string, MvCompetitorMentionRateRow>()
+  const overallByCompetitorId = new Map<string, MvCompetitorMentionRateRow>()
+  for (const row of mentionRowsForRun) {
+    if (row.is_overall_row) {
+      overallByCompetitorId.set(row.competitor_id, row)
+      continue
+    }
+    if (row.query_id) {
+      mentionByQueryAndCompetitor.set(`${row.query_id}:${row.competitor_id}`, row)
+    }
+  }
+
+  const competitorSeries = competitorRows.map((competitor) => {
+    const row = overallByCompetitorId.get(competitor.id)
+    return {
+      entity: competitor.name,
+      entityKey: competitor.slug,
+      isHighcharts:
+        Boolean(row?.is_highcharts) ||
+        competitor.is_primary ||
+        competitor.slug === 'highcharts',
+      mentionRatePct: roundTo(toFiniteNumber(row?.mentions_rate_pct), 2),
+      shareOfVoicePct: roundTo(toFiniteNumber(row?.share_of_voice_rate_pct), 2),
+    }
+  })
+
+  const highchartsCompetitor =
+    competitorRows.find((row) => row.is_primary) ??
+    competitorRows.find((row) => row.slug === 'highcharts') ??
+    null
+  const nonHighchartsCompetitors = competitorRows.filter(
+    (row) => row.id !== highchartsCompetitor?.id,
+  )
+
+  let pricedInputTokens = 0
+  let pricedOutputTokens = 0
+  let pricedInputCostUsd = 0
+  let pricedOutputCostUsd = 0
+  for (const row of modelRows) {
+    const model = String(row.model ?? '').trim()
+    if (!model) continue
+    const inputTokens = Math.max(0, Math.round(toFiniteNumber(row.total_input_tokens)))
+    const outputTokens = Math.max(0, Math.round(toFiniteNumber(row.total_output_tokens)))
+    const costs = estimateResponseCostUsd(model, inputTokens, outputTokens)
+    if (!costs.priced) continue
+    pricedInputTokens += inputTokens
+    pricedOutputTokens += outputTokens
+    pricedInputCostUsd += costs.inputCostUsd
+    pricedOutputCostUsd += costs.outputCostUsd
+  }
+  const blendedInputCostPerToken =
+    pricedInputTokens > 0 ? pricedInputCostUsd / pricedInputTokens : 0
+  const blendedOutputCostPerToken =
+    pricedOutputTokens > 0 ? pricedOutputCostUsd / pricedOutputTokens : 0
+
+  const promptStatus = allQueryRows.map((queryRow) => {
+    const competitorRatesAll = competitorRows.map((competitor) => {
+      const row = mentionByQueryAndCompetitor.get(`${queryRow.id}:${competitor.id}`)
+      const mentions = Math.max(0, Math.round(toFiniteNumber(row?.mentions_count)))
+      const ratePct = roundTo(toFiniteNumber(row?.mentions_rate_pct), 2)
+      const isHighcharts = highchartsCompetitor
+        ? competitor.id === highchartsCompetitor.id
+        : competitor.slug === 'highcharts'
+      return {
+        entity: competitor.name,
+        entityKey: competitor.slug,
+        isHighcharts,
+        ratePct,
+        mentions,
+        inputTokens: Math.max(0, Math.round(toFiniteNumber(row?.input_tokens))),
+        outputTokens: Math.max(0, Math.round(toFiniteNumber(row?.output_tokens))),
+        totalTokens: Math.max(0, Math.round(toFiniteNumber(row?.total_tokens))),
+      }
+    })
+
+    const queryMetrics =
+      competitorRatesAll.find((entry) => entry.totalTokens > 0) ??
+      competitorRatesAll[0] ??
+      null
+    const latestRunResponseCount = Math.max(
+      0,
+      Math.round(
+        toFiniteNumber(
+          mentionByQueryAndCompetitor.get(
+            `${queryRow.id}:${highchartsCompetitor?.id ?? competitorRows[0]?.id ?? ''}`,
+          )?.response_count,
+        ),
+      ),
+    )
+    const latestInputTokens = queryMetrics?.inputTokens ?? 0
+    const latestOutputTokens = queryMetrics?.outputTokens ?? 0
+    const latestTotalTokens = queryMetrics?.totalTokens ?? latestInputTokens + latestOutputTokens
+
+    const competitorRates = competitorRatesAll.filter((entry) => !entry.isHighcharts)
+    const highchartsRateEntry =
+      competitorRatesAll.find((entry) => entry.isHighcharts) ?? null
+    const highchartsRatePct = highchartsRateEntry?.ratePct ?? 0
+
+    const highchartsRank =
+      latestRunResponseCount > 0 && highchartsRateEntry
+        ? (() => {
+            const sortedRates = competitorRatesAll
+              .slice()
+              .sort((left, right) => {
+                if (right.ratePct !== left.ratePct) {
+                  return right.ratePct - left.ratePct
+                }
+                return left.entity.localeCompare(right.entity)
+              })
+            const index = sortedRates.findIndex((entry) => entry.isHighcharts)
+            return index >= 0 ? index + 1 : null
+          })()
+        : null
+
+    const viabilityCount = competitorRates.reduce((sum, entry) => sum + entry.mentions, 0)
+    const viabilityDenominator = latestRunResponseCount * nonHighchartsCompetitors.length
+    const viabilityRatePct =
+      viabilityDenominator > 0 ? (viabilityCount / viabilityDenominator) * 100 : 0
+
+    const topCompetitor =
+      competitorRates
+        .slice()
+        .sort((left, right) => right.ratePct - left.ratePct)
+        .map((entry) => ({ entity: entry.entity, ratePct: roundTo(entry.ratePct, 2) }))
+        .at(0) ?? null
+
+    const estimatedInputCostUsd = latestInputTokens * blendedInputCostPerToken
+    const estimatedOutputCostUsd = latestOutputTokens * blendedOutputCostPerToken
+    const estimatedTotalCostUsd = estimatedInputCostUsd + estimatedOutputCostUsd
+    const isDeleted = hasDeletedPromptTag(queryRow.tags)
+    const runs = historicalRunsByQuery.get(queryRow.id)?.size ?? 0
+    const status: PromptStatus['status'] =
+      isDeleted ? 'deleted' : runs > 0 ? 'tracked' : 'awaiting_run'
+
+    return {
+      query: queryRow.query_text,
+      tags: normalizePromptTags(queryRow.tags, queryRow.query_text),
+      isPaused: !isDeleted && !queryRow.is_active,
+      status,
+      runs,
+      highchartsRatePct: roundTo(highchartsRatePct, 2),
+      highchartsRank,
+      highchartsRankOutOf: competitorRows.length,
+      viabilityRatePct: roundTo(viabilityRatePct, 2),
+      topCompetitor,
+      latestRunResponseCount,
+      latestInputTokens,
+      latestOutputTokens,
+      latestTotalTokens,
+      estimatedInputCostUsd: roundTo(estimatedInputCostUsd, 6),
+      estimatedOutputCostUsd: roundTo(estimatedOutputCostUsd, 6),
+      estimatedTotalCostUsd: roundTo(estimatedTotalCostUsd, 6),
+      estimatedAvgCostPerResponseUsd:
+        latestRunResponseCount > 0
+          ? roundTo(estimatedTotalCostUsd / latestRunResponseCount, 6)
+          : 0,
+      competitorRates: competitorRatesAll.map((entry) => ({
+        entity: entry.entity,
+        entityKey: entry.entityKey,
+        isHighcharts: entry.isHighcharts,
+        ratePct: roundTo(entry.ratePct, 2),
+        mentions: entry.mentions,
+      })),
+    }
+  })
+
+  const totalResponses = Math.max(0, Math.round(toFiniteNumber(latestRun.response_count)))
+  const overallScore = roundTo(toFiniteNumber(latestRun.overall_score), 2)
+  const modelOwnerMapString = Object.entries(modelOwnerMap)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([model, owner]) => `${model}=>${owner}`)
+    .join(';')
+
+  const summaryTokenTotals =
+    modelSummary.tokenTotals.totalTokens > 0
+      ? modelSummary.tokenTotals
+      : {
+          inputTokens: Math.max(0, Math.round(toFiniteNumber(latestRun.input_tokens))),
+          outputTokens: Math.max(0, Math.round(toFiniteNumber(latestRun.output_tokens))),
+          totalTokens: Math.max(0, Math.round(toFiniteNumber(latestRun.total_tokens))),
+        }
+  const summaryDurationTotals =
+    modelSummary.durationTotals.totalDurationMs > 0
+      ? modelSummary.durationTotals
+      : {
+          totalDurationMs: Math.max(0, Math.round(toFiniteNumber(latestRun.total_duration_ms))),
+          avgDurationMs: roundTo(toFiniteNumber(latestRun.avg_duration_ms), 2),
+        }
+
+  const kpi: KpiRow = {
+    metric_name: 'AI Visibility Overall',
+    ai_visibility_overall_score: overallScore,
+    score_scale: '0-100',
+    queries_count: String(allQueryRows.length),
+    window_start_utc: latestRun.started_at ?? '',
+    window_end_utc: latestRun.ended_at ?? '',
+    models: runModels.join(','),
+    model_owners: modelOwners.join(','),
+    model_owner_map: modelOwnerMapString,
+    web_search_enabled: latestRun.web_search_enabled ? 'yes' : 'no',
+    run_month: latestRun.run_month ?? '',
+    run_id: latestRun.run_id,
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    summary: {
+      overallScore,
+      queryCount: config.queries.length,
+      competitorCount: config.competitors.length,
+      totalResponses,
+      models: runModels,
+      modelOwners,
+      modelOwnerMap,
+      modelOwnerStats: modelSummary.modelOwnerStats,
+      modelStats: modelSummary.modelStats,
+      tokenTotals: summaryTokenTotals,
+      durationTotals: summaryDurationTotals,
+      runMonth: latestRun.run_month,
+      webSearchEnabled: latestRun.web_search_enabled ? 'yes' : 'no',
+      windowStartUtc: latestRun.started_at,
+      windowEndUtc: latestRun.ended_at,
+    },
+    kpi,
+    competitorSeries,
+    promptStatus,
+    comparisonRows: [],
+    files: {
+      comparisonTablePresent: true,
+      competitorChartPresent: true,
+      kpiPresent: true,
+      llmOutputsPresent: totalResponses > 0,
+    },
+  }
+}
+
+async function fetchUnderTheHoodFromSupabaseViews(
+  rangeInput: UnderTheHoodRange = 'all',
+): Promise<UnderTheHoodResponse> {
+  if (!supabase) {
+    throw new Error('Supabase is not configured.')
+  }
+
+  const range = normalizeUnderTheHoodRange(rangeInput)
+  const nowMs = Date.now()
+  const nowIso = new Date(nowMs).toISOString()
+  const rangeStartMs = rangeStartMsForUnderTheHood(range, nowMs)
+  const rangeStartIso = rangeStartMs !== null ? new Date(rangeStartMs).toISOString() : null
+
+  const configResponse = await fetchConfigFromSupabase()
+  const config = configResponse.config
+
+  const runResult = await fetchAllSupabasePages<MvRunSummaryRow>((from, to) => {
+    let query = supabase
+      .from('mv_run_summary')
+      .select(
+        'run_id,run_month,model,models,models_csv,model_owners,model_owners_csv,model_owner_map,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,query_count,competitor_count,input_tokens,output_tokens,total_tokens,total_duration_ms,avg_duration_ms',
+      )
+      .order('created_at', { ascending: false })
+      .range(from, to)
+    if (rangeStartIso) {
+      query = query.gte('created_at', rangeStartIso)
+    }
+    return query
+  })
+
+  if (runResult.error) {
+    if (isMissingRelation(runResult.error)) {
+      return {
+        generatedAt: new Date().toISOString(),
+        range,
+        rangeLabel: rangeLabelForUnderTheHood(range),
+        rangeStartUtc: rangeStartIso,
+        rangeEndUtc: nowIso,
+        summary: underTheHoodEmptySummary(config),
+      }
+    }
+    throw asError(runResult.error, 'Failed to load mv_run_summary for under-the-hood')
+  }
+
+  const selectedRuns = runResult.rows
+    .map((run) => ({
+      run,
+      runMs:
+        timestampMs(run.created_at) ??
+        timestampMs(run.started_at) ??
+        timestampMs(run.ended_at),
+    }))
+    .filter((entry) => {
+      if (rangeStartMs === null) return true
+      if (entry.runMs === null) return false
+      return entry.runMs >= rangeStartMs && entry.runMs <= nowMs
+    })
+    .sort((left, right) => (right.runMs ?? 0) - (left.runMs ?? 0))
+    .map((entry) => entry.run)
+
+  if (selectedRuns.length === 0) {
+    return {
+      generatedAt: new Date().toISOString(),
+      range,
+      rangeLabel: rangeLabelForUnderTheHood(range),
+      rangeStartUtc: rangeStartIso,
+      rangeEndUtc: nowIso,
+      summary: underTheHoodEmptySummary(config),
+    }
+  }
+
+  const runIds = selectedRuns.map((run) => run.run_id)
+  const modelRows = await fetchModelPerformanceRowsByRunIds(runIds)
+  const modelSummary = buildModelSummaryFromViewRows(modelRows)
+
+  const aggregatedModelOwnerMap = { ...modelSummary.modelOwnerMap }
+  const aggregatedModels = new Set<string>()
+  for (const run of selectedRuns) {
+    for (const model of resolveRunModels(run)) {
+      aggregatedModels.add(model)
+      if (!aggregatedModelOwnerMap[model]) {
+        aggregatedModelOwnerMap[model] = inferModelOwnerFromModel(model)
+      }
+    }
+  }
+
+  const runTimestamps = selectedRuns
+    .map((run) => pickTimestamp(run.started_at, run.created_at, run.ended_at))
+    .filter((value): value is string => Boolean(toValidTimestamp(value)))
+    .sort((left, right) => Date.parse(left) - Date.parse(right))
+
+  const latestRun = selectedRuns[0]
+  const webSearchStates = new Set(
+    selectedRuns
+      .map((run) => run.web_search_enabled)
+      .filter((value): value is boolean => typeof value === 'boolean'),
+  )
+  const webSearchEnabled =
+    webSearchStates.size === 0
+      ? null
+      : webSearchStates.size === 1
+        ? webSearchStates.has(true)
+          ? 'yes'
+          : 'no'
+        : 'mixed'
+
+  const totalsFromRuns = selectedRuns.reduce(
+    (totals, run) => {
+      totals.responses += Math.max(0, Math.round(toFiniteNumber(run.response_count)))
+      totals.inputTokens += Math.max(0, Math.round(toFiniteNumber(run.input_tokens)))
+      totals.outputTokens += Math.max(0, Math.round(toFiniteNumber(run.output_tokens)))
+      totals.totalTokens += Math.max(0, Math.round(toFiniteNumber(run.total_tokens)))
+      totals.totalDurationMs += Math.max(0, Math.round(toFiniteNumber(run.total_duration_ms)))
+      return totals
+    },
+    {
+      responses: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      totalDurationMs: 0,
+    },
+  )
+
+  return {
+    generatedAt: new Date().toISOString(),
+    range,
+    rangeLabel: rangeLabelForUnderTheHood(range),
+    rangeStartUtc: rangeStartIso,
+    rangeEndUtc: nowIso,
+    summary: {
+      overallScore: roundTo(toFiniteNumber(latestRun.overall_score), 2),
+      queryCount: config.queries.length,
+      competitorCount: config.competitors.length,
+      totalResponses: totalsFromRuns.responses,
+      models: [...aggregatedModels].sort((a, b) => a.localeCompare(b)),
+      modelOwners:
+        modelSummary.modelOwners.length > 0
+          ? modelSummary.modelOwners
+          : [...new Set(Object.values(aggregatedModelOwnerMap))].sort((a, b) =>
+              a.localeCompare(b),
+            ),
+      modelOwnerMap: aggregatedModelOwnerMap,
+      modelOwnerStats: modelSummary.modelOwnerStats,
+      modelStats: modelSummary.modelStats,
+      tokenTotals:
+        modelSummary.tokenTotals.totalTokens > 0
+          ? modelSummary.tokenTotals
+          : {
+              inputTokens: totalsFromRuns.inputTokens,
+              outputTokens: totalsFromRuns.outputTokens,
+              totalTokens: totalsFromRuns.totalTokens,
+            },
+      durationTotals:
+        modelSummary.durationTotals.totalDurationMs > 0
+          ? modelSummary.durationTotals
+          : {
+              totalDurationMs: totalsFromRuns.totalDurationMs,
+              avgDurationMs:
+                totalsFromRuns.responses > 0
+                  ? roundTo(totalsFromRuns.totalDurationMs / totalsFromRuns.responses, 2)
+                  : 0,
+            },
+      runMonth: latestRun.run_month,
+      webSearchEnabled,
+      windowStartUtc: runTimestamps[0] ?? null,
+      windowEndUtc: runTimestamps.at(-1) ?? null,
+    },
+  }
+}
+
+async function fetchRunCostsFromSupabaseViews(
+  limit = 30,
+): Promise<BenchmarkRunCostsResponse> {
+  if (!supabase) {
+    throw new Error('Supabase is not configured.')
+  }
+
+  const clampedLimit = Math.max(1, Math.min(200, Math.round(limit)))
+  const runResult = await supabase
+    .from('mv_run_summary')
+    .select(
+      'run_id,run_month,model,models,models_csv,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,input_tokens,output_tokens,total_tokens',
+    )
+    .order('created_at', { ascending: false })
+    .limit(clampedLimit)
+
+  if (runResult.error) {
+    if (isMissingRelation(runResult.error)) {
+      return {
+        generatedAt: new Date().toISOString(),
+        runCount: 0,
+        totals: {
+          responseCount: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          estimatedInputCostUsd: 0,
+          estimatedOutputCostUsd: 0,
+          estimatedTotalCostUsd: 0,
+        },
+        runs: [],
+      }
+    }
+    throw asError(runResult.error, 'Failed to load mv_run_summary for run costs')
+  }
+
+  const runRows = (runResult.data ?? []) as MvRunSummaryRow[]
+  if (runRows.length === 0) {
+    return {
+      generatedAt: new Date().toISOString(),
+      runCount: 0,
+      totals: {
+        responseCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        estimatedInputCostUsd: 0,
+        estimatedOutputCostUsd: 0,
+        estimatedTotalCostUsd: 0,
+      },
+      runs: [],
+    }
+  }
+
+  const modelRows = await fetchModelPerformanceRowsByRunIds(
+    runRows.map((row) => row.run_id),
+  )
+  const modelRowsByRun = new Map<string, MvModelPerformanceRow[]>()
+  for (const row of modelRows) {
+    const bucket = modelRowsByRun.get(row.run_id) ?? []
+    bucket.push(row)
+    modelRowsByRun.set(row.run_id, bucket)
+  }
+
+  const runs = runRows.map((run) => {
+    const rowsForRun = modelRowsByRun.get(run.run_id) ?? []
+    const resolvedModels =
+      resolveRunModels(run).length > 0
+        ? resolveRunModels(run)
+        : [...new Set(rowsForRun.map((row) => row.model).filter(Boolean))].sort((a, b) =>
+            a.localeCompare(b),
+          )
+
+    let estimatedInputCostUsd = 0
+    let estimatedOutputCostUsd = 0
+    let estimatedTotalCostUsd = 0
+    let pricedResponseCount = 0
+    const unpricedModels = new Set<string>()
+
+    for (const row of rowsForRun) {
+      const model = String(row.model ?? '').trim()
+      if (!model) continue
+      const inputTokens = Math.max(0, Math.round(toFiniteNumber(row.total_input_tokens)))
+      const outputTokens = Math.max(
+        0,
+        Math.round(toFiniteNumber(row.total_output_tokens)),
+      )
+      const responseCount = Math.max(0, Math.round(toFiniteNumber(row.response_count)))
+      const costs = estimateResponseCostUsd(model, inputTokens, outputTokens)
+      estimatedInputCostUsd += costs.inputCostUsd
+      estimatedOutputCostUsd += costs.outputCostUsd
+      estimatedTotalCostUsd += costs.totalCostUsd
+      if (costs.priced) {
+        pricedResponseCount += responseCount
+      } else {
+        unpricedModels.add(model)
+      }
+    }
+
+    return {
+      runId: run.run_id,
+      runMonth: run.run_month,
+      createdAt: run.created_at,
+      startedAt: run.started_at,
+      endedAt: run.ended_at,
+      webSearchEnabled:
+        typeof run.web_search_enabled === 'boolean' ? run.web_search_enabled : null,
+      responseCount: Math.max(0, Math.round(toFiniteNumber(run.response_count))),
+      models: resolvedModels,
+      inputTokens: Math.max(0, Math.round(toFiniteNumber(run.input_tokens))),
+      outputTokens: Math.max(0, Math.round(toFiniteNumber(run.output_tokens))),
+      totalTokens: Math.max(0, Math.round(toFiniteNumber(run.total_tokens))),
+      pricedResponseCount,
+      unpricedModels: [...unpricedModels].sort((a, b) => a.localeCompare(b)),
+      estimatedInputCostUsd: roundTo(estimatedInputCostUsd, 6),
+      estimatedOutputCostUsd: roundTo(estimatedOutputCostUsd, 6),
+      estimatedTotalCostUsd: roundTo(estimatedTotalCostUsd, 6),
+    }
+  })
+
+  const totals = runs.reduce(
+    (sum, run) => {
+      sum.responseCount += run.responseCount
+      sum.inputTokens += run.inputTokens
+      sum.outputTokens += run.outputTokens
+      sum.totalTokens += run.totalTokens
+      sum.estimatedInputCostUsd += run.estimatedInputCostUsd
+      sum.estimatedOutputCostUsd += run.estimatedOutputCostUsd
+      sum.estimatedTotalCostUsd += run.estimatedTotalCostUsd
+      return sum
+    },
+    {
+      responseCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      estimatedInputCostUsd: 0,
+      estimatedOutputCostUsd: 0,
+      estimatedTotalCostUsd: 0,
+    },
+  )
+
+  return {
+    generatedAt: new Date().toISOString(),
+    runCount: runs.length,
+    totals: {
+      responseCount: totals.responseCount,
+      inputTokens: totals.inputTokens,
+      outputTokens: totals.outputTokens,
+      totalTokens: totals.totalTokens,
+      estimatedInputCostUsd: roundTo(totals.estimatedInputCostUsd, 6),
+      estimatedOutputCostUsd: roundTo(totals.estimatedOutputCostUsd, 6),
+      estimatedTotalCostUsd: roundTo(totals.estimatedTotalCostUsd, 6),
+    },
+    runs,
+  }
+}
+
+async function fetchTimeseriesFromSupabaseViews(
+  options: TimeSeriesOptions = {},
+): Promise<TimeSeriesResponse> {
+  if (!supabase) {
+    throw new Error('Supabase is not configured.')
+  }
+
+  const selectedTags = normalizeSelectedTags(options.tags)
+  const selectedTagSet = new Set(selectedTags)
+  const tagFilterMode: 'any' | 'all' = options.mode === 'all' ? 'all' : 'any'
+
+  const competitorResult = await supabase
+    .from('competitors')
+    .select('id,name,slug,is_primary,sort_order')
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true })
+
+  if (competitorResult.error) {
+    throw asError(competitorResult.error, 'Failed to load competitors for time series')
+  }
+
+  const competitorRows = (competitorResult.data ?? []) as Array<{
+    id: string
+    name: string
+    slug: string
+    is_primary: boolean
+    sort_order: number
+  }>
+  const competitors = competitorRows.map((row) => row.name)
+  if (competitorRows.length === 0) {
+    return { ok: true, competitors: [], points: [] }
+  }
+
+  const promptResultWithTags = await supabase
+    .from('prompt_queries')
+    .select('id,query_text,tags')
+
+  let promptRowsError = promptResultWithTags.error
+  let promptRows = (promptResultWithTags.data ?? []) as Array<{
+    id: string
+    query_text: string
+    tags?: string[] | null
+  }>
+  if (promptRowsError && isMissingColumn(promptRowsError)) {
+    const fallbackRows = await supabase
+      .from('prompt_queries')
+      .select('id,query_text')
+    promptRowsError = fallbackRows.error
+    promptRows = ((fallbackRows.data ?? []) as Array<{ id: string; query_text: string }>).map(
+      (row) => ({ ...row, tags: null }),
+    )
+  }
+  if (promptRowsError && !isMissingRelation(promptRowsError)) {
+    throw asError(promptRowsError, 'Failed to load prompt tags for time series')
+  }
+
+  const tagsByPromptId = new Map<string, string[]>()
+  for (const row of promptRows) {
+    tagsByPromptId.set(row.id, normalizePromptTags(row.tags, row.query_text))
+  }
+  const shouldFilterByTags = selectedTagSet.size > 0 && tagsByPromptId.size > 0
+
+  const runResult = await supabase
+    .from('mv_run_summary')
+    .select('run_id,run_month,created_at,overall_score')
+    .order('created_at', { ascending: true })
+    .limit(500)
+
+  if (runResult.error) {
+    if (isMissingRelation(runResult.error)) {
+      return { ok: true, competitors, points: [] }
+    }
+    throw asError(runResult.error, 'Failed to load mv_run_summary for time series')
+  }
+
+  const runRows = (runResult.data ?? []) as Array<{
+    run_id: string
+    run_month: string | null
+    created_at: string | null
+    overall_score: number | null
+  }>
+  if (runRows.length === 0) {
+    return { ok: true, competitors, points: [] }
+  }
+
+  const mentionRows = await fetchMentionRateRowsByRunIds(
+    runRows.map((row) => row.run_id),
+    { overallOnly: false },
+  )
+
+  const highchartsCompetitor =
+    competitorRows.find((row) => row.is_primary) ??
+    competitorRows.find((row) => row.slug === 'highcharts') ??
+    null
+  const rivals = competitorRows.filter((row) => row.id !== highchartsCompetitor?.id)
+  const runMetaById = new Map(runRows.map((row) => [row.run_id, row]))
+
+  const runBuckets = new Map<
+    string,
+    {
+      queryTotals: Map<string, number>
+      mentionsByCompetitor: Map<string, number>
+    }
+  >()
+
+  for (const row of mentionRows) {
+    const queryId = row.query_id
+    if (!queryId) continue
+    if (shouldFilterByTags) {
+      const promptTags = tagsByPromptId.get(queryId) ?? inferPromptTags(row.query_text)
+      if (!promptMatchesTagFilter(promptTags, selectedTagSet, tagFilterMode)) {
+        continue
+      }
+    }
+
+    const bucket = runBuckets.get(row.run_id) ?? {
+      queryTotals: new Map<string, number>(),
+      mentionsByCompetitor: new Map<string, number>(),
+    }
+    if (!bucket.queryTotals.has(queryId)) {
+      bucket.queryTotals.set(
+        queryId,
+        Math.max(0, Math.round(toFiniteNumber(row.response_count))),
+      )
+    }
+    bucket.mentionsByCompetitor.set(
+      row.competitor_id,
+      (bucket.mentionsByCompetitor.get(row.competitor_id) ?? 0) +
+        Math.max(0, Math.round(toFiniteNumber(row.mentions_count))),
+    )
+    runBuckets.set(row.run_id, bucket)
+  }
+
+  const points = runRows
+    .map((run) => {
+      const bucket = runBuckets.get(run.run_id)
+      if (!bucket) return null
+
+      const total = [...bucket.queryTotals.values()].reduce((sum, value) => sum + value, 0)
+      if (total <= 0) return null
+
+      const rates = Object.fromEntries(
+        competitorRows.map((competitor) => {
+          const mentions = bucket.mentionsByCompetitor.get(competitor.id) ?? 0
+          const mentionRatePct = total > 0 ? (mentions / total) * 100 : 0
+          return [competitor.name, roundTo(mentionRatePct, 2)]
+        }),
+      )
+
+      const highchartsMentions = highchartsCompetitor
+        ? bucket.mentionsByCompetitor.get(highchartsCompetitor.id) ?? 0
+        : 0
+      const highchartsRatePct = total > 0 ? (highchartsMentions / total) * 100 : 0
+      const totalMentionsAcrossEntities = competitorRows.reduce(
+        (sum, competitor) => sum + (bucket.mentionsByCompetitor.get(competitor.id) ?? 0),
+        0,
+      )
+      const highchartsSovPct =
+        totalMentionsAcrossEntities > 0
+          ? (highchartsMentions / totalMentionsAcrossEntities) * 100
+          : 0
+      const derivedAiVisibility = 0.7 * highchartsRatePct + 0.3 * highchartsSovPct
+
+      const rivalMentionCount = rivals.reduce(
+        (sum, competitor) => sum + (bucket.mentionsByCompetitor.get(competitor.id) ?? 0),
+        0,
+      )
+      const combviDenominator = total * rivals.length
+      const combviPct = combviDenominator > 0 ? (rivalMentionCount / combviDenominator) * 100 : 0
+
+      const timestamp =
+        run.created_at ??
+        (run.run_month && /^\\d{4}-\\d{2}$/.test(run.run_month)
+          ? `${run.run_month}-01T12:00:00Z`
+          : new Date().toISOString())
+
+      return {
+        date: timestamp.slice(0, 10),
+        timestamp,
+        total,
+        aiVisibilityScore:
+          selectedTagSet.size === 0 && Number.isFinite(toFiniteNumber(run.overall_score, NaN))
+            ? roundTo(toFiniteNumber(run.overall_score), 2)
+            : roundTo(derivedAiVisibility, 2),
+        combviPct: roundTo(combviPct, 2),
+        rates,
+      }
+    })
+    .filter((point): point is NonNullable<typeof point> => point !== null)
+    .sort((left, right) => {
+      const leftMs = Date.parse(left.timestamp ?? `${left.date}T12:00:00Z`)
+      const rightMs = Date.parse(right.timestamp ?? `${right.date}T12:00:00Z`)
+      return leftMs - rightMs
+    })
+
+  return {
+    ok: true,
+    competitors,
+    points,
+  }
+}
+
 async function healthViaSupabase(): Promise<HealthResponse> {
   if (!supabase) {
     throw new Error('Supabase is not configured.')
@@ -3027,6 +4268,34 @@ async function diagnosticsViaSupabase(): Promise<DiagnosticsResponse> {
           details: asError(result.error, 'Unable to read benchmark_responses').message,
         }
       }
+
+      const schemaResult = await supabase
+        .from('benchmark_responses')
+        .select(
+          'id,run_id,query_id,run_iteration,model,provider,model_owner,duration_ms,prompt_tokens,completion_tokens,total_tokens',
+          { head: true },
+        )
+        .limit(1)
+      if (schemaResult.error) {
+        if (isMissingColumn(schemaResult.error)) {
+          return {
+            status: 'fail',
+            details:
+              'benchmark_responses schema is outdated. Apply supabase/sql/006_benchmark_response_model_metrics.sql.',
+          }
+        }
+        if (isMissingRelation(schemaResult.error)) {
+          return {
+            status: 'warn',
+            details: 'Table missing. Run the Supabase schema SQL migration for benchmark tables.',
+          }
+        }
+        return {
+          status: 'fail',
+          details: asError(schemaResult.error, 'Unable to validate benchmark_responses schema').message,
+        }
+      }
+
       const count = result.count ?? 0
       if (count < 1) {
         return {
@@ -3172,7 +4441,7 @@ async function diagnosticsViaSupabase(): Promise<DiagnosticsResponse> {
 
   checks.push(
     await runCheck('dashboard_query', 'Dashboard query', async () => {
-      const dashboard = await fetchDashboardFromSupabase()
+      const dashboard = await fetchDashboardFromSupabaseViews()
       const hasConfig = dashboard.summary.queryCount > 0 && dashboard.summary.competitorCount > 0
       return {
         status: hasConfig ? 'pass' : 'warn',
@@ -3270,7 +4539,7 @@ export const api = {
 
     if (hasSupabaseConfig()) {
       try {
-        return await fetchRunCostsFromSupabase(clampedLimit)
+        return await fetchRunCostsFromSupabaseViews(clampedLimit)
       } catch (primaryError) {
         try {
           return await json<BenchmarkRunCostsResponse>(`/run-costs${suffix}`)
@@ -3324,7 +4593,7 @@ export const api = {
   async dashboard() {
     if (hasSupabaseConfig()) {
       try {
-        return await fetchDashboardFromSupabase()
+        return await fetchDashboardFromSupabaseViews()
       } catch (primaryError) {
         try {
           return await json<DashboardResponse>('/dashboard')
@@ -3342,7 +4611,7 @@ export const api = {
 
     if (hasSupabaseConfig()) {
       try {
-        return await fetchUnderTheHoodFromSupabase(normalizedRange)
+        return await fetchUnderTheHoodFromSupabaseViews(normalizedRange)
       } catch (primaryError) {
         try {
           return await json<UnderTheHoodResponse>(`/under-the-hood${suffix}`)
@@ -3402,7 +4671,7 @@ export const api = {
 
     if (hasSupabaseConfig()) {
       try {
-        return await fetchTimeseriesFromSupabase(options)
+        return await fetchTimeseriesFromSupabaseViews(options)
       } catch {
         try {
           return await json<TimeSeriesResponse>(`/timeseries${suffix}`)

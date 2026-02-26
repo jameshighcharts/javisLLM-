@@ -349,7 +349,26 @@ export interface BenchmarkWorkflowRun {
   actor: string
 }
 
-export interface BenchmarkTriggerResponse {
+export interface BenchmarkQueueRun {
+  id: string
+  runMonth: string | null
+  models: string | null
+  webSearchEnabled: boolean | null
+  overallScore: number | null
+  createdAt: string | null
+  progress: {
+    totalJobs: number
+    completedJobs: number
+    processingJobs: number
+    pendingJobs: number
+    failedJobs: number
+    deadLetterJobs?: number
+    completionPct: number
+  } | null
+  status: 'pending' | 'running' | 'completed' | 'failed'
+}
+
+export interface BenchmarkTriggerWorkflowResponse {
   ok: boolean
   triggerId: string
   workflow: string
@@ -361,12 +380,35 @@ export interface BenchmarkTriggerResponse {
   message: string
 }
 
-export interface BenchmarkRunsResponse {
+export interface BenchmarkTriggerQueueResponse {
+  ok: boolean
+  runId: string
+  jobsEnqueued: number
+  models: string[]
+  promptLimit?: number | null
+  runMonth?: string
+  message: string
+}
+
+export type BenchmarkTriggerResponse =
+  | BenchmarkTriggerWorkflowResponse
+  | BenchmarkTriggerQueueResponse
+
+export interface BenchmarkRunsWorkflowResponse {
   ok: boolean
   workflow: string
   repo: string
   runs: BenchmarkWorkflowRun[]
 }
+
+export interface BenchmarkRunsQueueResponse {
+  ok: boolean
+  runs: BenchmarkQueueRun[]
+}
+
+export type BenchmarkRunsResponse =
+  | BenchmarkRunsWorkflowResponse
+  | BenchmarkRunsQueueResponse
 
 export interface BenchmarkRunCostItem {
   runId: string

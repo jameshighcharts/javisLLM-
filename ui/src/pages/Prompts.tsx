@@ -6,6 +6,7 @@ import { BENCHMARK_MODEL_OPTIONS, BENCHMARK_MODEL_VALUES, dedupeModels } from '.
 import { formatUsd } from '../utils/modelPricing'
 import type {
   BenchmarkConfig,
+  BenchmarkQueueRun,
   BenchmarkWorkflowRun,
   DashboardResponse,
   PromptLabRunResult,
@@ -2573,32 +2574,62 @@ export default function Prompts() {
     })
   }
 
+  function isWorkflowRun(run: BenchmarkWorkflowRun | BenchmarkQueueRun): run is BenchmarkWorkflowRun {
+    return typeof (run as BenchmarkWorkflowRun).runNumber === 'number'
+  }
+
   async function waitForRunCompletion(
-    triggerId: string,
-    initialRun: BenchmarkWorkflowRun | null,
+    triggerId: string | null,
+    targetRunId: string | null,
+    initialRun: BenchmarkWorkflowRun | BenchmarkQueueRun | null,
     triggerTokenValue: string,
-  ): Promise<BenchmarkWorkflowRun> {
+  ): Promise<BenchmarkWorkflowRun | BenchmarkQueueRun> {
     let currentRun = initialRun
     const deadlineMs = Date.now() + 30 * 60 * 1000
 
     while (Date.now() < deadlineMs) {
       const runsResponse = await api.benchmarkRuns(triggerTokenValue)
-      const matched =
-        currentRun
-          ? runsResponse.runs.find((run) => run.id === currentRun?.id) ??
-            runsResponse.runs.find((run) => run.title.includes(triggerId))
-          : runsResponse.runs.find((run) => run.title.includes(triggerId))
+      const matchedByCurrentId = currentRun
+        ? runsResponse.runs.find((run) => String(run.id) === String(currentRun?.id))
+        : null
+      const matchedByRunId = targetRunId
+        ? runsResponse.runs.find((run) => String(run.id) === String(targetRunId))
+        : null
+      const matchedByTriggerId = triggerId
+        ? runsResponse.runs.find(
+            (run) => isWorkflowRun(run) && run.title.toLowerCase().includes(triggerId.toLowerCase()),
+          )
+        : null
+      const matched = matchedByCurrentId ?? matchedByRunId ?? matchedByTriggerId
 
       if (matched) {
         currentRun = matched
       }
 
-      if (currentRun?.status === 'completed') {
-        return currentRun
+      if (currentRun) {
+        if (isWorkflowRun(currentRun)) {
+          if (currentRun.status === 'completed') {
+            return currentRun
+          }
+          const runLabel = ` · Run #${currentRun.runNumber}`
+          setRunNotice({ type: 'running', text: `Running queries${runLabel}…` })
+        } else {
+          if (currentRun.status === 'completed' || currentRun.status === 'failed') {
+            return currentRun
+          }
+          const pct = currentRun.progress
+            ? Math.max(0, Math.min(100, Math.round(currentRun.progress.completionPct)))
+            : null
+          const runLabel = currentRun.models ?? currentRun.id.slice(0, 8)
+          setRunNotice({
+            type: 'running',
+            text: pct !== null ? `Running queries · ${runLabel} (${pct}% complete)…` : `Running queries · ${runLabel}…`,
+          })
+        }
+      } else {
+        setRunNotice({ type: 'running', text: 'Waiting for run to start…' })
       }
 
-      const runLabel = currentRun ? ` · Run #${currentRun.runNumber}` : ''
-      setRunNotice({ type: 'running', text: `Running queries${runLabel}…` })
       await sleep(3000)
     }
 
@@ -2631,17 +2662,28 @@ export default function Prompts() {
         normalizedTriggerToken,
       )
 
+      const triggerId = 'triggerId' in triggerResult ? triggerResult.triggerId : null
+      const targetRunId =
+        'runId' in triggerResult ? triggerResult.runId : triggerResult.run ? String(triggerResult.run.id) : null
+      const initialRun = 'run' in triggerResult ? triggerResult.run : null
       const completedRun = await waitForRunCompletion(
-        triggerResult.triggerId,
-        triggerResult.run,
+        triggerId,
+        targetRunId,
+        initialRun,
         normalizedTriggerToken,
       )
-      const conclusion = (completedRun.conclusion ?? '').toLowerCase()
-      if (conclusion !== 'success') {
+      if (isWorkflowRun(completedRun)) {
+        const conclusion = (completedRun.conclusion ?? '').toLowerCase()
+        if (conclusion !== 'success') {
+          throw new Error(
+            conclusion
+              ? `Run finished with status: ${conclusion}. Open Runs for details.`
+              : 'Run finished without success. Open Runs for details.',
+          )
+        }
+      } else if (completedRun.status !== 'completed') {
         throw new Error(
-          conclusion
-            ? `Run finished with status: ${conclusion}. Open Runs for details.`
-            : 'Run finished without success. Open Runs for details.',
+          `Run finished with status: ${completedRun.status}. Open Runs for details.`,
         )
       }
 

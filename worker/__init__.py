@@ -1,0 +1,1 @@
+"""Benchmark queue worker package."""
