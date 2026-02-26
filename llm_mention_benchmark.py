@@ -162,7 +162,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--model",
         default="gpt-4o-mini",
-        help="LLM model name (OpenAI or Anthropic Claude).",
+        help=(
+            "LLM model name, or a comma-separated model list. "
+            "Example: gpt-4o-mini,claude-3-5-sonnet-latest"
+        ),
     )
     parser.add_argument(
         "--runs", type=int, default=3, help="Responses per query (default: 3)."
@@ -210,6 +213,11 @@ def parse_csv_terms(raw_terms: str) -> List[str]:
         if value and value not in terms:
             terms.append(value)
     return terms
+
+
+def parse_model_names(raw_models: str) -> List[str]:
+    parsed = dedupe_preserve_order(raw_models.split(","))
+    return parsed if parsed else ["gpt-4o-mini"]
 
 
 def slugify(value: str) -> str:
@@ -679,6 +687,63 @@ def extract_citations(response_dict: Dict[str, Any]) -> List[Dict[str, str]]:
     return citations
 
 
+def to_non_negative_int(value: Any) -> int:
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        return 0
+    return parsed if parsed > 0 else 0
+
+
+def extract_token_usage(response_dict: Dict[str, Any]) -> Dict[str, int]:
+    usage = response_dict.get("usage", {})
+    prompt_tokens = 0
+    completion_tokens = 0
+    total_tokens = 0
+
+    if isinstance(usage, dict):
+        prompt_tokens = to_non_negative_int(
+            usage.get("input_tokens", usage.get("prompt_tokens"))
+        )
+        completion_tokens = to_non_negative_int(
+            usage.get("output_tokens", usage.get("completion_tokens"))
+        )
+        total_tokens = to_non_negative_int(usage.get("total_tokens"))
+
+    usage_metadata = response_dict.get("usageMetadata", {})
+    if isinstance(usage_metadata, dict):
+        prompt_tokens = max(
+            prompt_tokens,
+            to_non_negative_int(
+                usage_metadata.get("promptTokenCount", usage_metadata.get("prompt_tokens"))
+            ),
+        )
+        completion_tokens = max(
+            completion_tokens,
+            to_non_negative_int(
+                usage_metadata.get(
+                    "candidatesTokenCount",
+                    usage_metadata.get("completion_tokens"),
+                )
+            ),
+        )
+        total_tokens = max(
+            total_tokens,
+            to_non_negative_int(
+                usage_metadata.get("totalTokenCount", usage_metadata.get("total_tokens"))
+            ),
+        )
+
+    if total_tokens <= 0:
+        total_tokens = prompt_tokens + completion_tokens
+
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
 def generate_with_optional_retry(
     client: Any,
     provider: str,
@@ -686,7 +751,7 @@ def generate_with_optional_retry(
     query: str,
     temperature: float,
     web_search: bool,
-) -> tuple[str, List[Dict[str, str]]]:
+) -> tuple[str, List[Dict[str, str]], Dict[str, int]]:
     user_prompt = USER_PROMPT_TEMPLATE.format(query=query)
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
@@ -725,7 +790,8 @@ def generate_with_optional_retry(
             response_dict = to_plain_dict(response_obj)
             text = extract_response_text(response_obj, response_dict)
             citations = extract_citations(response_dict)
-            return text, citations
+            usage = extract_token_usage(response_dict)
+            return text, citations, usage
         except Exception as exc:  # noqa: BLE001
             retry = attempt < MAX_ATTEMPTS and is_transient_error(exc)
             if not retry:
@@ -841,16 +907,37 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
         print("--runs must be >= 1", file=sys.stderr)
         return 2
 
-    provider = infer_provider_from_model(args.model)
-    api_key_env = resolve_api_key_env(provider, args.api_key_env)
-    api_key = normalize_api_key(os.getenv(api_key_env))
-    if not api_key:
+    selected_models = parse_model_names(str(args.model or ""))
+    providers_by_model = {
+        model_name: infer_provider_from_model(model_name)
+        for model_name in selected_models
+    }
+    providers = sorted(set(providers_by_model.values()))
+
+    if client is not None and len(providers) > 1:
         print(
-            f'Missing API key env var "{api_key_env}" for provider "{provider}". '
-            "Set it and rerun.",
+            "Custom test client injection only supports single-provider runs.",
             file=sys.stderr,
         )
         return 2
+
+    provider_clients: Dict[str, Any] = {}
+    provider_model_owner: Dict[str, str] = {}
+    for provider in providers:
+        api_key_env = resolve_api_key_env(provider, args.api_key_env)
+        api_key = normalize_api_key(os.getenv(api_key_env))
+        if not api_key:
+            print(
+                f'Missing API key env var "{api_key_env}" for provider "{provider}". '
+                "Set it and rerun.",
+                file=sys.stderr,
+            )
+            return 2
+
+        provider_clients[provider] = (
+            client if client is not None else create_llm_client(provider, api_key)
+        )
+        provider_model_owner[provider] = infer_model_owner(provider)
 
     our_terms = parse_csv_terms(args.our_terms)
     if not our_terms:
@@ -879,61 +966,91 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
     viability_path = output_dir / "viability_index.csv"
     reset_jsonl(jsonl_path)
 
-    llm_client = client or create_llm_client(provider, api_key)
-    effective_web_search = args.web_search if provider == "openai" else False
-    model_owner = infer_model_owner(provider)
-    if provider != "openai" and args.web_search:
-        print(
-            "Warning: --web-search is currently only applied to OpenAI models. "
-            f'Running {model_owner} requests without web-search tool support.',
-            file=sys.stderr,
-        )
+    if args.web_search:
+        non_openai_models = [
+            model_name
+            for model_name in selected_models
+            if providers_by_model.get(model_name) != "openai"
+        ]
+        if non_openai_models:
+            model_list = ", ".join(non_openai_models)
+            print(
+                "Warning: --web-search is currently only applied to OpenAI models. "
+                f"Running these models without web-search tool support: {model_list}",
+                file=sys.stderr,
+            )
+
+    effective_runs_per_query = args.runs * len(selected_models)
+    if effective_runs_per_query <= 0:
+        print("No model runs resolved. Provide at least one model.", file=sys.stderr)
+        return 2
+
     records: List[Dict[str, Any]] = []
     successful_calls = 0
-    total_calls = len(queries) * args.runs
+    total_calls = len(queries) * effective_runs_per_query
 
     for query in queries:
-        for run_idx in range(1, args.runs + 1):
-            timestamp = datetime.now(timezone.utc).isoformat()
-            response_text = ""
-            citations: List[Dict[str, str]] = []
-            error = None
-            try:
-                response_text, citations = generate_with_optional_retry(
-                    client=llm_client,
-                    provider=provider,
-                    model=args.model,
-                    query=query,
-                    temperature=args.temperature,
-                    web_search=effective_web_search,
-                )
-                successful_calls += 1
-            except Exception as exc:  # noqa: BLE001
-                error = f"{exc.__class__.__name__}: {exc}"
+        for model_index, model_name in enumerate(selected_models):
+            provider = providers_by_model[model_name]
+            llm_client = provider_clients[provider]
+            model_owner = provider_model_owner[provider]
+            effective_web_search = args.web_search if provider == "openai" else False
 
-            mentions = detect_mentions(response_text, compiled_patterns)
-            record = {
-                "timestamp": timestamp,
-                "model": args.model,
-                "provider": provider,
-                "model_owner": model_owner,
-                "query": query,
-                "run_id": run_idx,
-                "web_search_enabled": effective_web_search,
-                "response_text": response_text,
-                "citations": citations,
-                "error": error,
-                "mentions": mentions,
-            }
-            append_jsonl(jsonl_path, record)
-            records.append(record)
+            for model_run_idx in range(1, args.runs + 1):
+                run_iteration = (model_index * args.runs) + model_run_idx
+                timestamp = datetime.now(timezone.utc).isoformat()
+                response_text = ""
+                citations: List[Dict[str, str]] = []
+                token_usage = {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                }
+                error = None
+                started_at = time.perf_counter()
+                try:
+                    response_text, citations, token_usage = generate_with_optional_retry(
+                        client=llm_client,
+                        provider=provider,
+                        model=model_name,
+                        query=query,
+                        temperature=args.temperature,
+                        web_search=effective_web_search,
+                    )
+                    successful_calls += 1
+                except Exception as exc:  # noqa: BLE001
+                    error = f"{exc.__class__.__name__}: {exc}"
+
+                duration_ms = int(round((time.perf_counter() - started_at) * 1000))
+                mentions = detect_mentions(response_text, compiled_patterns)
+                record = {
+                    "timestamp": timestamp,
+                    "model": model_name,
+                    "provider": provider,
+                    "model_owner": model_owner,
+                    "query": query,
+                    "run_id": run_iteration,
+                    "model_run_id": model_run_idx,
+                    "model_index": model_index + 1,
+                    "web_search_enabled": effective_web_search,
+                    "duration_ms": duration_ms,
+                    "prompt_tokens": token_usage["prompt_tokens"],
+                    "completion_tokens": token_usage["completion_tokens"],
+                    "total_tokens": token_usage["total_tokens"],
+                    "response_text": response_text,
+                    "citations": citations,
+                    "error": error,
+                    "mentions": mentions,
+                }
+                append_jsonl(jsonl_path, record)
+                records.append(record)
 
     comparison_rows = build_comparison_rows(
         records=records,
         specs=specs,
         queries=queries,
-        runs_per_query=args.runs,
-        web_search_enabled=effective_web_search,
+        runs_per_query=effective_runs_per_query,
+        web_search_enabled=args.web_search,
     )
     comparison_fields = ["query", "runs", "web_search_enabled"]
     for spec in specs:
@@ -949,7 +1066,7 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
         records=records,
         specs=specs,
         queries=queries,
-        runs_per_query=args.runs,
+        runs_per_query=effective_runs_per_query,
     )
     write_csv(
         viability_path,
@@ -965,6 +1082,7 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
         f"Config source: {config_source} "
         f"(queries={len(queries)}, competitors={len(competitors)})"
     )
+    print(f"Models: {', '.join(selected_models)}")
     print(f"Successful calls: {successful_calls}/{total_calls}")
     if failed_calls:
         print(f"Failed calls: {failed_calls}/{total_calls}", file=sys.stderr)
@@ -983,25 +1101,40 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
                 for message in error_messages
             )
             if all_connection_errors:
-                if provider == "anthropic":
-                    print(
-                        "Hint: all calls failed with connection errors. "
-                        "Verify ANTHROPIC_API_KEY in GitHub Secrets has no quotes/newlines, "
-                        "and that the runner can reach api.anthropic.com.",
-                        file=sys.stderr,
-                    )
-                elif provider == "google":
-                    print(
-                        "Hint: all calls failed with connection errors. "
-                        "Verify GEMINI_API_KEY in GitHub Secrets has no quotes/newlines, "
-                        "and that the runner can reach generativelanguage.googleapis.com.",
-                        file=sys.stderr,
-                    )
+                error_providers = sorted(
+                    {
+                        str(record.get("provider") or "").strip().lower()
+                        for record in records
+                        if record.get("error")
+                    }
+                )
+                if len(error_providers) == 1:
+                    provider = error_providers[0]
+                    if provider == "anthropic":
+                        print(
+                            "Hint: all calls failed with connection errors. "
+                            "Verify ANTHROPIC_API_KEY in GitHub Secrets has no quotes/newlines, "
+                            "and that the runner can reach api.anthropic.com.",
+                            file=sys.stderr,
+                        )
+                    elif provider == "google":
+                        print(
+                            "Hint: all calls failed with connection errors. "
+                            "Verify GEMINI_API_KEY in GitHub Secrets has no quotes/newlines, "
+                            "and that the runner can reach generativelanguage.googleapis.com.",
+                            file=sys.stderr,
+                        )
+                    else:
+                        print(
+                            "Hint: all calls failed with connection errors. "
+                            "Verify OPENAI_API_KEY in GitHub Secrets has no quotes/newlines, "
+                            "and that the runner can reach api.openai.com.",
+                            file=sys.stderr,
+                        )
                 else:
                     print(
-                        "Hint: all calls failed with connection errors. "
-                        "Verify OPENAI_API_KEY in GitHub Secrets has no quotes/newlines, "
-                        "and that the runner can reach api.openai.com.",
+                        "Hint: all calls failed with connection errors across multiple providers. "
+                        "Verify API keys and outbound network access for each provider endpoint.",
                         file=sys.stderr,
                     )
 

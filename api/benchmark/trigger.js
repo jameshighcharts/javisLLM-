@@ -80,6 +80,69 @@ function resolveModel(modelInput, allowedModels) {
   return resolved
 }
 
+function parseBoolean(value, fallback = false) {
+  if (typeof value === 'boolean') {
+    return value
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) {
+      return true
+    }
+    if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) {
+      return false
+    }
+  }
+  return fallback
+}
+
+function parseRequestedModels(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => String(entry || '').trim())
+      .filter(Boolean)
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
+function resolveModels(body, allowedModels) {
+  const selectAll = parseBoolean(
+    body.selectAllModels ?? body.selectAll ?? body.select_all,
+    false,
+  )
+
+  let candidates = selectAll
+    ? allowedModels
+    : parseRequestedModels(body.models)
+
+  if (candidates.length === 0 && typeof body.model === 'string' && body.model.trim()) {
+    candidates = [body.model.trim()]
+  }
+  if (candidates.length === 0) {
+    candidates = [DEFAULT_MODEL]
+  }
+
+  const resolved = []
+  const seen = new Set()
+  for (const candidate of candidates) {
+    const model = resolveModel(candidate, allowedModels)
+    const key = model.toLowerCase()
+    if (seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    resolved.push(model)
+  }
+
+  return resolved
+}
+
 function parseWebSearch(value) {
   if (typeof value === 'boolean') {
     return value
@@ -179,11 +242,8 @@ module.exports = async (req, res) => {
     const triggerId = `ui-${Date.now()}`
     const allowedModels = getAllowedModels()
 
-    const requestedModel =
-      typeof body.model === 'string' && body.model.trim()
-        ? body.model.trim()
-        : DEFAULT_MODEL
-    const model = resolveModel(requestedModel, allowedModels)
+    const models = resolveModels(body, allowedModels)
+    const model = models[0]
     const ourTerms = resolveOurTerms(body.ourTerms)
     const runs = Math.round(normalizeNumber(body.runs, 1, 1, 3))
     const temperature = normalizeNumber(body.temperature, 0.7, 0, 2)
@@ -193,6 +253,8 @@ module.exports = async (req, res) => {
     await dispatchWorkflow({
       trigger_id: triggerId,
       model,
+      models: models.join(','),
+      model_count: String(models.length),
       runs: String(runs),
       temperature: String(temperature),
       web_search: webSearch ? 'true' : 'false',
@@ -208,6 +270,7 @@ module.exports = async (req, res) => {
       workflow: config.workflow,
       repo: `${config.owner}/${config.repo}`,
       ref: config.ref,
+      models,
       run: matchedRun,
       message: matchedRun
         ? 'Benchmark run queued in GitHub Actions.'

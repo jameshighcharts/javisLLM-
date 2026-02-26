@@ -52,12 +52,20 @@ create table if not exists public.benchmark_responses (
   query_id uuid not null references public.prompt_queries(id),
   run_iteration int not null,
   model text not null,
+  model_run_id int,
+  model_index int,
+  provider text,
+  model_owner text,
   web_search_enabled boolean not null,
+  duration_ms int not null default 0,
+  prompt_tokens int not null default 0,
+  completion_tokens int not null default 0,
+  total_tokens int not null default 0,
   response_text text not null default '',
   citations jsonb not null default '[]'::jsonb,
   error text,
   created_at timestamptz not null default now(),
-  unique (run_id, query_id, run_iteration)
+  unique (run_id, query_id, run_iteration, model)
 );
 
 create table if not exists public.response_mentions (

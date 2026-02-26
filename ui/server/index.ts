@@ -66,6 +66,8 @@ const ANTHROPIC_API_VERSION = "2023-06-01";
 const promptLabRunSchema = z.object({
   query: z.string().min(1).max(600),
   model: z.string().min(1).max(100).optional(),
+  models: z.union([z.array(z.string().min(1).max(100)).max(32), z.string().max(2000)]).optional(),
+  selectAllModels: z.boolean().optional(),
   webSearch: z.boolean().optional(),
 });
 
@@ -410,6 +412,49 @@ function resolvePromptLabModel(modelInput: string, allowedModels: string[]): str
   return resolved;
 }
 
+function parsePromptLabRequestedModels(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => String(entry ?? "").trim())
+      .filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function resolvePromptLabModels(
+  payload: { model?: string; models?: unknown; selectAllModels?: boolean },
+  allowedModels: string[],
+): string[] {
+  const shouldSelectAll = payload.selectAllModels === true;
+  let candidates = shouldSelectAll
+    ? allowedModels
+    : parsePromptLabRequestedModels(payload.models);
+
+  if (candidates.length === 0 && typeof payload.model === "string" && payload.model.trim()) {
+    candidates = [payload.model.trim()];
+  }
+  if (candidates.length === 0) {
+    candidates = [PROMPT_LAB_DEFAULT_MODEL];
+  }
+
+  const resolved: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const model = resolvePromptLabModel(candidate, allowedModels);
+    const key = model.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    resolved.push(model);
+  }
+  return resolved;
+}
+
 function inferPromptLabProvider(modelInput: string): PromptLabProvider {
   const normalized = modelInput.trim().toLowerCase();
   if (normalized.startsWith("claude") || normalized.startsWith("anthropic/")) {
@@ -607,11 +652,61 @@ function extractPromptLabCitations(responsePayload: Record<string, unknown>): st
   return citations;
 }
 
+function toNonNegativeInt(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.round(parsed);
+}
+
+function extractPromptLabTokenUsage(responsePayload: Record<string, unknown>): {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+} {
+  const usage =
+    typeof responsePayload.usage === "object" && responsePayload.usage !== null
+      ? (responsePayload.usage as Record<string, unknown>)
+      : {};
+  const usageMetadata =
+    typeof responsePayload.usageMetadata === "object" && responsePayload.usageMetadata !== null
+      ? (responsePayload.usageMetadata as Record<string, unknown>)
+      : {};
+
+  const inputTokens = Math.max(
+    toNonNegativeInt(usage.input_tokens),
+    toNonNegativeInt(usage.prompt_tokens),
+    toNonNegativeInt(usageMetadata.promptTokenCount),
+    toNonNegativeInt(usageMetadata.prompt_tokens),
+  );
+  const outputTokens = Math.max(
+    toNonNegativeInt(usage.output_tokens),
+    toNonNegativeInt(usage.completion_tokens),
+    toNonNegativeInt(usageMetadata.candidatesTokenCount),
+    toNonNegativeInt(usageMetadata.completion_tokens),
+  );
+  const totalTokens =
+    Math.max(
+      toNonNegativeInt(usage.total_tokens),
+      toNonNegativeInt(usageMetadata.totalTokenCount),
+      toNonNegativeInt(usageMetadata.total_tokens),
+    ) || inputTokens + outputTokens;
+
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+  };
+}
+
 async function runOpenAiPromptLabQuery(
   query: string,
   model: string,
   webSearch: boolean,
-): Promise<{ responseText: string; citations: string[] }> {
+): Promise<{
+  responseText: string;
+  citations: string[];
+  tokens: { inputTokens: number; outputTokens: number; totalTokens: number };
+}> {
   const apiKey = resolvePromptLabApiKey("openai");
 
   const body: Record<string, unknown> = {
@@ -666,13 +761,18 @@ async function runOpenAiPromptLabQuery(
   return {
     responseText: extractPromptLabResponseText(responsePayload),
     citations: extractPromptLabCitations(responsePayload),
+    tokens: extractPromptLabTokenUsage(responsePayload),
   };
 }
 
 async function runAnthropicPromptLabQuery(
   query: string,
   model: string,
-): Promise<{ responseText: string; citations: string[] }> {
+): Promise<{
+  responseText: string;
+  citations: string[];
+  tokens: { inputTokens: number; outputTokens: number; totalTokens: number };
+}> {
   const apiKey = resolvePromptLabApiKey("anthropic");
 
   const body: Record<string, unknown> = {
@@ -726,13 +826,18 @@ async function runAnthropicPromptLabQuery(
   return {
     responseText: extractPromptLabResponseText(responsePayload),
     citations: extractPromptLabCitations(responsePayload),
+    tokens: extractPromptLabTokenUsage(responsePayload),
   };
 }
 
 async function runGeminiPromptLabQuery(
   query: string,
   model: string,
-): Promise<{ responseText: string; citations: string[] }> {
+): Promise<{
+  responseText: string;
+  citations: string[];
+  tokens: { inputTokens: number; outputTokens: number; totalTokens: number };
+}> {
   const apiKey = resolvePromptLabApiKey("google");
   const modelPath = encodeURIComponent(model);
   const url =
@@ -786,6 +891,7 @@ async function runGeminiPromptLabQuery(
   return {
     responseText: extractPromptLabResponseText(responsePayload),
     citations: extractPromptLabCitations(responsePayload),
+    tokens: extractPromptLabTokenUsage(responsePayload),
   };
 }
 
@@ -793,7 +899,11 @@ async function runPromptLabQuery(
   query: string,
   model: string,
   webSearch: boolean,
-): Promise<{ responseText: string; citations: string[] }> {
+): Promise<{
+  responseText: string;
+  citations: string[];
+  tokens: { inputTokens: number; outputTokens: number; totalTokens: number };
+}> {
   const provider = inferPromptLabProvider(model);
   if (provider === "anthropic") {
     return runAnthropicPromptLabQuery(query, model);
@@ -802,6 +912,98 @@ async function runPromptLabQuery(
     return runGeminiPromptLabQuery(query, model);
   }
   return runOpenAiPromptLabQuery(query, model, webSearch);
+}
+
+async function runPromptLabQueryForModel(
+  query: string,
+  model: string,
+  requestedWebSearch: boolean,
+): Promise<{
+  ok: boolean;
+  model: string;
+  provider: PromptLabProvider;
+  modelOwner: string;
+  webSearchEnabled: boolean;
+  responseText: string;
+  citations: string[];
+  tokens: { inputTokens: number; outputTokens: number; totalTokens: number };
+  durationMs: number;
+  error: string | null;
+}> {
+  const provider = inferPromptLabProvider(model);
+  const modelOwner = resolvePromptLabModelOwner(provider);
+  const webSearchEnabled = provider === "openai" ? requestedWebSearch : false;
+  const startedAt = Date.now();
+
+  try {
+    const result = await runPromptLabQuery(query, model, webSearchEnabled);
+    return {
+      ok: true,
+      model,
+      provider,
+      modelOwner,
+      webSearchEnabled,
+      responseText: result.responseText,
+      citations: result.citations,
+      tokens: result.tokens,
+      durationMs: Date.now() - startedAt,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      model,
+      provider,
+      modelOwner,
+      webSearchEnabled,
+      responseText: "",
+      citations: [],
+      tokens: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      durationMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function summarizePromptLabModelResults(
+  results: Array<{
+    ok: boolean;
+    durationMs: number;
+    tokens: { inputTokens: number; outputTokens: number; totalTokens: number };
+  }>,
+): {
+  modelCount: number;
+  successCount: number;
+  failureCount: number;
+  totalDurationMs: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalTokens: number;
+} {
+  return results.reduce(
+    (summary, result) => {
+      summary.modelCount += 1;
+      if (result.ok) {
+        summary.successCount += 1;
+      } else {
+        summary.failureCount += 1;
+      }
+      summary.totalDurationMs += Math.max(0, Math.round(result.durationMs));
+      summary.totalInputTokens += Math.max(0, Math.round(result.tokens.inputTokens));
+      summary.totalOutputTokens += Math.max(0, Math.round(result.tokens.outputTokens));
+      summary.totalTokens += Math.max(0, Math.round(result.tokens.totalTokens));
+      return summary;
+    },
+    {
+      modelCount: 0,
+      successCount: 0,
+      failureCount: 0,
+      totalDurationMs: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalTokens: 0,
+    },
+  );
 }
 
 function inferPromptResponseCount(row: CsvRow | undefined, competitors: string[]): number | null {
@@ -915,6 +1117,169 @@ async function loadConfig(): Promise<BenchmarkConfig> {
   return normalizeConfig(parsed);
 }
 
+type DashboardModelStat = {
+  model: string;
+  owner: string;
+  responseCount: number;
+  successCount: number;
+  failureCount: number;
+  webSearchEnabledCount: number;
+  totalDurationMs: number;
+  avgDurationMs: number;
+  p95DurationMs: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalTokens: number;
+  avgInputTokens: number;
+  avgOutputTokens: number;
+  avgTotalTokens: number;
+};
+
+function percentile(values: number[], target: number): number {
+  if (values.length === 0) return 0;
+  const sorted = values.slice().sort((left, right) => left - right);
+  const clampedTarget = Math.max(0, Math.min(1, target));
+  const index = Math.min(
+    sorted.length - 1,
+    Math.max(0, Math.ceil(clampedTarget * sorted.length) - 1),
+  );
+  return sorted[index] ?? 0;
+}
+
+function buildModelStatsFromRows(rows: Array<Record<string, unknown>>): {
+  modelStats: DashboardModelStat[];
+  tokenTotals: { inputTokens: number; outputTokens: number; totalTokens: number };
+  durationTotals: { totalDurationMs: number; avgDurationMs: number };
+} {
+  const byModel = new Map<
+    string,
+    {
+      owner: string;
+      responseCount: number;
+      successCount: number;
+      failureCount: number;
+      webSearchEnabledCount: number;
+      durations: number[];
+      totalDurationMs: number;
+      totalInputTokens: number;
+      totalOutputTokens: number;
+      totalTokens: number;
+    }
+  >();
+
+  let totalDurationMs = 0;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let totalTokens = 0;
+
+  for (const row of rows) {
+    const model = String(row.model ?? "").trim();
+    if (!model) continue;
+
+    const owner = String(row.model_owner ?? "").trim() || inferModelOwnerFromModel(model);
+    const durationMs = Math.max(0, Math.round(asNumber(row.duration_ms)));
+    const inputTokens = Math.max(0, Math.round(asNumber(row.prompt_tokens)));
+    const outputTokens = Math.max(0, Math.round(asNumber(row.completion_tokens)));
+    const rowTotalTokens = Math.max(
+      0,
+      Math.round(asNumber(row.total_tokens) || inputTokens + outputTokens),
+    );
+    const hasError = Boolean(String(row.error ?? "").trim());
+    const webEnabled = isTruthyFlag(row.web_search_enabled);
+
+    let bucket = byModel.get(model);
+    if (!bucket) {
+      bucket = {
+        owner,
+        responseCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        webSearchEnabledCount: 0,
+        durations: [],
+        totalDurationMs: 0,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalTokens: 0,
+      };
+      byModel.set(model, bucket);
+    }
+
+    bucket.responseCount += 1;
+    if (hasError) {
+      bucket.failureCount += 1;
+    } else {
+      bucket.successCount += 1;
+    }
+    if (webEnabled) {
+      bucket.webSearchEnabledCount += 1;
+    }
+    bucket.durations.push(durationMs);
+    bucket.totalDurationMs += durationMs;
+    bucket.totalInputTokens += inputTokens;
+    bucket.totalOutputTokens += outputTokens;
+    bucket.totalTokens += rowTotalTokens;
+
+    totalDurationMs += durationMs;
+    totalInputTokens += inputTokens;
+    totalOutputTokens += outputTokens;
+    totalTokens += rowTotalTokens;
+  }
+
+  const modelStats = [...byModel.entries()]
+    .map(([model, bucket]) => {
+      const responseCount = bucket.responseCount;
+      return {
+        model,
+        owner: bucket.owner,
+        responseCount,
+        successCount: bucket.successCount,
+        failureCount: bucket.failureCount,
+        webSearchEnabledCount: bucket.webSearchEnabledCount,
+        totalDurationMs: bucket.totalDurationMs,
+        avgDurationMs:
+          responseCount > 0
+            ? Number((bucket.totalDurationMs / responseCount).toFixed(2))
+            : 0,
+        p95DurationMs: Number(percentile(bucket.durations, 0.95).toFixed(2)),
+        totalInputTokens: bucket.totalInputTokens,
+        totalOutputTokens: bucket.totalOutputTokens,
+        totalTokens: bucket.totalTokens,
+        avgInputTokens:
+          responseCount > 0
+            ? Number((bucket.totalInputTokens / responseCount).toFixed(2))
+            : 0,
+        avgOutputTokens:
+          responseCount > 0
+            ? Number((bucket.totalOutputTokens / responseCount).toFixed(2))
+            : 0,
+        avgTotalTokens:
+          responseCount > 0
+            ? Number((bucket.totalTokens / responseCount).toFixed(2))
+            : 0,
+      };
+    })
+    .sort((left, right) => {
+      if (right.responseCount !== left.responseCount) {
+        return right.responseCount - left.responseCount;
+      }
+      return left.model.localeCompare(right.model);
+    });
+
+  return {
+    modelStats,
+    tokenTotals: {
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      totalTokens,
+    },
+    durationTotals: {
+      totalDurationMs,
+      avgDurationMs:
+        rows.length > 0 ? Number((totalDurationMs / rows.length).toFixed(2)) : 0,
+    },
+  };
+}
+
 function inferWindowFromJsonl(rows: Array<Record<string, unknown>>): {
   start: string | null;
   end: string | null;
@@ -922,6 +1287,9 @@ function inferWindowFromJsonl(rows: Array<Record<string, unknown>>): {
   modelOwners: string[];
   modelOwnerMap: Record<string, string>;
   modelOwnerStats: Array<{ owner: string; models: string[]; responseCount: number }>;
+  modelStats: DashboardModelStat[];
+  tokenTotals: { inputTokens: number; outputTokens: number; totalTokens: number };
+  durationTotals: { totalDurationMs: number; avgDurationMs: number };
 } {
   const timestamps = rows
     .map((row) => String(row.timestamp ?? ""))
@@ -929,6 +1297,7 @@ function inferWindowFromJsonl(rows: Array<Record<string, unknown>>): {
     .sort();
   const models = [...new Set(rows.map((row) => String(row.model ?? "")).filter(Boolean))];
   const ownerSummary = buildModelOwnerSummaryFromRows(rows);
+  const modelStatsSummary = buildModelStatsFromRows(rows);
   return {
     start: timestamps[0] ?? null,
     end: timestamps.at(-1) ?? null,
@@ -936,6 +1305,9 @@ function inferWindowFromJsonl(rows: Array<Record<string, unknown>>): {
     modelOwners: ownerSummary.modelOwners,
     modelOwnerMap: ownerSummary.modelOwnerMap,
     modelOwnerStats: ownerSummary.modelOwnerStats,
+    modelStats: modelStatsSummary.modelStats,
+    tokenTotals: modelStatsSummary.tokenTotals,
+    durationTotals: modelStatsSummary.durationTotals,
   };
 }
 
@@ -1019,27 +1391,36 @@ app.post("/api/prompt-lab/run", async (req, res) => {
       return;
     }
     const allowedModels = getPromptLabAllowedModels();
-    const requestedModel =
-      typeof parsed.model === "string" && parsed.model.trim()
-        ? parsed.model.trim()
-        : PROMPT_LAB_DEFAULT_MODEL;
-    const model = resolvePromptLabModel(requestedModel, allowedModels);
-    const provider = inferPromptLabProvider(model);
     const requestedWebSearch = parsed.webSearch ?? true;
-    const webSearch = provider === "openai" ? requestedWebSearch : false;
-    const startedAt = Date.now();
+    const models = resolvePromptLabModels(
+      {
+        model: parsed.model,
+        models: parsed.models,
+        selectAllModels: parsed.selectAllModels,
+      },
+      allowedModels,
+    );
+    const results = await Promise.all(
+      models.map((model) => runPromptLabQueryForModel(query, model, requestedWebSearch)),
+    );
+    const summary = summarizePromptLabModelResults(results);
+    const primaryResult = results[0] ?? null;
 
-    const result = await runPromptLabQuery(query, model, webSearch);
     res.json({
-      ok: true,
+      ok: summary.successCount > 0,
       query,
-      model,
-      provider,
-      modelOwner: resolvePromptLabModelOwner(provider),
-      webSearchEnabled: webSearch,
-      responseText: result.responseText,
-      citations: result.citations,
-      durationMs: Date.now() - startedAt,
+      models,
+      results,
+      summary,
+      // Backwards compatibility for older single-model clients.
+      model: primaryResult?.model ?? null,
+      provider: primaryResult?.provider ?? null,
+      modelOwner: primaryResult?.modelOwner ?? null,
+      webSearchEnabled: primaryResult?.webSearchEnabled ?? false,
+      responseText: primaryResult?.responseText ?? "",
+      citations: primaryResult?.citations ?? [],
+      durationMs: primaryResult?.durationMs ?? 0,
+      tokens: primaryResult?.tokens ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -1191,6 +1572,9 @@ app.get("/api/dashboard", async (_req, res) => {
           : [...new Set(Object.values(modelOwnerMap))].sort((a, b) => a.localeCompare(b));
     const windowStartUtc = kpi?.window_start_utc ?? inferredWindow.start;
     const windowEndUtc = kpi?.window_end_utc ?? inferredWindow.end;
+    const tokenTotals = inferredWindow.tokenTotals;
+    const durationTotals = inferredWindow.durationTotals;
+    const modelStats = inferredWindow.modelStats;
 
     res.json({
       generatedAt: new Date().toISOString(),
@@ -1203,6 +1587,9 @@ app.get("/api/dashboard", async (_req, res) => {
         modelOwners,
         modelOwnerMap,
         modelOwnerStats: inferredWindow.modelOwnerStats,
+        modelStats,
+        tokenTotals,
+        durationTotals,
         runMonth: kpi?.run_month ?? null,
         webSearchEnabled: kpi?.web_search_enabled ?? null,
         windowStartUtc,

@@ -96,6 +96,11 @@ KPI_FIELDNAMES = [
     "model_owners",
     "model_owner_map",
     "web_search_enabled",
+    "total_prompt_tokens",
+    "total_completion_tokens",
+    "total_tokens",
+    "total_duration_ms",
+    "model_stats_json",
     "run_month",
     "run_id",
 ]
@@ -268,12 +273,78 @@ def extract_context(jsonl_rows: Iterable[Dict[str, Any]]) -> Dict[str, str]:
     owner_map_str = ";".join(
         f"{model}=>{owner}" for model, owner in sorted(owner_mapping.items())
     )
+
+    model_stats: List[Dict[str, Any]] = []
+    rows_by_model: Dict[str, List[Dict[str, Any]]] = {}
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    total_tokens = 0
+    total_duration_ms = 0
+
+    for row in normalized_rows:
+        model = str(row.get("model") or "").strip()
+        if not model:
+            continue
+        rows_by_model.setdefault(model, []).append(row)
+        prompt_tokens = to_int(row.get("prompt_tokens"))
+        completion_tokens = to_int(row.get("completion_tokens"))
+        call_total_tokens = to_int(row.get("total_tokens")) or (
+            prompt_tokens + completion_tokens
+        )
+        duration_ms = to_int(row.get("duration_ms"))
+        total_prompt_tokens += prompt_tokens
+        total_completion_tokens += completion_tokens
+        total_tokens += call_total_tokens
+        total_duration_ms += duration_ms
+
+    for model in sorted(rows_by_model.keys()):
+        model_rows = rows_by_model[model]
+        response_count = len(model_rows)
+        error_count = sum(1 for row in model_rows if str(row.get("error") or "").strip())
+        model_prompt_tokens = sum(to_int(row.get("prompt_tokens")) for row in model_rows)
+        model_completion_tokens = sum(
+            to_int(row.get("completion_tokens")) for row in model_rows
+        )
+        model_total_tokens = sum(
+            to_int(row.get("total_tokens"))
+            or (to_int(row.get("prompt_tokens")) + to_int(row.get("completion_tokens")))
+            for row in model_rows
+        )
+        model_total_duration_ms = sum(to_int(row.get("duration_ms")) for row in model_rows)
+        model_stats.append(
+            {
+                "model": model,
+                "owner": owner_mapping.get(model, infer_model_owner_from_model(model)),
+                "response_count": response_count,
+                "error_count": error_count,
+                "total_prompt_tokens": model_prompt_tokens,
+                "total_completion_tokens": model_completion_tokens,
+                "total_tokens": model_total_tokens,
+                "total_duration_ms": model_total_duration_ms,
+                "avg_duration_ms": round(
+                    model_total_duration_ms / response_count, 2
+                )
+                if response_count
+                else 0.0,
+                "avg_total_tokens": round(
+                    model_total_tokens / response_count, 2
+                )
+                if response_count
+                else 0.0,
+            }
+        )
+
     return {
         "window_start_utc": timestamps[0] if timestamps else "",
         "window_end_utc": timestamps[-1] if timestamps else "",
         "models": ";".join(models),
         "model_owners": ";".join(model_owners),
         "model_owner_map": owner_map_str,
+        "total_prompt_tokens": str(total_prompt_tokens),
+        "total_completion_tokens": str(total_completion_tokens),
+        "total_tokens": str(total_tokens),
+        "total_duration_ms": str(total_duration_ms),
+        "model_stats_json": json.dumps(model_stats, ensure_ascii=True, separators=(",", ":")),
     }
 
 
@@ -764,6 +835,11 @@ def write_kpi_csv(
         "model_owners": context.get("model_owners", ""),
         "model_owner_map": context.get("model_owner_map", ""),
         "web_search_enabled": normalize_yes_no(overall_row.get("web_search_enabled")),
+        "total_prompt_tokens": context.get("total_prompt_tokens", "0"),
+        "total_completion_tokens": context.get("total_completion_tokens", "0"),
+        "total_tokens": context.get("total_tokens", "0"),
+        "total_duration_ms": context.get("total_duration_ms", "0"),
+        "model_stats_json": context.get("model_stats_json", "[]"),
         "run_month": run_month,
         "run_id": run_id,
     }

@@ -222,6 +222,33 @@ class ProviderRoutingTests(unittest.TestCase):
         self.assertEqual(bench.infer_model_owner("anthropic"), "Anthropic")
         self.assertEqual(bench.infer_model_owner("google"), "Google")
 
+    def test_parses_model_names_from_csv(self):
+        models = bench.parse_model_names("gpt-4o-mini, claude-3-5-sonnet-latest, gpt-4o-mini")
+        self.assertEqual(models, ["gpt-4o-mini", "claude-3-5-sonnet-latest"])
+
+    def test_extracts_token_usage_from_multiple_provider_shapes(self):
+        openai_usage = bench.extract_token_usage(
+            {"usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18}}
+        )
+        anthropic_usage = bench.extract_token_usage(
+            {"usage": {"input_tokens": 5, "output_tokens": 3}}
+        )
+        gemini_usage = bench.extract_token_usage(
+            {"usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 6}}
+        )
+
+        self.assertEqual(openai_usage["prompt_tokens"], 11)
+        self.assertEqual(openai_usage["completion_tokens"], 7)
+        self.assertEqual(openai_usage["total_tokens"], 18)
+
+        self.assertEqual(anthropic_usage["prompt_tokens"], 5)
+        self.assertEqual(anthropic_usage["completion_tokens"], 3)
+        self.assertEqual(anthropic_usage["total_tokens"], 8)
+
+        self.assertEqual(gemini_usage["prompt_tokens"], 9)
+        self.assertEqual(gemini_usage["completion_tokens"], 6)
+        self.assertEqual(gemini_usage["total_tokens"], 15)
+
 
 class CliIntegrationTests(unittest.TestCase):
     def test_main_writes_expected_outputs(self):
@@ -438,6 +465,76 @@ class CliIntegrationTests(unittest.TestCase):
                 self.assertEqual(request_payload["model"], "gemini-2.0-flash")
                 self.assertIn("system_prompt", request_payload)
                 self.assertIn("user_prompt", request_payload)
+
+    def test_main_supports_multiple_models_in_single_run(self):
+        payloads = []
+        for idx, _query in enumerate(bench.DEFAULT_QUERIES):
+            payloads.append(
+                {
+                    "output_text": f"Model A response {idx + 1} mentioning Highcharts.",
+                    "usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14},
+                }
+            )
+            payloads.append(
+                {
+                    "output_text": f"Model B response {idx + 1} mentioning chart.js.",
+                    "usage": {"input_tokens": 8, "output_tokens": 5, "total_tokens": 13},
+                }
+            )
+        fake_client = FakeClient(payloads)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "benchmark_config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "queries": bench.DEFAULT_QUERIES,
+                        "competitors": bench.COMPETITORS,
+                        "aliases": bench.COMPETITOR_ALIASES,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False):
+                with mock.patch.object(
+                    bench, "create_openai_client", return_value=fake_client
+                ):
+                    exit_code = bench.main(
+                        [
+                            "--our-terms",
+                            "EasyLLM",
+                            "--model",
+                            "gpt-4o-mini,gpt-4o",
+                            "--runs",
+                            "1",
+                            "--output-dir",
+                            temp_dir,
+                            "--config",
+                            str(config_path),
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+
+            jsonl_path = Path(temp_dir) / "llm_outputs.jsonl"
+            jsonl_lines = jsonl_path.read_text(encoding="utf-8").strip().splitlines()
+            self.assertEqual(len(jsonl_lines), len(bench.DEFAULT_QUERIES) * 2)
+
+            parsed = [json.loads(line) for line in jsonl_lines]
+            model_set = {row["model"] for row in parsed}
+            self.assertEqual(model_set, {"gpt-4o-mini", "gpt-4o"})
+            self.assertTrue(all("duration_ms" in row for row in parsed))
+            self.assertTrue(all("prompt_tokens" in row for row in parsed))
+            self.assertTrue(all("completion_tokens" in row for row in parsed))
+            self.assertTrue(all("total_tokens" in row for row in parsed))
+            self.assertTrue(all(isinstance(row["duration_ms"], int) for row in parsed))
+
+            with (Path(temp_dir) / "comparison_table.csv").open(
+                newline="", encoding="utf-8"
+            ) as handle:
+                comparison_rows = list(csv.DictReader(handle))
+            non_overall_rows = [row for row in comparison_rows if row["query"] != "OVERALL"]
+            self.assertTrue(all(row["runs"] == "2" for row in non_overall_rows))
 
 
 if __name__ == "__main__":

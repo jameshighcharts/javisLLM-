@@ -9,6 +9,7 @@ import type {
   DiagnosticsResponse,
   DiagnosticsStatus,
   DashboardResponse,
+  DashboardModelStat,
   HealthResponse,
   KpiRow,
   ModelOwnerStat,
@@ -73,7 +74,14 @@ type BenchmarkResponseRow = {
   query_id: string
   run_iteration: number
   model: string
+  provider?: string | null
+  model_owner?: string | null
   web_search_enabled: boolean
+  error?: string | null
+  duration_ms?: number | null
+  prompt_tokens?: number | null
+  completion_tokens?: number | null
+  total_tokens?: number | null
 }
 
 type ResponseMentionRow = {
@@ -119,6 +127,12 @@ type PromptDrilldownResponseRow = {
   citations: unknown
   error: string | null
   created_at: string | null
+  provider?: string | null
+  model_owner?: string | null
+  duration_ms?: number | null
+  prompt_tokens?: number | null
+  completion_tokens?: number | null
+  total_tokens?: number | null
 }
 
 type PromptDrilldownRunRow = {
@@ -385,6 +399,152 @@ function buildModelOwnerStatsFromResponses(
     })
 }
 
+function percentile(values: number[], target: number): number {
+  if (values.length === 0) return 0
+  const sorted = values.slice().sort((left, right) => left - right)
+  const clamped = Math.max(0, Math.min(1, target))
+  const index = Math.min(
+    sorted.length - 1,
+    Math.max(0, Math.ceil(clamped * sorted.length) - 1),
+  )
+  return sorted[index] ?? 0
+}
+
+function buildModelStatsFromResponses(
+  responses: BenchmarkResponseRow[],
+): {
+  modelStats: DashboardModelStat[]
+  tokenTotals: { inputTokens: number; outputTokens: number; totalTokens: number }
+  durationTotals: { totalDurationMs: number; avgDurationMs: number }
+} {
+  const modelBuckets = new Map<
+    string,
+    {
+      owner: string
+      responseCount: number
+      successCount: number
+      failureCount: number
+      webSearchEnabledCount: number
+      durations: number[]
+      totalDurationMs: number
+      totalInputTokens: number
+      totalOutputTokens: number
+      totalTokens: number
+    }
+  >()
+
+  let totalDurationMs = 0
+  let totalInputTokens = 0
+  let totalOutputTokens = 0
+  let totalTokens = 0
+
+  for (const response of responses) {
+    const model = String(response.model ?? '').trim()
+    if (!model) continue
+    const owner =
+      String(response.model_owner ?? '').trim() || inferModelOwnerFromModel(model)
+    const hasError = Boolean(String(response.error ?? '').trim())
+    const durationMs = Math.max(0, Math.round(Number(response.duration_ms ?? 0)))
+    const inputTokens = Math.max(0, Math.round(Number(response.prompt_tokens ?? 0)))
+    const outputTokens = Math.max(0, Math.round(Number(response.completion_tokens ?? 0)))
+    const rowTotalTokens = Math.max(
+      0,
+      Math.round(Number(response.total_tokens ?? 0)) || inputTokens + outputTokens,
+    )
+
+    let bucket = modelBuckets.get(model)
+    if (!bucket) {
+      bucket = {
+        owner,
+        responseCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        webSearchEnabledCount: 0,
+        durations: [],
+        totalDurationMs: 0,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalTokens: 0,
+      }
+      modelBuckets.set(model, bucket)
+    }
+
+    bucket.responseCount += 1
+    if (hasError) {
+      bucket.failureCount += 1
+    } else {
+      bucket.successCount += 1
+    }
+    if (response.web_search_enabled) {
+      bucket.webSearchEnabledCount += 1
+    }
+    bucket.durations.push(durationMs)
+    bucket.totalDurationMs += durationMs
+    bucket.totalInputTokens += inputTokens
+    bucket.totalOutputTokens += outputTokens
+    bucket.totalTokens += rowTotalTokens
+
+    totalDurationMs += durationMs
+    totalInputTokens += inputTokens
+    totalOutputTokens += outputTokens
+    totalTokens += rowTotalTokens
+  }
+
+  const modelStats: DashboardModelStat[] = [...modelBuckets.entries()]
+    .map(([model, bucket]) => {
+      const responseCount = bucket.responseCount
+      return {
+        model,
+        owner: bucket.owner,
+        responseCount,
+        successCount: bucket.successCount,
+        failureCount: bucket.failureCount,
+        webSearchEnabledCount: bucket.webSearchEnabledCount,
+        totalDurationMs: bucket.totalDurationMs,
+        avgDurationMs:
+          responseCount > 0
+            ? Number((bucket.totalDurationMs / responseCount).toFixed(2))
+            : 0,
+        p95DurationMs: Number(percentile(bucket.durations, 0.95).toFixed(2)),
+        totalInputTokens: bucket.totalInputTokens,
+        totalOutputTokens: bucket.totalOutputTokens,
+        totalTokens: bucket.totalTokens,
+        avgInputTokens:
+          responseCount > 0
+            ? Number((bucket.totalInputTokens / responseCount).toFixed(2))
+            : 0,
+        avgOutputTokens:
+          responseCount > 0
+            ? Number((bucket.totalOutputTokens / responseCount).toFixed(2))
+            : 0,
+        avgTotalTokens:
+          responseCount > 0
+            ? Number((bucket.totalTokens / responseCount).toFixed(2))
+            : 0,
+      }
+    })
+    .sort((left, right) => {
+      if (right.responseCount !== left.responseCount) {
+        return right.responseCount - left.responseCount
+      }
+      return left.model.localeCompare(right.model)
+    })
+
+  return {
+    modelStats,
+    tokenTotals: {
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      totalTokens,
+    },
+    durationTotals: {
+      totalDurationMs,
+      avgDurationMs:
+        responses.length > 0 ? Number((totalDurationMs / responses.length).toFixed(2)) : 0,
+    },
+  }
+}
+
 function monthKeyFromDate(value: string | null): string | null {
   if (!value) return null
   const parsed = new Date(value)
@@ -497,6 +657,16 @@ function emptyDashboard(config: BenchmarkConfig): DashboardResponse {
       modelOwners: [],
       modelOwnerMap: {},
       modelOwnerStats: [],
+      modelStats: [],
+      tokenTotals: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+      },
+      durationTotals: {
+        totalDurationMs: 0,
+        avgDurationMs: 0,
+      },
       runMonth: null,
       webSearchEnabled: null,
       windowStartUtc: null,
@@ -556,6 +726,41 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+type SupabasePagedResult<T> = {
+  data: T[] | null
+  error: unknown
+}
+
+async function fetchAllSupabasePages<T>(
+  fetchPage: (from: number, to: number) => PromiseLike<SupabasePagedResult<T>>,
+): Promise<{ rows: T[]; error: unknown | null }> {
+  const rows: T[] = []
+  let offset = 0
+  let pageCount = 0
+  const maxPages = 10_000
+
+  while (pageCount < maxPages) {
+    const pageResult = await fetchPage(offset, offset + SUPABASE_PAGE_SIZE - 1)
+    if (pageResult.error) {
+      return { rows: [], error: pageResult.error }
+    }
+
+    const pageRows = (pageResult.data ?? []) as T[]
+    if (pageRows.length === 0) {
+      return { rows, error: null }
+    }
+
+    rows.push(...pageRows)
+    offset += pageRows.length
+    pageCount += 1
+  }
+
+  return {
+    rows: [],
+    error: new Error('Supabase pagination exceeded maximum page limit'),
+  }
+}
+
 function withOptionalTriggerToken(
   triggerToken?: string,
 ): Record<string, string> | undefined {
@@ -575,29 +780,38 @@ async function fetchSupabaseConfigRows(): Promise<{
   }
 
   const [promptResultWithTags, competitorResult] = await Promise.all([
-    supabase
-      .from('prompt_queries')
-      .select('id,query_text,sort_order,is_active,tags,updated_at')
-      .eq('is_active', true)
-      .order('sort_order', { ascending: true }),
-    supabase
-      .from('competitors')
-      .select('id,name,slug,is_primary,sort_order,is_active,updated_at,competitor_aliases(alias)')
-      .eq('is_active', true)
-      .order('sort_order', { ascending: true }),
+    fetchAllSupabasePages<PromptQueryRow>((from, to) =>
+      supabase
+        .from('prompt_queries')
+        .select('id,query_text,sort_order,is_active,tags,updated_at')
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true })
+        .range(from, to),
+    ),
+    fetchAllSupabasePages<CompetitorRow>((from, to) =>
+      supabase
+        .from('competitors')
+        .select('id,name,slug,is_primary,sort_order,is_active,updated_at,competitor_aliases(alias)')
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true })
+        .range(from, to),
+    ),
   ])
 
-  let promptRows = (promptResultWithTags.data ?? []) as PromptQueryRow[]
+  let promptRows = promptResultWithTags.rows
   let promptError = promptResultWithTags.error
 
   // Backward compatibility while Supabase migration for tags rolls out.
   if (promptError && isMissingColumn(promptError)) {
-    const promptResultFallback = await supabase
-      .from('prompt_queries')
-      .select('id,query_text,sort_order,is_active,updated_at')
-      .eq('is_active', true)
-      .order('sort_order', { ascending: true })
-    promptRows = ((promptResultFallback.data ?? []) as PromptQueryRow[]).map((row) => ({
+    const promptResultFallback = await fetchAllSupabasePages<PromptQueryRow>((from, to) =>
+      supabase
+        .from('prompt_queries')
+        .select('id,query_text,sort_order,is_active,updated_at')
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true })
+        .range(from, to),
+    )
+    promptRows = promptResultFallback.rows.map((row) => ({
       ...row,
       tags: null,
     }))
@@ -613,7 +827,7 @@ async function fetchSupabaseConfigRows(): Promise<{
 
   return {
     promptRows,
-    competitorRows: (competitorResult.data ?? []) as CompetitorRow[],
+    competitorRows: competitorResult.rows,
   }
 }
 
@@ -709,28 +923,36 @@ async function updateConfigInSupabase(config: BenchmarkConfig): Promise<ConfigRe
   }
 
   let promptTagsColumnAvailable = true
-  const allPromptRowsWithTags = await supabase
-    .from('prompt_queries')
-    .select('id,query_text,is_active,tags')
-  let allPromptRowsError = allPromptRowsWithTags.error
-  let allPromptRowsData = (allPromptRowsWithTags.data ?? []) as Array<{
+  const allPromptRowsWithTags = await fetchAllSupabasePages<{
     id: string
     query_text: string
     is_active: boolean
     tags?: string[] | null
-  }>
+  }>((from, to) =>
+    supabase
+      .from('prompt_queries')
+      .select('id,query_text,is_active,tags')
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+  let allPromptRowsError = allPromptRowsWithTags.error
+  let allPromptRowsData = allPromptRowsWithTags.rows
 
   if (allPromptRowsError && isMissingColumn(allPromptRowsError)) {
     promptTagsColumnAvailable = false
-    const fallbackRows = await supabase
-      .from('prompt_queries')
-      .select('id,query_text,is_active')
-    allPromptRowsError = fallbackRows.error
-    allPromptRowsData = ((fallbackRows.data ?? []) as Array<{
+    const fallbackRows = await fetchAllSupabasePages<{
       id: string
       query_text: string
       is_active: boolean
-    }>).map((row) => ({ ...row, tags: null }))
+    }>((from, to) =>
+      supabase
+        .from('prompt_queries')
+        .select('id,query_text,is_active')
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    allPromptRowsError = fallbackRows.error
+    allPromptRowsData = fallbackRows.rows.map((row) => ({ ...row, tags: null }))
   }
 
   if (allPromptRowsError) {
@@ -933,22 +1155,28 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
   const config = configResponse.config
 
   // Fetch ALL queries (active and paused) so we can show isPaused state in the grid
-  const activeQueryResultWithTags = await supabase
-    .from('prompt_queries')
-    .select('id,query_text,sort_order,is_active,tags')
-    .order('sort_order', { ascending: true })
+  const activeQueryResultWithTags = await fetchAllSupabasePages<PromptQueryRow>((from, to) =>
+    supabase
+      .from('prompt_queries')
+      .select('id,query_text,sort_order,is_active,tags')
+      .order('sort_order', { ascending: true })
+      .range(from, to),
+  )
 
   let activeQueryError = activeQueryResultWithTags.error
-  let activeQueryRows = (activeQueryResultWithTags.data ?? []) as PromptQueryRow[]
+  let activeQueryRows = activeQueryResultWithTags.rows
 
   // Backward compatibility while Supabase migration for tags rolls out.
   if (activeQueryError && isMissingColumn(activeQueryError)) {
-    const fallbackRows = await supabase
-      .from('prompt_queries')
-      .select('id,query_text,sort_order,is_active')
-      .order('sort_order', { ascending: true })
+    const fallbackRows = await fetchAllSupabasePages<PromptQueryRow>((from, to) =>
+      supabase
+        .from('prompt_queries')
+        .select('id,query_text,sort_order,is_active')
+        .order('sort_order', { ascending: true })
+        .range(from, to),
+    )
     activeQueryError = fallbackRows.error
-    activeQueryRows = ((fallbackRows.data ?? []) as PromptQueryRow[]).map((row) => ({
+    activeQueryRows = fallbackRows.rows.map((row) => ({
       ...row,
       tags: null,
     }))
@@ -1010,10 +1238,7 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
       }
 
       historyRows.push(...pageRows)
-      if (pageRows.length < SUPABASE_PAGE_SIZE) {
-        break
-      }
-      historyOffset += SUPABASE_PAGE_SIZE
+      historyOffset += pageRows.length
     }
 
     for (const row of historyRows) {
@@ -1044,19 +1269,41 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
     return emptyDashboard(config)
   }
 
-  const responseResult = await supabase
+  const responseResultWithStats = await supabase
     .from('benchmark_responses')
-    .select('id,query_id,run_iteration,model,web_search_enabled')
+    .select(
+      'id,query_id,run_iteration,model,provider,model_owner,web_search_enabled,error,duration_ms,prompt_tokens,completion_tokens,total_tokens',
+    )
     .eq('run_id', latestRun.id)
 
-  if (responseResult.error) {
-    if (isMissingRelation(responseResult.error)) {
-      return emptyDashboard(config)
-    }
-    throw asError(responseResult.error, 'Failed to load benchmark_responses from Supabase')
+  let responseRowsError = responseResultWithStats.error
+  let responseRows = (responseResultWithStats.data ?? []) as BenchmarkResponseRow[]
+
+  if (responseRowsError && isMissingColumn(responseRowsError)) {
+    const responseResultFallback = await supabase
+      .from('benchmark_responses')
+      .select('id,query_id,run_iteration,model,web_search_enabled,error')
+      .eq('run_id', latestRun.id)
+    responseRowsError = responseResultFallback.error
+    responseRows = ((responseResultFallback.data ?? []) as BenchmarkResponseRow[]).map((row) => ({
+      ...row,
+      provider: null,
+      model_owner: null,
+      duration_ms: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 0,
+    }))
   }
 
-  const responses = (responseResult.data ?? []) as BenchmarkResponseRow[]
+  if (responseRowsError) {
+    if (isMissingRelation(responseRowsError)) {
+      return emptyDashboard(config)
+    }
+    throw asError(responseRowsError, 'Failed to load benchmark_responses from Supabase')
+  }
+
+  const responses = responseRows
   const responseIds = responses.map((row) => row.id)
 
   const mentionRows: ResponseMentionRow[] = []
@@ -1087,10 +1334,7 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
         }
 
         mentionRows.push(...pageRows)
-        if (pageRows.length < SUPABASE_PAGE_SIZE) {
-          break
-        }
-        mentionOffset += SUPABASE_PAGE_SIZE
+        mentionOffset += pageRows.length
       }
     }
   }
@@ -1232,6 +1476,7 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
   const models = responseModelSet.length > 0 ? responseModelSet : latestRun.model ? [latestRun.model] : []
   const { modelOwners, modelOwnerMap } = buildModelOwnerSummaryFromModels(models)
   const modelOwnerStats = buildModelOwnerStatsFromResponses(responses)
+  const modelStatsSummary = buildModelStatsFromResponses(responses)
   const modelOwnerMapString = Object.entries(modelOwnerMap)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([model, owner]) => `${model}=>${owner}`)
@@ -1263,6 +1508,9 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
       modelOwners,
       modelOwnerMap,
       modelOwnerStats,
+      modelStats: modelStatsSummary.modelStats,
+      tokenTotals: modelStatsSummary.tokenTotals,
+      durationTotals: modelStatsSummary.durationTotals,
       runMonth: latestRun.run_month,
       webSearchEnabled: latestRun.web_search_enabled ? 'yes' : 'no',
       windowStartUtc: latestRun.started_at,
@@ -1401,10 +1649,7 @@ async function fetchTimeseriesFromSupabase(
         responseRows.push(response)
       }
 
-      if (pageRows.length < SUPABASE_PAGE_SIZE) {
-        break
-      }
-      responseOffset += SUPABASE_PAGE_SIZE
+      responseOffset += pageRows.length
     }
   }
 
@@ -1449,10 +1694,7 @@ async function fetchTimeseriesFromSupabase(
       }
 
       mentionRows.push(...pageRows)
-      if (pageRows.length < SUPABASE_PAGE_SIZE) {
-        break
-      }
-      mentionOffset += SUPABASE_PAGE_SIZE
+      mentionOffset += pageRows.length
     }
   }
 
@@ -1745,17 +1987,43 @@ async function fetchPromptDrilldownFromSupabase(
     is_active: boolean
   }>
 
-  const responseResult = await supabase
+  const responseResultWithStats = await supabase
     .from('benchmark_responses')
     .select(
-      'id,run_id,run_iteration,model,web_search_enabled,response_text,citations,error,created_at',
+      'id,run_id,run_iteration,model,provider,model_owner,web_search_enabled,response_text,citations,error,created_at,duration_ms,prompt_tokens,completion_tokens,total_tokens',
     )
     .eq('query_id', prompt.id)
     .order('created_at', { ascending: false })
     .limit(500)
 
-  if (responseResult.error) {
-    if (isMissingRelation(responseResult.error)) {
+  let responseRowsError = responseResultWithStats.error
+  let responseRows = (responseResultWithStats.data ?? []) as PromptDrilldownResponseRow[]
+
+  if (responseRowsError && isMissingColumn(responseRowsError)) {
+    const responseResultFallback = await supabase
+      .from('benchmark_responses')
+      .select(
+        'id,run_id,run_iteration,model,web_search_enabled,response_text,citations,error,created_at',
+      )
+      .eq('query_id', prompt.id)
+      .order('created_at', { ascending: false })
+      .limit(500)
+    responseRowsError = responseResultFallback.error
+    responseRows = ((responseResultFallback.data ?? []) as PromptDrilldownResponseRow[]).map(
+      (row) => ({
+        ...row,
+        provider: null,
+        model_owner: null,
+        duration_ms: 0,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+      }),
+    )
+  }
+
+  if (responseRowsError) {
+    if (isMissingRelation(responseRowsError)) {
       return {
         generatedAt: new Date().toISOString(),
         prompt: {
@@ -1780,10 +2048,10 @@ async function fetchPromptDrilldownFromSupabase(
         responses: [],
       }
     }
-    throw asError(responseResult.error, 'Failed to load prompt responses from Supabase')
+    throw asError(responseRowsError, 'Failed to load prompt responses from Supabase')
   }
 
-  const responses = (responseResult.data ?? []) as PromptDrilldownResponseRow[]
+  const responses = responseRows
   const responseIds = responses.map((row) => row.id)
   const runIds = [...new Set(responses.map((row) => row.run_id))]
 
@@ -1838,10 +2106,7 @@ async function fetchPromptDrilldownFromSupabase(
         }
 
         mentionRows.push(...pageRows)
-        if (pageRows.length < SUPABASE_PAGE_SIZE) {
-          break
-        }
-        mentionOffset += SUPABASE_PAGE_SIZE
+        mentionOffset += pageRows.length
       }
     }
   }
@@ -2026,8 +2291,18 @@ async function fetchPromptDrilldownFromSupabase(
       createdAt: response.created_at,
       runIteration: response.run_iteration,
       model: response.model,
+      provider: response.provider ?? null,
+      modelOwner: response.model_owner ?? inferModelOwnerFromModel(response.model),
       webSearchEnabled: response.web_search_enabled,
       error: response.error,
+      durationMs: Math.max(0, Math.round(Number(response.duration_ms ?? 0))),
+      promptTokens: Math.max(0, Math.round(Number(response.prompt_tokens ?? 0))),
+      completionTokens: Math.max(0, Math.round(Number(response.completion_tokens ?? 0))),
+      totalTokens: Math.max(
+        0,
+        Math.round(Number(response.total_tokens ?? 0)) ||
+          Math.round(Number(response.prompt_tokens ?? 0) + Number(response.completion_tokens ?? 0)),
+      ),
       responseText: response.response_text ?? '',
       citations: normalizeCitations(response.citations),
       mentions,
@@ -2430,7 +2705,9 @@ export const api = {
 
   async triggerBenchmark(
     data: {
-      model: string
+      model?: string
+      models?: string[]
+      selectAllModels?: boolean
       runs: number
       temperature: number
       webSearch: boolean
@@ -2450,6 +2727,8 @@ export const api = {
     data: {
       query: string
       model?: string
+      models?: string[]
+      selectAllModels?: boolean
       webSearch?: boolean
     },
     triggerToken?: string,

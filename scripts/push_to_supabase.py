@@ -438,7 +438,19 @@ def sync_run_data(
                 "query_id": query_id,
                 "run_iteration": as_int(record.get("run_id"), 0),
                 "model": str(record.get("model") or ""),
+                "model_run_id": as_int(record.get("model_run_id"), as_int(record.get("run_id"), 0)),
+                "model_index": as_int(record.get("model_index"), 0),
+                "provider": str(record.get("provider") or "") or None,
+                "model_owner": str(record.get("model_owner") or "") or None,
                 "web_search_enabled": as_bool(record.get("web_search_enabled")),
+                "duration_ms": as_int(record.get("duration_ms"), 0),
+                "prompt_tokens": as_int(record.get("prompt_tokens"), 0),
+                "completion_tokens": as_int(record.get("completion_tokens"), 0),
+                "total_tokens": as_int(record.get("total_tokens"), 0)
+                or (
+                    as_int(record.get("prompt_tokens"), 0)
+                    + as_int(record.get("completion_tokens"), 0)
+                ),
                 "response_text": str(record.get("response_text") or ""),
                 "citations": record.get("citations") if isinstance(record.get("citations"), list) else [],
                 "error": str(record.get("error") or "") or None,
@@ -450,20 +462,24 @@ def sync_run_data(
             execute_or_raise(
                 client.table("benchmark_responses").upsert(
                     chunk,
-                    on_conflict="run_id,query_id,run_iteration",
+                    on_conflict="run_id,query_id,run_iteration,model",
                 ).execute(),
                 "Failed to upsert benchmark_responses rows",
             )
 
     run_response_rows = execute_or_raise(
         client.table("benchmark_responses")
-        .select("id,query_id,run_iteration")
+        .select("id,query_id,run_iteration,model")
         .eq("run_id", run_id)
         .execute(),
         "Failed to read benchmark_responses for mention sync",
     )
     response_key_to_id = {
-        (str(row["query_id"]), as_int(row["run_iteration"], 0)): int(row["id"])
+        (
+            str(row["query_id"]),
+            as_int(row["run_iteration"], 0),
+            str(row.get("model") or ""),
+        ): int(row["id"])
         for row in run_response_rows
     }
 
@@ -475,7 +491,8 @@ def sync_run_data(
             continue
 
         run_iteration = as_int(record.get("run_id"), 0)
-        response_id = response_key_to_id.get((query_id, run_iteration))
+        model = str(record.get("model") or "")
+        response_id = response_key_to_id.get((query_id, run_iteration, model))
         if not response_id:
             continue
 

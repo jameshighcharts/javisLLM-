@@ -77,6 +77,69 @@ function resolveModel(modelInput, allowedModels) {
   return resolved
 }
 
+function parseRequestedModels(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean)
+  }
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
+function parseBoolean(value, fallback = false) {
+  if (typeof value === "boolean") {
+    return value
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase()
+    if (["1", "true", "yes", "y", "on"].includes(normalized)) {
+      return true
+    }
+    if (["0", "false", "no", "n", "off"].includes(normalized)) {
+      return false
+    }
+  }
+  return fallback
+}
+
+function resolveModels(body, allowedModels) {
+  const selectAll = parseBoolean(
+    body.selectAllModels ?? body.selectAll ?? body.select_all,
+    false,
+  )
+
+  let candidates = selectAll
+    ? allowedModels
+    : parseRequestedModels(body.models)
+
+  if (candidates.length === 0 && typeof body.model === "string" && body.model.trim()) {
+    candidates = [body.model.trim()]
+  }
+  if (candidates.length === 0) {
+    candidates = [DEFAULT_MODEL]
+  }
+
+  const resolved = []
+  const seen = new Set()
+  for (const candidate of candidates) {
+    const model = resolveModel(candidate, allowedModels)
+    const key = model.toLowerCase()
+    if (seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    resolved.push(model)
+  }
+
+  return resolved
+}
+
 function resolveQuery(value) {
   if (typeof value !== "string" || !value.trim()) {
     const error = new Error("query is required.")
@@ -298,6 +361,49 @@ function extractCitations(responsePayload) {
   return citations
 }
 
+function toNonNegativeInt(value) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 0
+  }
+  return Math.round(parsed)
+}
+
+function extractTokenUsage(responsePayload) {
+  const usage = responsePayload?.usage && typeof responsePayload.usage === "object"
+    ? responsePayload.usage
+    : {}
+  const usageMetadata =
+    responsePayload?.usageMetadata && typeof responsePayload.usageMetadata === "object"
+      ? responsePayload.usageMetadata
+      : {}
+
+  const inputTokens = Math.max(
+    toNonNegativeInt(usage.input_tokens),
+    toNonNegativeInt(usage.prompt_tokens),
+    toNonNegativeInt(usageMetadata.promptTokenCount),
+    toNonNegativeInt(usageMetadata.prompt_tokens),
+  )
+  const outputTokens = Math.max(
+    toNonNegativeInt(usage.output_tokens),
+    toNonNegativeInt(usage.completion_tokens),
+    toNonNegativeInt(usageMetadata.candidatesTokenCount),
+    toNonNegativeInt(usageMetadata.completion_tokens),
+  )
+  const totalTokens =
+    Math.max(
+      toNonNegativeInt(usage.total_tokens),
+      toNonNegativeInt(usageMetadata.totalTokenCount),
+      toNonNegativeInt(usageMetadata.total_tokens),
+    ) || inputTokens + outputTokens
+
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+  }
+}
+
 async function runOpenAiPromptLabQuery({ query, model, webSearch }) {
   const apiKey = resolveApiKeyForProvider("openai")
   const requestBody = {
@@ -344,6 +450,7 @@ async function runOpenAiPromptLabQuery({ query, model, webSearch }) {
   return {
     responseText: extractResponseText(payload),
     citations: extractCitations(payload),
+    tokens: extractTokenUsage(payload),
   }
 }
 
@@ -392,6 +499,7 @@ async function runAnthropicPromptLabQuery({ query, model }) {
   return {
     responseText: extractResponseText(payload),
     citations: extractCitations(payload),
+    tokens: extractTokenUsage(payload),
   }
 }
 
@@ -443,6 +551,7 @@ async function runGeminiPromptLabQuery({ query, model }) {
   return {
     responseText: extractResponseText(payload),
     citations: extractCitations(payload),
+    tokens: extractTokenUsage(payload),
   }
 }
 
@@ -455,6 +564,76 @@ async function runPromptLabQuery({ query, model, webSearch }) {
     return runGeminiPromptLabQuery({ query, model })
   }
   return runOpenAiPromptLabQuery({ query, model, webSearch })
+}
+
+async function runPromptLabQueryForModel({ query, model, webSearch }) {
+  const provider = inferProviderFromModel(model)
+  const modelOwner = resolveModelOwner(provider)
+  const webSearchEnabled = provider === "openai" ? webSearch : false
+  const startedAt = Date.now()
+  try {
+    const result = await runPromptLabQuery({
+      query,
+      model,
+      webSearch: webSearchEnabled,
+    })
+    return {
+      ok: true,
+      model,
+      provider,
+      modelOwner,
+      webSearchEnabled,
+      responseText: result.responseText,
+      citations: result.citations,
+      tokens: result.tokens,
+      durationMs: Date.now() - startedAt,
+      error: null,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      model,
+      provider,
+      modelOwner,
+      webSearchEnabled,
+      responseText: "",
+      citations: [],
+      tokens: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+      },
+      durationMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+function summarizePromptLabResults(results) {
+  return results.reduce(
+    (summary, result) => {
+      summary.modelCount += 1
+      if (result.ok) {
+        summary.successCount += 1
+      } else {
+        summary.failureCount += 1
+      }
+      summary.totalDurationMs += toNonNegativeInt(result.durationMs)
+      summary.totalInputTokens += toNonNegativeInt(result?.tokens?.inputTokens)
+      summary.totalOutputTokens += toNonNegativeInt(result?.tokens?.outputTokens)
+      summary.totalTokens += toNonNegativeInt(result?.tokens?.totalTokens)
+      return summary
+    },
+    {
+      modelCount: 0,
+      successCount: 0,
+      failureCount: 0,
+      totalDurationMs: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalTokens: 0,
+    },
+  )
 }
 
 module.exports = async (req, res) => {
@@ -478,27 +657,38 @@ module.exports = async (req, res) => {
     const body = parseBody(req)
     const query = resolveQuery(body.query)
     const allowedModels = getAllowedModels()
-    const requestedModel =
-      typeof body.model === "string" && body.model.trim()
-        ? body.model.trim()
-        : DEFAULT_MODEL
-    const model = resolveModel(requestedModel, allowedModels)
-    const provider = inferProviderFromModel(model)
+    const models = resolveModels(body, allowedModels)
     const requestedWebSearch = parseWebSearch(body.webSearch)
-    const webSearch = provider === "openai" ? requestedWebSearch : false
-    const startedAt = Date.now()
-
-    const result = await runPromptLabQuery({ query, model, webSearch })
+    const results = await Promise.all(
+      models.map((modelName) =>
+        runPromptLabQueryForModel({
+          query,
+          model: modelName,
+          webSearch: requestedWebSearch,
+        }),
+      ),
+    )
+    const summary = summarizePromptLabResults(results)
+    const primaryResult = results[0] || null
     return sendJson(res, 200, {
-      ok: true,
+      ok: summary.successCount > 0,
       query,
-      model,
-      provider,
-      modelOwner: resolveModelOwner(provider),
-      webSearchEnabled: webSearch,
-      responseText: result.responseText,
-      citations: result.citations,
-      durationMs: Date.now() - startedAt,
+      models,
+      results,
+      summary,
+      // Backwards compatibility for single-model callers.
+      model: primaryResult?.model ?? null,
+      provider: primaryResult?.provider ?? null,
+      modelOwner: primaryResult?.modelOwner ?? null,
+      webSearchEnabled: Boolean(primaryResult?.webSearchEnabled),
+      responseText: primaryResult?.responseText ?? "",
+      citations: primaryResult?.citations ?? [],
+      durationMs: toNonNegativeInt(primaryResult?.durationMs),
+      tokens: primaryResult?.tokens ?? {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+      },
     })
   } catch (error) {
     const statusCode =

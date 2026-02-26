@@ -4,6 +4,35 @@ export interface ModelOwnerStat {
   responseCount: number
 }
 
+export interface DashboardModelStat {
+  model: string
+  owner: string
+  responseCount: number
+  successCount: number
+  failureCount: number
+  webSearchEnabledCount: number
+  totalDurationMs: number
+  avgDurationMs: number
+  p95DurationMs: number
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalTokens: number
+  avgInputTokens: number
+  avgOutputTokens: number
+  avgTotalTokens: number
+}
+
+export interface DashboardTokenTotals {
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+}
+
+export interface DashboardDurationTotals {
+  totalDurationMs: number
+  avgDurationMs: number
+}
+
 export interface DashboardSummary {
   overallScore: number
   queryCount: number
@@ -13,6 +42,9 @@ export interface DashboardSummary {
   modelOwners: string[]
   modelOwnerMap: Record<string, string>
   modelOwnerStats: ModelOwnerStat[]
+  modelStats: DashboardModelStat[]
+  tokenTotals: DashboardTokenTotals
+  durationTotals: DashboardDurationTotals
   runMonth: string | null
   webSearchEnabled: string | null
   windowStartUtc: string | null
@@ -202,8 +234,14 @@ export interface PromptDrilldownResponseItem {
   createdAt: string | null
   runIteration: number
   model: string
+  provider?: string | null
+  modelOwner?: string | null
   webSearchEnabled: boolean
   error: string | null
+  durationMs?: number
+  promptTokens?: number
+  completionTokens?: number
+  totalTokens?: number
   responseText: string
   citations: string[]
   mentions: string[]
@@ -236,13 +274,48 @@ export interface PromptDrilldownResponse {
 export interface PromptLabRunResponse {
   ok: boolean
   query: string
-  model: string
-  provider?: string
-  modelOwner?: string
+  models: string[]
+  results: PromptLabRunResult[]
+  summary: PromptLabRunSummary
+  model?: string | null
+  provider?: string | null
+  modelOwner?: string | null
   webSearchEnabled: boolean
   responseText: string
   citations: string[]
   durationMs: number
+  tokens?: {
+    inputTokens: number
+    outputTokens: number
+    totalTokens: number
+  }
+}
+
+export interface PromptLabRunResult {
+  ok: boolean
+  model: string
+  provider: string
+  modelOwner: string
+  webSearchEnabled: boolean
+  responseText: string
+  citations: string[]
+  durationMs: number
+  error: string | null
+  tokens: {
+    inputTokens: number
+    outputTokens: number
+    totalTokens: number
+  }
+}
+
+export interface PromptLabRunSummary {
+  modelCount: number
+  successCount: number
+  failureCount: number
+  totalDurationMs: number
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalTokens: number
 }
 
 export interface BenchmarkWorkflowRun {
@@ -264,6 +337,7 @@ export interface BenchmarkTriggerResponse {
   workflow: string
   repo: string
   ref: string
+  models?: string[]
   run: BenchmarkWorkflowRun | null
   message: string
 }

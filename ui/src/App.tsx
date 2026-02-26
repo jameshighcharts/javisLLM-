@@ -11,6 +11,7 @@ import PromptDrilldown from './pages/PromptDrilldown'
 import PromptDrilldownHub from './pages/PromptDrilldownHub'
 import Prompts from './pages/Prompts'
 import Runs from './pages/Runs'
+import UnderTheHood from './pages/UnderTheHood'
 
 type PageModule = { default: ComponentType<any> }
 const pageModules = import.meta.glob('./pages/{Gantt,KR23,OKR}.tsx') as Record<
@@ -85,6 +86,7 @@ export default function App() {
           <Route path="/competitor-blogs" element={<CompetitorBlogs />} />
           <Route path="/citation-links" element={<CitationLinks />} />
           <Route path="/logics" element={<Logics />} />
+          <Route path="/under-the-hood" element={<UnderTheHood />} />
           <Route path="/diagnostics" element={<Navigate to="/logics" replace />} />
           <Route path="/tests" element={<Navigate to="/logics" replace />} />
           <Route path="/config" element={<Navigate to="/prompts" replace />} />

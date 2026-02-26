@@ -102,6 +102,15 @@ const NAV: NavItem[] = [
       </svg>
     ),
   },
+  {
+    to: '/under-the-hood',
+    label: 'Under the Hood',
+    icon: (
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h10" />
+      </svg>
+    ),
+  },
 ]
 
 const MOBILE_NAV = NAV.filter((item) => !item.soon).slice(0, 5)
@@ -118,6 +127,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/competitor-blogs': 'Competitor Blogs',
   '/citation-links': 'Citation Links',
   '/logics': 'Appendix',
+  '/under-the-hood': 'Under the Hood',
 }
 
 const USING_SUPABASE =

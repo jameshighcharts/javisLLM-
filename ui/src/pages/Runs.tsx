@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
+import { BENCHMARK_MODEL_OPTIONS, BENCHMARK_MODEL_VALUES, dedupeModels } from '../modelOptions'
 import type { BenchmarkWorkflowRun } from '../types'
 
 const TRIGGER_TOKEN_STORAGE_KEY = 'benchmark_trigger_token'
@@ -107,7 +108,8 @@ export default function Runs() {
 
   const [triggerToken, setTriggerToken] = useState(() => readStoredTriggerToken())
   const [ourTerms, setOurTerms] = useState('Highcharts')
-  const [model, setModel] = useState('gpt-4o-mini')
+  const [allowMultipleModels, setAllowMultipleModels] = useState(true)
+  const [selectedModels, setSelectedModels] = useState<string[]>([BENCHMARK_MODEL_VALUES[0]])
   const [runs, setRuns] = useState(1)
   const [temperature, setTemperature] = useState(0.7)
   const [webSearch, setWebSearch] = useState(true)
@@ -119,10 +121,26 @@ export default function Runs() {
     () => fingerprintToken(normalizedTriggerToken),
     [normalizedTriggerToken],
   )
+  const effectiveModels = useMemo(
+    () =>
+      allowMultipleModels
+        ? dedupeModels(selectedModels)
+        : dedupeModels(selectedModels).slice(0, 1),
+    [allowMultipleModels, selectedModels],
+  )
 
   useEffect(() => {
     writeStoredTriggerToken(triggerToken)
   }, [triggerToken])
+
+  useEffect(() => {
+    if (!allowMultipleModels) {
+      setSelectedModels((current) => {
+        const normalized = dedupeModels(current)
+        return normalized.length > 0 ? [normalized[0]] : [BENCHMARK_MODEL_VALUES[0]]
+      })
+    }
+  }, [allowMultipleModels])
 
   const runsQuery = useQuery({
     queryKey: ['benchmark-runs', hasManagedRunAccess, triggerTokenFingerprint],
@@ -135,7 +153,15 @@ export default function Runs() {
   const triggerMutation = useMutation({
     mutationFn: () =>
       api.triggerBenchmark(
-        { model, runs, temperature, webSearch, ourTerms, runMonth: runMonth || undefined },
+        {
+          model: effectiveModels[0],
+          models: effectiveModels,
+          runs,
+          temperature,
+          webSearch,
+          ourTerms,
+          runMonth: runMonth || undefined,
+        },
         normalizedTriggerToken || undefined,
       ),
     onSuccess: () => {
@@ -152,7 +178,7 @@ export default function Runs() {
   const canRun =
     !triggerMutation.isPending &&
     hasManagedRunAccess &&
-    Boolean(model.trim()) &&
+    effectiveModels.length > 0 &&
     Boolean(ourTerms.trim())
 
   const runsErrorMessage = useMemo(() => {
@@ -176,10 +202,20 @@ export default function Runs() {
 
   return (
     <div className="max-w-[1100px] space-y-4">
-      <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <h2 className="text-2xl font-bold tracking-tight" style={{ color: '#2A3A2C' }}>
           Run Benchmarks
         </h2>
+        <Link
+          to="/under-the-hood"
+          className="inline-flex items-center gap-1 text-xs font-medium"
+          style={{ color: '#6B8470' }}
+        >
+          View Under the Hood Stats
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <path d="M3 9L9 3M9 3H4.5M9 3V7.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </Link>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
@@ -324,7 +360,7 @@ export default function Runs() {
             <div
               style={{
                 overflow: 'hidden',
-                maxHeight: showAdvanced ? 400 : 0,
+                maxHeight: showAdvanced ? 900 : 0,
                 opacity: showAdvanced ? 1 : 0,
                 transition: 'max-height 0.25s ease, opacity 0.2s ease',
               }}
@@ -347,16 +383,86 @@ export default function Runs() {
                       placeholder="Highcharts"
                     />
                   </label>
-                  <label className="space-y-1">
-                    <span className="text-xs font-medium" style={{ color: '#7A8E7C' }}>Model</span>
-                    <input
-                      value={model}
-                      onChange={(e) => setModel(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg text-sm"
-                      style={inputStyle}
-                      placeholder="gpt-4o-mini"
-                    />
-                  </label>
+                  <div className="space-y-2 sm:col-span-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs font-medium" style={{ color: '#7A8E7C' }}>
+                        Models ({effectiveModels.length} selected)
+                      </span>
+                      <label className="inline-flex items-center gap-1.5 text-xs" style={{ color: '#607860' }}>
+                        <input
+                          type="checkbox"
+                          checked={allowMultipleModels}
+                          onChange={(event) => setAllowMultipleModels(event.target.checked)}
+                        />
+                        Allow multiple
+                      </label>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedModels(
+                            allowMultipleModels
+                              ? BENCHMARK_MODEL_VALUES
+                              : [BENCHMARK_MODEL_VALUES[0]],
+                          )
+                        }
+                        className="px-2.5 py-1 rounded-lg text-xs font-medium"
+                        style={{ background: '#EEF5EF', border: '1px solid #C8DDC9', color: '#2C5D30' }}
+                      >
+                        Select all
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedModels([BENCHMARK_MODEL_VALUES[0]])}
+                        className="px-2.5 py-1 rounded-lg text-xs font-medium"
+                        style={{ background: '#F2EDE6', border: '1px solid #DDD0BC', color: '#607860' }}
+                      >
+                        Reset
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {BENCHMARK_MODEL_OPTIONS.map((option) => {
+                        const checked = selectedModels.includes(option.value)
+                        const disabled = !allowMultipleModels && !checked && effectiveModels.length >= 1
+                        return (
+                          <label
+                            key={option.value}
+                            className="flex items-center justify-between gap-2 rounded-lg px-3 py-2"
+                            style={{
+                              border: `1px solid ${checked ? '#8FBB93' : '#DDD0BC'}`,
+                              background: checked ? '#EEF5EF' : '#FFFFFF',
+                              opacity: disabled ? 0.55 : 1,
+                              cursor: disabled ? 'not-allowed' : 'pointer',
+                            }}
+                          >
+                            <span className="text-sm" style={{ color: checked ? '#2A5C2E' : '#2A3A2C' }}>
+                              {option.label}
+                            </span>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={disabled}
+                              onChange={(event) => {
+                                const isChecked = event.target.checked
+                                if (!allowMultipleModels) {
+                                  setSelectedModels(isChecked ? [option.value] : [])
+                                  return
+                                }
+                                setSelectedModels((current) => {
+                                  if (isChecked) {
+                                    return dedupeModels([...current, option.value])
+                                  }
+                                  const next = current.filter((value) => value !== option.value)
+                                  return next.length > 0 ? next : [BENCHMARK_MODEL_VALUES[0]]
+                                })
+                              }}
+                            />
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </div>
                   <label className="space-y-1">
                     <span className="text-xs font-medium" style={{ color: '#7A8E7C' }}>Runs per prompt</span>
                     <input

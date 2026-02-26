@@ -19,6 +19,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/output}"
 LOG_DIR="${LOG_DIR:-${OUTPUT_DIR}/logs}"
 OUR_TERMS="${OUR_TERMS:-Highcharts}"
 MODEL="${MODEL:-gpt-4o-mini}"
+MODELS="${MODELS:-}"
 RUNS="${RUNS:-3}"
 TEMPERATURE="${TEMPERATURE:-0.7}"
 WEB_SEARCH="${WEB_SEARCH:-1}"
@@ -27,13 +28,43 @@ GSHEET_COMPETITOR_TAB_NAME="${GSHEET_COMPETITOR_TAB_NAME:-CompetitorMetrics}"
 BENCHMARK_CONFIG_PATH="${BENCHMARK_CONFIG_PATH:-${ROOT_DIR}/config/benchmark_config.json}"
 SUPABASE_SYNC="${SUPABASE_SYNC:-0}"
 
-MODEL_LOWER="$(echo "${MODEL}" | tr '[:upper:]' '[:lower:]')"
-if [[ "${MODEL_LOWER}" == claude* || "${MODEL_LOWER}" == anthropic/* ]]; then
-  : "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required when MODEL is Claude}"
-elif [[ "${MODEL_LOWER}" == gemini* || "${MODEL_LOWER}" == google/* ]]; then
-  : "${GEMINI_API_KEY:?GEMINI_API_KEY is required when MODEL is Gemini}"
-else
-  : "${OPENAI_API_KEY:?OPENAI_API_KEY is required}"
+TARGET_MODELS="${MODELS:-${MODEL}}"
+IFS=',' read -r -a RAW_MODEL_LIST <<< "${TARGET_MODELS}"
+NORMALIZED_MODELS=()
+for raw_model in "${RAW_MODEL_LIST[@]}"; do
+  trimmed="${raw_model#"${raw_model%%[![:space:]]*}"}"
+  trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+  if [[ -n "${trimmed}" ]]; then
+    NORMALIZED_MODELS+=("${trimmed}")
+  fi
+done
+if [[ "${#NORMALIZED_MODELS[@]}" -eq 0 ]]; then
+  NORMALIZED_MODELS=("gpt-4o-mini")
+fi
+TARGET_MODELS="$(IFS=','; echo "${NORMALIZED_MODELS[*]}")"
+
+NEEDS_OPENAI=0
+NEEDS_ANTHROPIC=0
+NEEDS_GEMINI=0
+for model_name in "${NORMALIZED_MODELS[@]}"; do
+  model_lower="$(echo "${model_name}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "${model_lower}" == claude* || "${model_lower}" == anthropic/* ]]; then
+    NEEDS_ANTHROPIC=1
+  elif [[ "${model_lower}" == gemini* || "${model_lower}" == google/* ]]; then
+    NEEDS_GEMINI=1
+  else
+    NEEDS_OPENAI=1
+  fi
+done
+
+if [[ "${NEEDS_OPENAI}" == "1" ]]; then
+  : "${OPENAI_API_KEY:?OPENAI_API_KEY is required when any selected model is OpenAI-compatible}"
+fi
+if [[ "${NEEDS_ANTHROPIC}" == "1" ]]; then
+  : "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required when any selected model is Claude-compatible}"
+fi
+if [[ "${NEEDS_GEMINI}" == "1" ]]; then
+  : "${GEMINI_API_KEY:?GEMINI_API_KEY is required when any selected model is Gemini-compatible}"
 fi
 
 mkdir -p "${OUTPUT_DIR}" "${LOG_DIR}"
@@ -53,13 +84,14 @@ echo "root_dir=${ROOT_DIR}"
 echo "output_dir=${OUTPUT_DIR}"
 echo "run_month=${RUN_MONTH}"
 echo "run_id=${RUN_ID}"
+echo "models=${TARGET_MODELS}"
 echo "log_file=${LOG_FILE}"
 
 BENCH_CMD=(
   python3
   "${ROOT_DIR}/llm_mention_benchmark.py"
   --our-terms "${OUR_TERMS}"
-  --model "${MODEL}"
+  --model "${TARGET_MODELS}"
   --runs "${RUNS}"
   --temperature "${TEMPERATURE}"
   --output-dir "${OUTPUT_DIR}"

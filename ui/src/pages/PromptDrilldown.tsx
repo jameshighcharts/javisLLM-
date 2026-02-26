@@ -594,7 +594,7 @@ function ResponseExplorer({
     () =>
       responses.map((response) => {
         const tags = extractOutputTags(response.responseText)
-        const modelOwner = inferModelOwner(response.model)
+        const modelOwner = response.modelOwner ?? inferModelOwner(response.model)
         return {
           response,
           modelOwner,
@@ -753,7 +753,7 @@ function ResponseExplorer({
           const output = isExpanded
             ? response.responseText
             : truncate(response.responseText, 420)
-          const modelOwner = inferModelOwner(response.model)
+          const modelOwner = response.modelOwner ?? inferModelOwner(response.model)
 
           return (
             <div

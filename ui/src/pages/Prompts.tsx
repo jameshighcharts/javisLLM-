@@ -2,10 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api'
+import { BENCHMARK_MODEL_OPTIONS, BENCHMARK_MODEL_VALUES, dedupeModels } from '../modelOptions'
 import type {
   BenchmarkConfig,
   BenchmarkWorkflowRun,
   DashboardResponse,
+  PromptLabRunResult,
   PromptStatus,
 } from '../types'
 
@@ -1262,6 +1264,11 @@ interface LabMention {
   count: number
 }
 
+interface QueryLabResultView {
+  result: PromptLabRunResult
+  mentions: LabMention[]
+}
+
 const LAB_SUGGESTIONS = [
   'best javascript charting library for React',
   'highcharts vs chart.js comparison',
@@ -1281,6 +1288,16 @@ function dedupeCaseInsensitive(values: string[]): string[] {
     out.push(trimmed)
   }
   return out
+}
+
+function isOpenAiModelId(model: string): boolean {
+  const normalized = model.trim().toLowerCase()
+  return (
+    normalized.startsWith('gpt') ||
+    normalized.startsWith('o1') ||
+    normalized.startsWith('o3') ||
+    normalized.startsWith('openai/')
+  )
 }
 
 function escapeRegExp(value: string): string {
@@ -1376,22 +1393,31 @@ function QueryLab({
 }) {
   const [queryText, setQueryText] = useState('')
   const [status, setStatus] = useState<LabStatus>('idle')
-  const [response, setResponse] = useState('')
-  const [mentions, setMentions] = useState<LabMention[]>([])
+  const [resultViews, setResultViews] = useState<QueryLabResultView[]>([])
   const [errorText, setErrorText] = useState('')
-  const [model, setModel] = useState('gpt-4o-mini')
+  const [allowMultipleModels, setAllowMultipleModels] = useState(true)
+  const [selectedModels, setSelectedModels] = useState<string[]>([BENCHMARK_MODEL_VALUES[0]])
   const [webSearch, setWebSearch] = useState(true)
   const [elapsedMs, setElapsedMs] = useState(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const aliasLookup = useMemo(() => buildAliasLookup(aliasesByEntity), [aliasesByEntity])
+  const effectiveModels = useMemo(
+    () =>
+      allowMultipleModels
+        ? dedupeModels(selectedModels)
+        : dedupeModels(selectedModels).slice(0, 1),
+    [allowMultipleModels, selectedModels],
+  )
+  const hasOpenAiModel = useMemo(
+    () => effectiveModels.some((model) => isOpenAiModelId(model)),
+    [effectiveModels],
+  )
 
   const canRun =
     queryText.trim().length > 0 &&
-    status !== 'running'
-  const normalizedModel = model.trim().toLowerCase()
-  const isOpenAiModel =
-    normalizedModel.startsWith('gpt') || normalizedModel.startsWith('o1') || normalizedModel.startsWith('o3') || normalizedModel.startsWith('openai/')
+    status !== 'running' &&
+    effectiveModels.length > 0
 
   function startTimer() {
     const t0 = Date.now()
@@ -1403,30 +1429,76 @@ function QueryLab({
 
   useEffect(() => () => stopTimer(), [])
 
+  useEffect(() => {
+    if (!allowMultipleModels) {
+      setSelectedModels((current) => {
+        const normalized = dedupeModels(current)
+        return normalized.length > 0 ? [normalized[0]] : [BENCHMARK_MODEL_VALUES[0]]
+      })
+    }
+  }, [allowMultipleModels])
+
   async function handleRun() {
     if (!canRun) return
     const normalizedQuery = queryText.trim()
     setStatus('running')
-    setResponse('')
-    setMentions([])
+    setResultViews([])
     setErrorText('')
     setElapsedMs(0)
     startTimer()
     try {
-      const result = await api.promptLabRun({
+      const response = await api.promptLabRun({
         query: normalizedQuery,
-        model,
-        webSearch: isOpenAiModel ? webSearch : false,
+        model: effectiveModels[0],
+        models: effectiveModels,
+        webSearch: hasOpenAiModel ? webSearch : false,
       })
-      if (onQueryRun) {
+      if (response.summary.successCount > 0 && onQueryRun) {
         await onQueryRun(normalizedQuery)
       }
-      const responseText =
-        result.responseText.trim() || 'Model returned an empty response.'
-      const detected = detectMentions(responseText, trackedEntities, aliasLookup)
-      setResponse(responseText)
-      setMentions(detected)
-      setStatus('done')
+      const normalizedResults =
+        response.results?.length > 0
+          ? response.results
+          : [
+              {
+                ok: response.ok,
+                model: response.model ?? effectiveModels[0],
+                provider: response.provider ?? 'openai',
+                modelOwner: response.modelOwner ?? 'Unknown',
+                webSearchEnabled: response.webSearchEnabled,
+                responseText: response.responseText,
+                citations: response.citations,
+                durationMs: response.durationMs,
+                error: response.ok ? null : 'Run failed',
+                tokens: response.tokens ?? {
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  totalTokens: 0,
+                },
+              },
+            ]
+
+      const nextViews = normalizedResults.map((item) => {
+        const text = (item.responseText || '').trim()
+        return {
+          result: {
+            ...item,
+            responseText: text || (item.ok ? 'Model returned an empty response.' : ''),
+          },
+          mentions: text
+            ? detectMentions(text, trackedEntities, aliasLookup)
+            : [],
+        }
+      })
+
+      setResultViews(nextViews)
+      setStatus(response.summary.successCount > 0 ? 'done' : 'error')
+      if (response.summary.successCount === 0) {
+        const firstError =
+          nextViews.find((view) => view.result.error)?.result.error ??
+          'All selected models failed.'
+        setErrorText(normalizeQueryLabErrorMessage(firstError))
+      }
     } catch (error) {
       setErrorText(normalizeQueryLabErrorMessage(error))
       setStatus('error')
@@ -1436,7 +1508,32 @@ function QueryLab({
   }
 
   const elapsedSec = (elapsedMs / 1000).toFixed(1)
-  const maxCount = mentions.length > 0 ? Math.max(...mentions.map((m) => m.count)) : 1
+  const resultSummary = useMemo(() => {
+    const base = {
+      modelCount: resultViews.length,
+      successCount: 0,
+      failureCount: 0,
+      totalDurationMs: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalTokens: 0,
+    }
+
+    for (const { result } of resultViews) {
+      const failed = Boolean(result.error) || !result.ok
+      if (failed) {
+        base.failureCount += 1
+      } else {
+        base.successCount += 1
+      }
+      base.totalDurationMs += Math.max(0, Math.round(result.durationMs ?? 0))
+      base.totalInputTokens += Math.max(0, Math.round(result.tokens?.inputTokens ?? 0))
+      base.totalOutputTokens += Math.max(0, Math.round(result.tokens?.outputTokens ?? 0))
+      base.totalTokens += Math.max(0, Math.round(result.tokens?.totalTokens ?? 0))
+    }
+
+    return base
+  }, [resultViews])
 
   return (
     <div
@@ -1520,74 +1617,205 @@ function QueryLab({
           </div>
 
           {/* Controls row */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              {/* Model pill */}
-              <select
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                style={{
-                  appearance: 'none', WebkitAppearance: 'none',
-                  background: '#F2EDE6', border: '1px solid #DCCFBC',
-                  borderRadius: 20, padding: '5px 12px',
-                  fontSize: 11, fontWeight: 600, color: '#4A6050', cursor: 'pointer',
-                  letterSpacing: '0.01em',
-                }}
-              >
-                <option value="gpt-4o-mini">GPT-4o mini</option>
-                <option value="gpt-4o">GPT-4o</option>
-                <option value="gpt-5.2">GPT 5.2</option>
-                <option value="claude-3-5-sonnet-latest">Claude 3.5 Sonnet</option>
-                <option value="claude-4-6-sonnet-latest">Claude Sonnet 4.6</option>
-                <option value="claude-4-6-opus-latest">Claude Opus 4.6</option>
-                <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-                <option value="gemini-3.0-flash">Gemini 3.0 Flash</option>
-              </select>
-
-              {/* Web search */}
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
-                <Toggle active={webSearch} onChange={setWebSearch} disabled={!isOpenAiModel} />
-                <span style={{ fontSize: 11, color: '#7A8E7C', fontWeight: 500 }}>
-                  {!isOpenAiModel ? 'Web search (OpenAI only)' : 'Web search'}
-                </span>
-              </label>
-            </div>
-
-            {/* Run button */}
-            <button
-              type="button"
-              onClick={() => { void handleRun() }}
-              disabled={!canRun}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+            <div
               style={{
-                display: 'inline-flex', alignItems: 'center', gap: 7,
-                padding: '9px 22px', borderRadius: 12,
-                background: canRun ? '#2A6032' : '#EDEBE6',
-                color: canRun ? '#FFFFFF' : '#B0BAB2',
-                border: `1.5px solid ${canRun ? '#1C4826' : 'transparent'}`,
-                cursor: canRun ? 'pointer' : 'not-allowed',
-                fontSize: 13, fontWeight: 700,
-                boxShadow: canRun ? '0 2px 14px rgba(42,96,50,0.28)' : 'none',
-                transition: 'all 0.15s',
-                letterSpacing: '-0.01em',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 10,
+                flexWrap: 'wrap',
               }}
             >
-              {status === 'running' ? (
-                <>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{ animation: 'spin-lab 0.85s linear infinite' }}>
-                    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                  </svg>
-                  <span className="tabular-nums">{elapsedSec}s</span>
-                </>
-              ) : (
-                <>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                    <polygon points="5,3 19,12 5,21" />
-                  </svg>
-                  Run
-                  <span style={{ fontSize: 10, opacity: 0.5, fontWeight: 400 }}>⌘↵</span>
-                </>
-              )}
-            </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: '#7A8E7C',
+                    fontWeight: 600,
+                    padding: '5px 8px',
+                    borderRadius: 12,
+                    background: '#F2EDE6',
+                    border: '1px solid #DDD0BC',
+                  }}
+                >
+                  Models: {effectiveModels.length}
+                </span>
+
+                <label
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    cursor: 'pointer',
+                    userSelect: 'none',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={allowMultipleModels}
+                    onChange={(event) => setAllowMultipleModels(event.target.checked)}
+                  />
+                  <span style={{ fontSize: 11, color: '#607860', fontWeight: 600 }}>
+                    Allow multiple
+                  </span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedModels(
+                      allowMultipleModels
+                        ? BENCHMARK_MODEL_VALUES
+                        : [BENCHMARK_MODEL_VALUES[0]],
+                    )
+                  }
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: '#2A5C2E',
+                    background: '#EEF5EF',
+                    border: '1px solid #C8DDC9',
+                    borderRadius: 12,
+                    padding: '5px 9px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Select all
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedModels([BENCHMARK_MODEL_VALUES[0]])}
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: '#607860',
+                    background: '#F2EDE6',
+                    border: '1px solid #DDD0BC',
+                    borderRadius: 12,
+                    padding: '5px 9px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Reset
+                </button>
+
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    cursor: 'pointer',
+                    userSelect: 'none',
+                  }}
+                >
+                  <Toggle active={webSearch} onChange={setWebSearch} disabled={!hasOpenAiModel} />
+                  <span style={{ fontSize: 11, color: '#7A8E7C', fontWeight: 500 }}>
+                    {!hasOpenAiModel ? 'Web search (OpenAI only)' : 'Web search'}
+                  </span>
+                </label>
+              </div>
+
+              {/* Run button */}
+              <button
+                type="button"
+                onClick={() => {
+                  void handleRun()
+                }}
+                disabled={!canRun}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  padding: '9px 22px',
+                  borderRadius: 12,
+                  background: canRun ? '#2A6032' : '#EDEBE6',
+                  color: canRun ? '#FFFFFF' : '#B0BAB2',
+                  border: `1.5px solid ${canRun ? '#1C4826' : 'transparent'}`,
+                  cursor: canRun ? 'pointer' : 'not-allowed',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  boxShadow: canRun ? '0 2px 14px rgba(42,96,50,0.28)' : 'none',
+                  transition: 'all 0.15s',
+                  letterSpacing: '-0.01em',
+                }}
+              >
+                {status === 'running' ? (
+                  <>
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      style={{ animation: 'spin-lab 0.85s linear infinite' }}
+                    >
+                      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                    </svg>
+                    <span className="tabular-nums">{elapsedSec}s</span>
+                  </>
+                ) : (
+                  <>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                      <polygon points="5,3 19,12 5,21" />
+                    </svg>
+                    Run
+                    <span style={{ fontSize: 10, opacity: 0.5, fontWeight: 400 }}>⌘↵</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div className="query-lab-model-grid">
+              {BENCHMARK_MODEL_OPTIONS.map((option) => {
+                const checked = selectedModels.includes(option.value)
+                const disabled = !allowMultipleModels && !checked && effectiveModels.length >= 1
+                return (
+                  <label
+                    key={option.value}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      border: `1px solid ${checked ? '#8FBB93' : '#DDD0BC'}`,
+                      background: checked ? '#EEF5EF' : '#FFFFFF',
+                      borderRadius: 10,
+                      padding: '7px 10px',
+                      opacity: disabled ? 0.55 : 1,
+                      cursor: disabled ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    <span style={{ fontSize: 11, color: checked ? '#2A5C2E' : '#2A3A2C', fontWeight: 600 }}>
+                      {option.label}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={disabled}
+                      onChange={(event) => {
+                        const isChecked = event.target.checked
+                        if (!allowMultipleModels) {
+                          setSelectedModels(isChecked ? [option.value] : [BENCHMARK_MODEL_VALUES[0]])
+                          return
+                        }
+
+                        setSelectedModels((current) => {
+                          if (isChecked) {
+                            return dedupeModels([...current, option.value])
+                          }
+                          const next = current.filter((model) => model !== option.value)
+                          return next.length > 0 ? next : [BENCHMARK_MODEL_VALUES[0]]
+                        })
+                      }}
+                    />
+                  </label>
+                )
+              })}
+            </div>
           </div>
         </div>
 
@@ -1636,7 +1864,9 @@ function QueryLab({
                     }}
                   />
                 ))}
-                <span style={{ fontSize: 11, color: '#8EA890', marginLeft: 4 }}>Querying model…</span>
+                <span style={{ fontSize: 11, color: '#8EA890', marginLeft: 4 }}>
+                  Querying {effectiveModels.length} model{effectiveModels.length === 1 ? '' : 's'}…
+                </span>
               </div>
               {[88, 72, 82, 58, 76, 48].map((w, i) => (
                 <div key={i} style={{ height: 9, width: `${w}%`, borderRadius: 6, background: '#E8E0D4', animation: 'pulse 1.5s ease-in-out infinite', animationDelay: `${i * 0.1}s` }} />
@@ -1644,64 +1874,316 @@ function QueryLab({
             </div>
           )}
 
-          {/* DONE */}
-          {status === 'done' && (
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              {/* Response text */}
+          {/* DONE / PARTIAL */}
+          {(status === 'done' || (status === 'error' && resultViews.length > 0)) && (
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
               <div
                 style={{
-                  flex: 1, overflowY: 'auto', padding: '14px 16px',
-                  fontSize: 12, lineHeight: 1.65, color: '#2A3A2C',
-                  borderBottom: mentions.length > 0 ? '1px solid #EDE7DA' : 'none',
-                  maxHeight: mentions.length > 0 ? 200 : 'none',
+                  padding: '12px 16px',
+                  borderBottom: '1px solid #EDE7DA',
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 8,
+                  background: '#F3EFE8',
                 }}
               >
-                {response.split('\n\n').map((para, i, arr) => (
-                  <p key={i} style={{ marginBottom: i < arr.length - 1 ? 8 : 0 }}>{para}</p>
-                ))}
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: '#2A3A2C',
+                    background: '#FFFFFF',
+                    border: '1px solid #DDD0BC',
+                    borderRadius: 999,
+                    padding: '3px 8px',
+                  }}
+                >
+                  {resultSummary.modelCount} model{resultSummary.modelCount === 1 ? '' : 's'}
+                </span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: '#2C5D30',
+                    background: '#EEF5EF',
+                    border: '1px solid #C8DDC9',
+                    borderRadius: 999,
+                    padding: '3px 8px',
+                  }}
+                >
+                  Success: {resultSummary.successCount}
+                </span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: '#8A4B20',
+                    background: '#FFF6EA',
+                    border: '1px solid #F0D4A8',
+                    borderRadius: 999,
+                    padding: '3px 8px',
+                  }}
+                >
+                  Failed: {resultSummary.failureCount}
+                </span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: '#5A6E5D',
+                    background: '#FFFFFF',
+                    border: '1px solid #DDD0BC',
+                    borderRadius: 999,
+                    padding: '3px 8px',
+                  }}
+                >
+                  Total tokens: {resultSummary.totalTokens.toLocaleString()}
+                </span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: '#5A6E5D',
+                    background: '#FFFFFF',
+                    border: '1px solid #DDD0BC',
+                    borderRadius: 999,
+                    padding: '3px 8px',
+                  }}
+                >
+                  Total duration: {(resultSummary.totalDurationMs / 1000).toFixed(2)}s
+                </span>
               </div>
 
-              {/* Entity bars */}
-              {mentions.length > 0 && (
-                <div style={{ padding: '12px 16px', flexShrink: 0 }}>
-                  <p style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.09em', color: '#BCCABE', marginBottom: 10 }}>
-                    Entities detected
-                  </p>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {mentions.map((m) => {
-                      const isHC = m.entity.toLowerCase() === 'highcharts'
-                      return (
-                        <div key={m.entity} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 5, width: 88, flexShrink: 0 }}>
-                            {getEntityLogo(m.entity) && <EntityLogo entity={m.entity} size={12} />}
-                            <span style={{ fontSize: 11, fontWeight: 600, color: isHC ? '#2A5C30' : '#4A6050', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {m.entity}
-                            </span>
-                          </div>
-                          <div style={{ flex: 1, height: 5, borderRadius: 4, background: '#E8E0D4', overflow: 'hidden' }}>
-                            <div
-                              style={{
-                                height: '100%', borderRadius: 4,
-                                width: `${(m.count / maxCount) * 100}%`,
-                                background: isHC ? '#3A7040' : '#8FBB93',
-                                transition: 'width 0.55s cubic-bezier(.4,0,.2,1)',
-                              }}
-                            />
-                          </div>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: '#8EA890', minWidth: 22, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                            ×{m.count}
-                          </span>
-                        </div>
-                      )
-                    })}
-                  </div>
+              {status === 'error' && errorText && (
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: '#B34A4A',
+                    borderBottom: '1px solid #F5D9D9',
+                    background: '#FFF5F5',
+                    padding: '9px 12px',
+                  }}
+                >
+                  {errorText}
                 </div>
               )}
+
+              <div
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  overflowY: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                  padding: 12,
+                }}
+              >
+                {resultViews.map((view) => {
+                  const { result, mentions } = view
+                  const hasError = Boolean(result.error) || !result.ok
+                  const maxMentionCount = Math.max(
+                    1,
+                    ...mentions.map((mention) => mention.count),
+                  )
+                  const modelLabel =
+                    BENCHMARK_MODEL_OPTIONS.find((option) => option.value === result.model)?.label ??
+                    result.model
+
+                  return (
+                    <div
+                      key={`${result.model}:${result.provider}:${result.durationMs}:${result.error ?? 'ok'}`}
+                      style={{
+                        background: '#FFFFFF',
+                        border: `1px solid ${hasError ? '#F3CFCF' : '#DDD0BC'}`,
+                        borderRadius: 12,
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        style={{
+                          padding: '10px 12px',
+                          borderBottom: '1px solid #EFE8DC',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 10,
+                          flexWrap: 'wrap',
+                          background: hasError ? '#FFF8F8' : '#FCFAF5',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: '#2A3A2C' }}>
+                            {modelLabel}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 600,
+                              color: '#607860',
+                              background: '#EEF5EF',
+                              border: '1px solid #C8DDC9',
+                              borderRadius: 999,
+                              padding: '2px 7px',
+                            }}
+                          >
+                            {result.modelOwner}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 600,
+                              color: '#8A7C68',
+                              background: '#F2EDE6',
+                              border: '1px solid #DDD0BC',
+                              borderRadius: 999,
+                              padding: '2px 7px',
+                            }}
+                          >
+                            {result.provider}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 600,
+                              color: result.webSearchEnabled ? '#2A5C2E' : '#8A7C68',
+                              background: result.webSearchEnabled ? '#EEF5EF' : '#F2EDE6',
+                              border: `1px solid ${result.webSearchEnabled ? '#C8DDC9' : '#DDD0BC'}`,
+                              borderRadius: 999,
+                              padding: '2px 7px',
+                            }}
+                          >
+                            {result.webSearchEnabled ? 'Web search on' : 'Web search off'}
+                          </span>
+                        </div>
+                        <span
+                          style={{
+                            fontSize: 10,
+                            fontWeight: 700,
+                            color: hasError ? '#B34A4A' : '#2C5D30',
+                            background: hasError ? '#FFEDED' : '#EEF5EF',
+                            border: `1px solid ${hasError ? '#F6C4C4' : '#C8DDC9'}`,
+                            borderRadius: 999,
+                            padding: '2px 8px',
+                          }}
+                        >
+                          {hasError ? 'Failed' : 'Succeeded'}
+                        </span>
+                      </div>
+
+                      <div style={{ padding: '10px 12px', display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 11, color: '#607860', fontWeight: 600 }}>
+                          Duration: {(Math.max(0, result.durationMs) / 1000).toFixed(2)}s
+                        </span>
+                        <span style={{ fontSize: 11, color: '#607860', fontWeight: 600 }}>
+                          Input: {Math.max(0, result.tokens.inputTokens).toLocaleString()}
+                        </span>
+                        <span style={{ fontSize: 11, color: '#607860', fontWeight: 600 }}>
+                          Output: {Math.max(0, result.tokens.outputTokens).toLocaleString()}
+                        </span>
+                        <span style={{ fontSize: 11, color: '#607860', fontWeight: 600 }}>
+                          Total: {Math.max(0, result.tokens.totalTokens).toLocaleString()}
+                        </span>
+                      </div>
+
+                      {hasError ? (
+                        <div style={{ padding: '0 12px 12px', fontSize: 11, color: '#B34A4A' }}>
+                          {result.error || 'Model run failed.'}
+                        </div>
+                      ) : (
+                        <>
+                          <div
+                            style={{
+                              padding: '0 12px 12px',
+                              fontSize: 12,
+                              lineHeight: 1.6,
+                              color: '#2A3A2C',
+                            }}
+                          >
+                            {result.responseText
+                              .split('\n\n')
+                              .filter((paragraph) => paragraph.trim().length > 0)
+                              .map((paragraph, index, allParagraphs) => (
+                                <p
+                                  key={`${result.model}-para-${index}`}
+                                  style={{ marginBottom: index < allParagraphs.length - 1 ? 8 : 0 }}
+                                >
+                                  {paragraph}
+                                </p>
+                              ))}
+                          </div>
+
+                          {mentions.length > 0 && (
+                            <div style={{ padding: '0 12px 12px', display: 'flex', flexDirection: 'column', gap: 7 }}>
+                              <p
+                                style={{
+                                  fontSize: 9,
+                                  fontWeight: 700,
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.09em',
+                                  color: '#BCCABE',
+                                }}
+                              >
+                                Entities detected
+                              </p>
+                              {mentions.map((mention) => {
+                                const isHC = mention.entity.toLowerCase() === 'highcharts'
+                                return (
+                                  <div key={`${result.model}-${mention.entity}`} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, width: 108, flexShrink: 0 }}>
+                                      {getEntityLogo(mention.entity) && <EntityLogo entity={mention.entity} size={12} />}
+                                      <span
+                                        style={{
+                                          fontSize: 11,
+                                          fontWeight: 600,
+                                          color: isHC ? '#2A5C30' : '#4A6050',
+                                          overflow: 'hidden',
+                                          textOverflow: 'ellipsis',
+                                          whiteSpace: 'nowrap',
+                                        }}
+                                      >
+                                        {mention.entity}
+                                      </span>
+                                    </div>
+                                    <div style={{ flex: 1, height: 5, borderRadius: 4, background: '#E8E0D4', overflow: 'hidden' }}>
+                                      <div
+                                        style={{
+                                          height: '100%',
+                                          borderRadius: 4,
+                                          width: `${(mention.count / maxMentionCount) * 100}%`,
+                                          background: isHC ? '#3A7040' : '#8FBB93',
+                                          transition: 'width 0.55s cubic-bezier(.4,0,.2,1)',
+                                        }}
+                                      />
+                                    </div>
+                                    <span
+                                      style={{
+                                        fontSize: 11,
+                                        fontWeight: 700,
+                                        color: '#8EA890',
+                                        minWidth: 24,
+                                        textAlign: 'right',
+                                        fontVariantNumeric: 'tabular-nums',
+                                      }}
+                                    >
+                                      ×{mention.count}
+                                    </span>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           )}
 
           {/* ERROR */}
-          {status === 'error' && (
+          {status === 'error' && resultViews.length === 0 && (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center', gap: 6 }}>
               <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: '#E09090' }}>
                 <circle cx="12" cy="12" r="10" />
@@ -1727,6 +2209,11 @@ function QueryLab({
           display: grid;
           grid-template-columns: minmax(0, 1fr) minmax(320px, 520px);
         }
+        .query-lab-model-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
         @keyframes spin-lab { to { transform: rotate(360deg); } }
         @keyframes pulse-lab-dot { 0%, 100% { opacity: 0.2; transform: scale(0.7); } 50% { opacity: 1; transform: scale(1); } }
         @media (max-width: 1100px) {
@@ -1736,6 +2223,9 @@ function QueryLab({
           .query-lab-left {
             border-right: none !important;
             border-bottom: 1px solid #EDE7DA;
+          }
+          .query-lab-model-grid {
+            grid-template-columns: 1fr;
           }
         }
       `}</style>
@@ -2132,6 +2622,18 @@ export default function Prompts() {
 
   return (
     <div className="max-w-[1360px] space-y-5">
+      <div className="flex justify-end">
+        <Link
+          to="/under-the-hood"
+          className="inline-flex items-center gap-1 text-xs font-medium"
+          style={{ color: '#6B8470' }}
+        >
+          View Under the Hood Stats
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <path d="M3 9L9 3M9 3H4.5M9 3V7.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </Link>
+      </div>
       {/* ── Query Lab ──────────────────────────────────────────────────────── */}
       <QueryLab
         trackedEntities={competitors}

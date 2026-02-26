@@ -14,6 +14,10 @@ on:
         description: "LLM model (OpenAI, Claude, or Gemini)"
         required: false
         default: "gpt-4o-mini"
+      models:
+        description: "Optional comma-separated model list (overrides model)"
+        required: false
+        default: ""
       runs:
         description: "Runs per prompt (1-3)"
         required: false
@@ -75,6 +79,7 @@ jobs:
         env:
           OUR_TERMS_INPUT: ${{ github.event.inputs.our_terms }}
           MODEL_INPUT: ${{ github.event.inputs.model }}
+          MODELS_INPUT: ${{ github.event.inputs.models }}
           RUNS_INPUT: ${{ github.event.inputs.runs }}
           TEMP_INPUT: ${{ github.event.inputs.temperature }}
           WEB_SEARCH_INPUT: ${{ github.event.inputs.web_search }}
@@ -96,8 +101,22 @@ jobs:
             exit 1
           fi
 
-          if [[ ! "${MODEL_INPUT}" =~ ^[A-Za-z0-9_.:-]{1,64}$ ]]; then
-            echo "model contains unsupported characters or is too long"
+          TARGET_MODELS="${MODELS_INPUT:-${MODEL_INPUT}}"
+          IFS=',' read -r -a MODEL_LIST <<< "${TARGET_MODELS}"
+          VALID_MODEL_COUNT=0
+          for MODEL_NAME in "${MODEL_LIST[@]}"; do
+            MODEL_TRIMMED="$(echo "${MODEL_NAME}" | xargs)"
+            if [[ -z "${MODEL_TRIMMED}" ]]; then
+              continue
+            fi
+            if [[ ! "${MODEL_TRIMMED}" =~ ^[A-Za-z0-9_.:-]{1,64}$ ]]; then
+              echo "model contains unsupported characters or is too long: ${MODEL_TRIMMED}"
+              exit 1
+            fi
+            VALID_MODEL_COUNT=$((VALID_MODEL_COUNT + 1))
+          done
+          if (( VALID_MODEL_COUNT < 1 )); then
+            echo "At least one valid model is required."
             exit 1
           fi
 
@@ -134,13 +153,15 @@ jobs:
           TEMP_INPUT: ${{ github.event.inputs.temperature }}
           OUR_TERMS_INPUT: ${{ github.event.inputs.our_terms }}
           MODEL_INPUT: ${{ github.event.inputs.model }}
+          MODELS_INPUT: ${{ github.event.inputs.models }}
           WEB_SEARCH_INPUT: ${{ github.event.inputs.web_search }}
         run: |
           set -euo pipefail
+          TARGET_MODELS="${MODELS_INPUT:-${MODEL_INPUT}}"
           CMD=(
             python llm_mention_benchmark.py
             --our-terms "${OUR_TERMS_INPUT}"
-            --model "${MODEL_INPUT}"
+            --model "${TARGET_MODELS}"
             --runs "${RUNS_INPUT}"
             --temperature "${TEMP_INPUT}"
             --output-dir output
