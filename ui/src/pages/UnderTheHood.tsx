@@ -330,8 +330,52 @@ export default function UnderTheHood() {
   const calculatorTotalCostUsd = (calculatorCostPerPrompt?.totalCostUsd ?? 0) * Math.max(0, calculatorPromptCount)
 
   // ── Chart data ──────────────────────────────────────────────────────────
-  const chartModels = statsWithCosts.filter((i) => i.totalInputTokens + i.totalOutputTokens > 0)
-  const chartLabels = chartModels.map((i) => shortModelName(i.model))
+  const aggregatedChartModels = useMemo(
+    () =>
+      [...statsWithCosts.reduce((map, item) => {
+        const label = shortModelName(item.model)
+        const existing = map.get(label)
+        if (existing) {
+          existing.responseCount += item.responseCount
+          existing.totalInputTokens += item.totalInputTokens
+          existing.totalOutputTokens += item.totalOutputTokens
+          if (item.costs) {
+            existing.inputCostUsd += item.costs.inputCostUsd
+            existing.outputCostUsd += item.costs.outputCostUsd
+            existing.hasCosts = true
+          }
+          return map
+        }
+
+        map.set(label, {
+          label,
+          responseCount: item.responseCount,
+          totalInputTokens: item.totalInputTokens,
+          totalOutputTokens: item.totalOutputTokens,
+          inputCostUsd: item.costs?.inputCostUsd ?? 0,
+          outputCostUsd: item.costs?.outputCostUsd ?? 0,
+          hasCosts: Boolean(item.costs),
+        })
+        return map
+      }, new Map<string, {
+        label: string
+        responseCount: number
+        totalInputTokens: number
+        totalOutputTokens: number
+        inputCostUsd: number
+        outputCostUsd: number
+        hasCosts: boolean
+      }>()).values()]
+        .sort((l, r) =>
+          r.responseCount !== l.responseCount
+            ? r.responseCount - l.responseCount
+            : l.label.localeCompare(r.label),
+        ),
+    [statsWithCosts],
+  )
+
+  const chartModels = aggregatedChartModels.filter((i) => i.totalInputTokens + i.totalOutputTokens > 0)
+  const chartLabels = chartModels.map((i) => i.label)
 
   const tokenChartOptions: Highcharts.Options = {
     ...CHART_BASE,
@@ -360,8 +404,8 @@ export default function UnderTheHood() {
     ],
   }
 
-  const costChartModels = statsWithCosts.filter((i) => i.costs)
-  const costChartLabels = costChartModels.map((i) => shortModelName(i.model))
+  const costChartModels = aggregatedChartModels.filter((i) => i.hasCosts)
+  const costChartLabels = costChartModels.map((i) => i.label)
 
   const costChartOptions: Highcharts.Options = {
     ...CHART_BASE,
@@ -385,8 +429,8 @@ export default function UnderTheHood() {
       },
     },
     series: [
-      { name: 'Input cost', type: 'bar', data: costChartModels.map((i) => i.costs?.inputCostUsd ?? 0), color: '#F0C87A' },
-      { name: 'Output cost', type: 'bar', data: costChartModels.map((i) => i.costs?.outputCostUsd ?? 0), color: '#C87A30' },
+      { name: 'Input cost', type: 'bar', data: costChartModels.map((i) => i.inputCostUsd), color: '#F0C87A' },
+      { name: 'Output cost', type: 'bar', data: costChartModels.map((i) => i.outputCostUsd), color: '#C87A30' },
     ],
   }
 

@@ -186,6 +186,11 @@ Schema SQL:
 - `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/004_prompt_query_tags.sql`
 - `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/005_competitor_blog_posts.sql`
 - `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/006_benchmark_response_model_metrics.sql`
+- `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/007_pgmq_job_queue.sql`
+- `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/008_materialized_views.sql`
+- `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/009_enqueue_benchmark_run.sql`
+- `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/010_fix_finalize_overall_score.sql`
+- `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/011_exclude_failed_from_visibility.sql`
 Apply in numeric order when provisioning a new project.
 
 Environment variables:

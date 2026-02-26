@@ -1294,43 +1294,6 @@ function summarizePromptLabModelResults(
   );
 }
 
-function inferPromptResponseCount(row: CsvRow | undefined, competitors: string[]): number | null {
-  if (!row) {
-    return null;
-  }
-
-  const estimates: number[] = [];
-
-  for (const competitor of competitors) {
-    const key = slugifyEntity(competitor);
-    const count = asNumber(row[`${key}_count`]);
-    const rate = asNumber(row[`${key}_rate`]);
-    if (count > 0 && rate > 0) {
-      const estimate = count / rate;
-      if (Number.isFinite(estimate) && estimate > 0) {
-        estimates.push(estimate);
-      }
-    }
-  }
-
-  const rivals = competitors.filter((name) => name.toLowerCase() !== "highcharts");
-  const viabilityCount = asNumber(row.viability_index_count);
-  const viabilityRate = asNumber(row.viability_index_rate);
-  if (rivals.length > 0 && viabilityCount > 0 && viabilityRate > 0) {
-    const estimate = viabilityCount / viabilityRate / rivals.length;
-    if (Number.isFinite(estimate) && estimate > 0) {
-      estimates.push(estimate);
-    }
-  }
-
-  if (estimates.length === 0) {
-    return null;
-  }
-
-  const average = estimates.reduce((sum, value) => sum + value, 0) / estimates.length;
-  return Math.max(0, Math.round(average));
-}
-
 function normalizeConfig(rawConfig: BenchmarkConfig): BenchmarkConfig {
   const queries = uniqueNonEmpty(rawConfig.queries);
   const queryTags = normalizeQueryTagsMap(queries, rawConfig.queryTags);
@@ -3154,22 +3117,8 @@ app.get("/api/dashboard", async (_req, res) => {
           }));
 
     const promptLookup = new Map(queryRows.map((row) => [row.query, row]));
-    const latestRunId =
-      jsonlRows
-        .map((row) => ({
-          runId: String(row.run_id ?? row.runId ?? "").trim(),
-          rowTimestampMs:
-            timestampMs(row.timestamp) ??
-            timestampMs(row.created_at) ??
-            timestampMs(row.run_created_at),
-        }))
-        .filter((entry) => Boolean(entry.runId) && entry.rowTimestampMs !== null)
-        .sort((left, right) => (right.rowTimestampMs ?? 0) - (left.rowTimestampMs ?? 0))
-        .at(0)?.runId ?? null;
-
-    const latestRunRows = latestRunId
-      ? jsonlRows.filter((row) => String(row.run_id ?? row.runId ?? "").trim() === latestRunId)
-      : jsonlRows;
+    // JSONL artifacts are rewritten per benchmark run, so the full file is the active snapshot.
+    const latestRunRows = jsonlRows;
 
     const responsesByQueryKey = new Map<string, Array<Record<string, unknown>>>();
     for (const row of latestRunRows) {
@@ -3188,7 +3137,9 @@ app.get("/api/dashboard", async (_req, res) => {
     const promptStatus = config.queries.map((query) => {
       const row = promptLookup.get(query);
       const queryResponses = responsesByQueryKey.get(query.trim().toLowerCase()) ?? [];
-      const latestRunResponseCount = inferPromptResponseCount(row, config.competitors);
+      const latestRunResponseCount = row
+        ? Math.max(0, Math.round(asNumber(row.runs)))
+        : 0;
       const latestInputTokens = queryResponses.reduce(
         (sum, responseRow) =>
           sum +
@@ -3261,7 +3212,7 @@ app.get("/api/dashboard", async (_req, res) => {
           entity: name,
           entityKey,
           isHighcharts: name.toLowerCase() === "highcharts",
-          mentions: asNumber(row?.[`${entityKey}_count`]),
+          mentions: Math.max(0, Math.round(asNumber(row?.[`${entityKey}_count`]))),
           ratePct: Number((asNumber(row?.[`${entityKey}_rate`]) * 100).toFixed(2)),
         };
       });
@@ -3269,7 +3220,7 @@ app.get("/api/dashboard", async (_req, res) => {
       const highchartsRatePct =
         competitorRatesAll.find((entry) => entry.isHighcharts)?.ratePct ?? 0;
       const competitorRates = competitorRatesAll.filter((entry) => !entry.isHighcharts);
-      const highchartsRank = row
+      const highchartsRank = row && latestRunResponseCount > 0
         ? competitorRatesAll
             .slice()
             .sort((a, b) => {
@@ -3284,6 +3235,13 @@ app.get("/api/dashboard", async (_req, res) => {
         .slice()
         .sort((a, b) => b.ratePct - a.ratePct)
         .at(0) ?? null;
+      const rivalMentionCount = competitorRates.reduce(
+        (sum, entry) => sum + entry.mentions,
+        0,
+      );
+      const viabilityDenominator = latestRunResponseCount * competitorRates.length;
+      const viabilityRatePct =
+        viabilityDenominator > 0 ? (rivalMentionCount / viabilityDenominator) * 100 : 0;
 
       return {
         query,
@@ -3294,7 +3252,7 @@ app.get("/api/dashboard", async (_req, res) => {
         highchartsRatePct,
         highchartsRank: highchartsRank && highchartsRank > 0 ? highchartsRank : null,
         highchartsRankOutOf: config.competitors.length,
-        viabilityRatePct: Number((asNumber(row?.viability_index_rate) * 100).toFixed(2)),
+        viabilityRatePct: Number(viabilityRatePct.toFixed(2)),
         topCompetitor,
         latestRunResponseCount,
         latestInputTokens,

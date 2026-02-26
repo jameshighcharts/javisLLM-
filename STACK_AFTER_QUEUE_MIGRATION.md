@@ -38,6 +38,8 @@ Now:
 - Queue + job schema: `supabase/sql/007_pgmq_job_queue.sql`
 - Materialized/live views + finalize logic: `supabase/sql/008_materialized_views.sql`
 - Enqueue function: `supabase/sql/009_enqueue_benchmark_run.sql`
+- Finalize score fix: `supabase/sql/010_fix_finalize_overall_score.sql`
+- Failed-response denominator fix: `supabase/sql/011_exclude_failed_from_visibility.sql`
 
 ### Worker
 - Main worker: `worker/benchmark_worker.py`
@@ -80,6 +82,7 @@ Do **not** call `pgmq.read/send/archive` directly from Supabase clients.
 
 Finalize and refresh:
 - `finalize_benchmark_run(p_run_id)` uses advisory lock (`pg_advisory_xact_lock`) and is idempotent.
+- Visibility-score denominators use successful responses only (`benchmark_responses.error` empty).
 - `refresh_benchmark_views()` refreshes all materialized views.
 
 ## 5) Request/Job Lifecycle
