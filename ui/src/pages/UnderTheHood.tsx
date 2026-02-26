@@ -284,6 +284,49 @@ export default function UnderTheHood() {
       ])].sort((l, r) => l.localeCompare(r)),
     [statsWithCosts],
   )
+  const aggregatedChartModels = useMemo(
+    () =>
+      [...statsWithCosts.reduce((map, item) => {
+        const label = shortModelName(item.model)
+        const existing = map.get(label)
+        if (existing) {
+          existing.responseCount += item.responseCount
+          existing.totalInputTokens += item.totalInputTokens
+          existing.totalOutputTokens += item.totalOutputTokens
+          if (item.costs) {
+            existing.inputCostUsd += item.costs.inputCostUsd
+            existing.outputCostUsd += item.costs.outputCostUsd
+            existing.hasCosts = true
+          }
+          return map
+        }
+
+        map.set(label, {
+          label,
+          responseCount: item.responseCount,
+          totalInputTokens: item.totalInputTokens,
+          totalOutputTokens: item.totalOutputTokens,
+          inputCostUsd: item.costs?.inputCostUsd ?? 0,
+          outputCostUsd: item.costs?.outputCostUsd ?? 0,
+          hasCosts: Boolean(item.costs),
+        })
+        return map
+      }, new Map<string, {
+        label: string
+        responseCount: number
+        totalInputTokens: number
+        totalOutputTokens: number
+        inputCostUsd: number
+        outputCostUsd: number
+        hasCosts: boolean
+      }>()).values()]
+        .sort((l, r) =>
+          r.responseCount !== l.responseCount
+            ? r.responseCount - l.responseCount
+            : l.label.localeCompare(r.label),
+        ),
+    [statsWithCosts],
+  )
 
   if (underTheHood.isError) {
     return (
@@ -330,50 +373,6 @@ export default function UnderTheHood() {
   const calculatorTotalCostUsd = (calculatorCostPerPrompt?.totalCostUsd ?? 0) * Math.max(0, calculatorPromptCount)
 
   // ── Chart data ──────────────────────────────────────────────────────────
-  const aggregatedChartModels = useMemo(
-    () =>
-      [...statsWithCosts.reduce((map, item) => {
-        const label = shortModelName(item.model)
-        const existing = map.get(label)
-        if (existing) {
-          existing.responseCount += item.responseCount
-          existing.totalInputTokens += item.totalInputTokens
-          existing.totalOutputTokens += item.totalOutputTokens
-          if (item.costs) {
-            existing.inputCostUsd += item.costs.inputCostUsd
-            existing.outputCostUsd += item.costs.outputCostUsd
-            existing.hasCosts = true
-          }
-          return map
-        }
-
-        map.set(label, {
-          label,
-          responseCount: item.responseCount,
-          totalInputTokens: item.totalInputTokens,
-          totalOutputTokens: item.totalOutputTokens,
-          inputCostUsd: item.costs?.inputCostUsd ?? 0,
-          outputCostUsd: item.costs?.outputCostUsd ?? 0,
-          hasCosts: Boolean(item.costs),
-        })
-        return map
-      }, new Map<string, {
-        label: string
-        responseCount: number
-        totalInputTokens: number
-        totalOutputTokens: number
-        inputCostUsd: number
-        outputCostUsd: number
-        hasCosts: boolean
-      }>()).values()]
-        .sort((l, r) =>
-          r.responseCount !== l.responseCount
-            ? r.responseCount - l.responseCount
-            : l.label.localeCompare(r.label),
-        ),
-    [statsWithCosts],
-  )
-
   const chartModels = aggregatedChartModels.filter((i) => i.totalInputTokens + i.totalOutputTokens > 0)
   const chartLabels = chartModels.map((i) => i.label)
 
