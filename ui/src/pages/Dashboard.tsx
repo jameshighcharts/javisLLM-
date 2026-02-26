@@ -323,11 +323,13 @@ function RunMetaCard({ summary }: { summary: DashboardResponse['summary'] }) {
     ? new Date(summary.runMonth + '-01').toLocaleString('default', { month: 'long', year: 'numeric' })
     : null
   const model = summary.models.length > 0 ? summary.models.join(', ') : null
+  const modelOwners = summary.modelOwners.length > 0 ? summary.modelOwners.join(', ') : null
   const webSearch = summary.webSearchEnabled ? (summary.webSearchEnabled === 'yes' ? 'ON' : 'OFF') : null
 
   const parts = [
     runLabel,
     model ? `Model: "${model}"` : null,
+    modelOwners ? `Owners: ${modelOwners}` : null,
     webSearch ? `Web search: ${webSearch}` : null,
   ].filter(Boolean).join(',  ')
 
@@ -2175,12 +2177,14 @@ export default function Dashboard() {
       ? new Date(data.summary.runMonth + '-01').toLocaleString('default', { month: 'long', year: 'numeric' })
       : null
     const models = data.summary.models.join(', ') || null
+    const modelOwners = data.summary.modelOwners.join(', ') || null
     const webSearch = data.summary.webSearchEnabled
       ? (data.summary.webSearchEnabled === 'yes' ? 'ON' : 'OFF')
       : null
     const pills = [
       runLabel,
       models ? `Model: "${models}"` : null,
+      modelOwners ? `Owners: ${modelOwners}` : null,
       webSearch ? `Web search: ${webSearch}` : null,
     ].filter(Boolean) as string[]
     setHeaderExtra(

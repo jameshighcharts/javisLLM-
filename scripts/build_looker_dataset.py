@@ -65,6 +65,8 @@ LOOKER_BASE_FIELDNAMES = [
     "window_end_utc",
     "date_dd_mm_yyyy",
     "models",
+    "model_owners",
+    "model_owner_map",
     "web_search_enabled",
     "highcharts_query_mentions_count",
     "highcharts_query_mentions_rate",
@@ -91,6 +93,8 @@ KPI_FIELDNAMES = [
     "window_start_utc",
     "window_end_utc",
     "models",
+    "model_owners",
+    "model_owner_map",
     "web_search_enabled",
     "run_month",
     "run_id",
@@ -112,6 +116,8 @@ COMPETITOR_METRIC_FIELDNAMES = [
     "window_end_utc",
     "date_dd_mm_yyyy",
     "models",
+    "model_owners",
+    "model_owner_map",
     "web_search_enabled",
     "run_month",
     "run_id",
@@ -218,15 +224,56 @@ def read_jsonl_rows(path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
+def infer_model_owner_from_model(model: str) -> str:
+    normalized = model.strip().lower()
+    if not normalized:
+        return ""
+    if normalized.startswith(("gpt", "o1", "o3", "openai/")):
+        return "OpenAI"
+    if normalized.startswith(("claude", "anthropic/")):
+        return "Anthropic"
+    if normalized.startswith(("gemini", "google/")):
+        return "Google"
+    return "Unknown"
+
+
+def build_model_owner_mapping(rows: Iterable[Dict[str, Any]]) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    for row in rows:
+        model = str(row.get("model") or "").strip()
+        if not model:
+            continue
+        explicit_owner = str(row.get("model_owner") or "").strip()
+        owner = explicit_owner or infer_model_owner_from_model(model)
+        if not owner:
+            continue
+        mapping[model] = owner
+    return mapping
+
+
 def extract_context(jsonl_rows: Iterable[Dict[str, Any]]) -> Dict[str, str]:
+    normalized_rows = list(jsonl_rows)
     timestamps = sorted(
-        str(row.get("timestamp")) for row in jsonl_rows if row.get("timestamp")
+        str(row.get("timestamp")) for row in normalized_rows if row.get("timestamp")
     )
-    models = sorted({str(row.get("model")) for row in jsonl_rows if row.get("model")})
+    models = sorted(
+        {
+            str(row.get("model")).strip()
+            for row in normalized_rows
+            if str(row.get("model") or "").strip()
+        }
+    )
+    owner_mapping = build_model_owner_mapping(normalized_rows)
+    model_owners = sorted({owner for owner in owner_mapping.values() if owner})
+    owner_map_str = ";".join(
+        f"{model}=>{owner}" for model, owner in sorted(owner_mapping.items())
+    )
     return {
         "window_start_utc": timestamps[0] if timestamps else "",
         "window_end_utc": timestamps[-1] if timestamps else "",
         "models": ";".join(models),
+        "model_owners": ";".join(model_owners),
+        "model_owner_map": owner_map_str,
     }
 
 
@@ -522,6 +569,8 @@ def build_rows(
                 "window_end_utc": context["window_end_utc"],
                 "date_dd_mm_yyyy": format_dd_mm_yyyy(context["window_end_utc"]),
                 "models": context["models"],
+                "model_owners": context.get("model_owners", ""),
+                "model_owner_map": context.get("model_owner_map", ""),
                 "web_search_enabled": web_search_enabled,
                 "highcharts_query_mentions_count": highcharts_count,
                 "highcharts_query_mentions_rate": round(highcharts_rate, 6),
@@ -603,6 +652,8 @@ def build_rows(
             "window_end_utc": context["window_end_utc"],
             "date_dd_mm_yyyy": format_dd_mm_yyyy(context["window_end_utc"]),
             "models": context["models"],
+            "model_owners": context.get("model_owners", ""),
+            "model_owner_map": context.get("model_owner_map", ""),
             "web_search_enabled": overall_web,
             "highcharts_query_mentions_count": overall_highcharts_count,
             "highcharts_query_mentions_rate": round(overall_highcharts_rate, 6),
@@ -710,6 +761,8 @@ def write_kpi_csv(
         "window_start_utc": context["window_start_utc"],
         "window_end_utc": context["window_end_utc"],
         "models": context["models"],
+        "model_owners": context.get("model_owners", ""),
+        "model_owner_map": context.get("model_owner_map", ""),
         "web_search_enabled": normalize_yes_no(overall_row.get("web_search_enabled")),
         "run_month": run_month,
         "run_id": run_id,
@@ -761,6 +814,8 @@ def build_competitor_metric_rows(
                 "window_end_utc": context["window_end_utc"],
                 "date_dd_mm_yyyy": format_dd_mm_yyyy(context["window_end_utc"]),
                 "models": context["models"],
+                "model_owners": context.get("model_owners", ""),
+                "model_owner_map": context.get("model_owner_map", ""),
                 "web_search_enabled": web_search_enabled,
                 "run_month": run_month,
                 "run_id": run_id,

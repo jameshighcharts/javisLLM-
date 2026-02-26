@@ -7,6 +7,17 @@ const {
 } = require('../_github')
 
 const DEFAULT_MODEL = 'gpt-4o-mini'
+const DEFAULT_CLAUDE_MODEL = 'claude-3-5-sonnet-latest'
+const FALLBACK_ALLOWED_MODELS = [
+  DEFAULT_MODEL,
+  'gpt-4o',
+  'gpt-5.2',
+  DEFAULT_CLAUDE_MODEL,
+  'claude-4-6-sonnet-latest',
+  'claude-4-6-opus-latest',
+  'gemini-2.0-flash',
+  'gemini-3.0-flash',
+]
 const OUR_TERMS_DEFAULT = 'Highcharts'
 const MAX_OUR_TERMS_LENGTH = 300
 const RUN_MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/
@@ -51,7 +62,7 @@ function getAllowedModels() {
     .map((value) => value.trim())
     .filter(Boolean)
 
-  return configured.length > 0 ? configured : [DEFAULT_MODEL]
+  return configured.length > 0 ? configured : FALLBACK_ALLOWED_MODELS
 }
 
 function resolveModel(modelInput, allowedModels) {

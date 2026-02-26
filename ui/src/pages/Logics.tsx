@@ -148,12 +148,25 @@ export default function Logics() {
         { label: 'Last generated', value: '—' },
         { label: 'Run month', value: '—' },
         { label: 'Models', value: '—' },
+        { label: 'Model owners', value: '—' },
+        { label: 'Model-owner map', value: '—' },
         { label: 'Web search', value: '—' },
       ]
     : [
-        { label: 'Last generated', value: new Date(data.generatedAt).toLocaleString() },
+        {
+          label: 'Last generated',
+          value: new Date(data.generatedAt).toLocaleString(),
+        },
         { label: 'Run month', value: data.summary.runMonth ?? 'n/a' },
         { label: 'Models', value: data.summary.models.join(', ') || 'n/a' },
+        { label: 'Model owners', value: data.summary.modelOwners.join(', ') || 'n/a' },
+        {
+          label: 'Model-owner map',
+          value:
+            data.summary.modelOwnerStats
+              .map((item) => `${item.owner}: ${item.models.join(', ')}`)
+              .join(' | ') || 'n/a',
+        },
         { label: 'Web search', value: String(data.summary.webSearchEnabled ?? 'n/a') },
       ]
 

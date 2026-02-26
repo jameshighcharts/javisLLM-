@@ -4,9 +4,9 @@ Benchmark LLM mention visibility for Highcharts vs competitors across a query se
 
 ## Project structure
 
-- `/Users/jamesm/projects/easy_llm_benchmarker/llm_mention_benchmark.py`: main benchmark runner (OpenAI Responses API).
+- `/Users/jamesm/projects/easy_llm_benchmarker/llm_mention_benchmark.py`: main benchmark runner (OpenAI + Anthropic + Gemini support).
 - `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark_config.json`: editable queries, competitors, aliases.
-- `/Users/jamesm/projects/easy_llm_benchmarker/scripts/build_looker_dataset.py`: builds canonical Looker dataset + KPI CSV.
+- `/Users/jamesm/projects/easy_llm_benchmarker/scripts/build_looker_dataset.py`: builds canonical Looker dataset + KPI CSV (includes model owner metadata fields).
 - `/Users/jamesm/projects/easy_llm_benchmarker/scripts/push_to_sheets_webapp.py`: pushes Looker CSV rows to Apps Script web app.
 - `/Users/jamesm/projects/easy_llm_benchmarker/scripts/monthly_run.sh`: full monthly pipeline (benchmark -> dataset -> sheet append).
 - `/Users/jamesm/projects/easy_llm_benchmarker/automation/apps_script/Code.gs`: Apps Script endpoint code.
@@ -46,7 +46,9 @@ This repo includes root `/Users/jamesm/projects/easy_llm_benchmarker/vercel.json
 In Vercel Project Settings -> Environment Variables, set:
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
-- `OPENAI_API_KEY` (required for Prompt Query Lab on `/prompts`)
+- `OPENAI_API_KEY` (required for GPT models in Prompt Query Lab on `/prompts`)
+- `ANTHROPIC_API_KEY` (required for Claude models in Prompt Query Lab on `/prompts`)
+- `GEMINI_API_KEY` (required for Gemini models in Prompt Query Lab on `/prompts`)
 - `GITHUB_TOKEN` (PAT with `repo` + `workflow` access to this repo)
 - `GITHUB_OWNER` (e.g. `jameshighcharts`)
 - `GITHUB_REPO` (e.g. `javisLLM-`)
@@ -54,7 +56,7 @@ In Vercel Project Settings -> Environment Variables, set:
 - Optional: `GITHUB_WORKFLOW_FILE` (default: `run-benchmark.yml`)
 - Optional: `GITHUB_WORKFLOW_REF` (default: `main`)
 - Optional hardening:
-  - `BENCHMARK_ALLOWED_MODELS` (comma-separated model allowlist; default `gpt-4o-mini`)
+  - `BENCHMARK_ALLOWED_MODELS` (comma-separated model allowlist; default `gpt-4o-mini,gpt-4o,gpt-5.2,claude-3-5-sonnet-latest,claude-4-6-sonnet-latest,claude-4-6-opus-latest,gemini-2.0-flash,gemini-3.0-flash`)
   - `BENCHMARK_TRIGGER_RATE_MAX` (default `5` requests)
   - `BENCHMARK_TRIGGER_RATE_WINDOW_MS` (default `60000` ms)
   - `BENCHMARK_RUNS_RATE_MAX` (default `30` requests)
@@ -81,8 +83,8 @@ To run real prompt/scoring runs from the app, open `/runs`:
 - Paste `BENCHMARK_TRIGGER_TOKEN` into the token field (stored in browser session storage only)
 
 To run a one-off prompt test in Query Lab, open `/prompts`:
-- Uses `/api/prompt-lab/run` (OpenAI Responses API)
-- Uses selected model + web search toggle
+- Uses `/api/prompt-lab/run` (OpenAI Responses API, Anthropic Messages API, or Gemini GenerateContent API)
+- Uses selected model + web search toggle (web search currently applies to OpenAI models)
 - Displays mention detection across tracked entities
 - No trigger token required
 
@@ -90,6 +92,8 @@ To run a one-off prompt test in Query Lab, open `/prompts`:
 
 In GitHub repo settings -> Secrets and variables -> Actions, add:
 - `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY` (required when running Claude models)
+- `GEMINI_API_KEY` (required when running Gemini models)
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 
@@ -115,7 +119,9 @@ cp .env.monthly.example .env.monthly
 ```
 
 Edit `/Users/jamesm/projects/easy_llm_benchmarker/.env.monthly` and set:
-- `OPENAI_API_KEY`
+- `OPENAI_API_KEY` (required for GPT models)
+- `ANTHROPIC_API_KEY` (required for Claude models)
+- `GEMINI_API_KEY` (required for Gemini models)
 - `GSHEET_WEBAPP_URL`
 - `GSHEET_WEBAPP_SECRET`
 - `GSHEET_TAB_NAME`

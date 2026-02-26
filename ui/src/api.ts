@@ -11,6 +11,7 @@ import type {
   DashboardResponse,
   HealthResponse,
   KpiRow,
+  ModelOwnerStat,
   PromptStatus,
   PromptDrilldownResponse,
   PromptLabRunResponse,
@@ -319,6 +320,71 @@ function slugifyEntity(value: string): string {
     .replace(/^_+|_+$/g, '')
 }
 
+function inferModelOwnerFromModel(model: string): string {
+  const normalized = model.trim().toLowerCase()
+  if (!normalized) return 'Unknown'
+  if (
+    normalized.startsWith('gpt') ||
+    normalized.startsWith('o1') ||
+    normalized.startsWith('o3') ||
+    normalized.startsWith('openai/')
+  ) {
+    return 'OpenAI'
+  }
+  if (normalized.startsWith('claude') || normalized.startsWith('anthropic/')) {
+    return 'Anthropic'
+  }
+  if (normalized.startsWith('gemini') || normalized.startsWith('google/')) {
+    return 'Google'
+  }
+  return 'Unknown'
+}
+
+function buildModelOwnerSummaryFromModels(models: string[]): {
+  modelOwners: string[]
+  modelOwnerMap: Record<string, string>
+} {
+  const modelOwnerMap = Object.fromEntries(
+    models.map((model) => [model, inferModelOwnerFromModel(model)]),
+  )
+  const modelOwners = [...new Set(Object.values(modelOwnerMap))].sort((a, b) =>
+    a.localeCompare(b),
+  )
+  return { modelOwners, modelOwnerMap }
+}
+
+function buildModelOwnerStatsFromResponses(
+  responses: BenchmarkResponseRow[],
+): ModelOwnerStat[] {
+  const counts = new Map<string, number>()
+  const modelsByOwner = new Map<string, Set<string>>()
+
+  for (const response of responses) {
+    const model = String(response.model ?? '').trim()
+    if (!model) continue
+    const owner = inferModelOwnerFromModel(model)
+    counts.set(owner, (counts.get(owner) ?? 0) + 1)
+    const ownerModels = modelsByOwner.get(owner) ?? new Set<string>()
+    ownerModels.add(model)
+    modelsByOwner.set(owner, ownerModels)
+  }
+
+  return [...counts.entries()]
+    .map(([owner, responseCount]) => ({
+      owner,
+      models: [...(modelsByOwner.get(owner) ?? new Set<string>())].sort((a, b) =>
+        a.localeCompare(b),
+      ),
+      responseCount,
+    }))
+    .sort((left, right) => {
+      if (right.responseCount !== left.responseCount) {
+        return right.responseCount - left.responseCount
+      }
+      return left.owner.localeCompare(right.owner)
+    })
+}
+
 function monthKeyFromDate(value: string | null): string | null {
   if (!value) return null
   const parsed = new Date(value)
@@ -428,6 +494,9 @@ function emptyDashboard(config: BenchmarkConfig): DashboardResponse {
       competitorCount: config.competitors.length,
       totalResponses: 0,
       models: [],
+      modelOwners: [],
+      modelOwnerMap: {},
+      modelOwnerStats: [],
       runMonth: null,
       webSearchEnabled: null,
       windowStartUtc: null,
@@ -1161,6 +1230,12 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
 
   const responseModelSet = [...new Set(responses.map((row) => row.model).filter(Boolean))]
   const models = responseModelSet.length > 0 ? responseModelSet : latestRun.model ? [latestRun.model] : []
+  const { modelOwners, modelOwnerMap } = buildModelOwnerSummaryFromModels(models)
+  const modelOwnerStats = buildModelOwnerStatsFromResponses(responses)
+  const modelOwnerMapString = Object.entries(modelOwnerMap)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([model, owner]) => `${model}=>${owner}`)
+    .join(';')
 
   const kpi: KpiRow = {
     metric_name: 'AI Visibility Overall',
@@ -1170,6 +1245,8 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
     window_start_utc: latestRun.started_at ?? '',
     window_end_utc: latestRun.ended_at ?? '',
     models: models.join(','),
+    model_owners: modelOwners.join(','),
+    model_owner_map: modelOwnerMapString,
     web_search_enabled: latestRun.web_search_enabled ? 'yes' : 'no',
     run_month: latestRun.run_month ?? '',
     run_id: latestRun.id,
@@ -1183,6 +1260,9 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
       competitorCount: config.competitors.length,
       totalResponses,
       models,
+      modelOwners,
+      modelOwnerMap,
+      modelOwnerStats,
       runMonth: latestRun.run_month,
       webSearchEnabled: latestRun.web_search_enabled ? 'yes' : 'no',
       windowStartUtc: latestRun.started_at,

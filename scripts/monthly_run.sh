@@ -12,7 +12,6 @@ if [[ -f "${ROOT_DIR}/.env.monthly" ]]; then
   set +a
 fi
 
-: "${OPENAI_API_KEY:?OPENAI_API_KEY is required}"
 : "${GSHEET_WEBAPP_URL:?GSHEET_WEBAPP_URL is required}"
 : "${GSHEET_WEBAPP_SECRET:?GSHEET_WEBAPP_SECRET is required}"
 
@@ -27,6 +26,15 @@ GSHEET_TAB_NAME="${GSHEET_TAB_NAME:-Sheet1}"
 GSHEET_COMPETITOR_TAB_NAME="${GSHEET_COMPETITOR_TAB_NAME:-CompetitorMetrics}"
 BENCHMARK_CONFIG_PATH="${BENCHMARK_CONFIG_PATH:-${ROOT_DIR}/config/benchmark_config.json}"
 SUPABASE_SYNC="${SUPABASE_SYNC:-0}"
+
+MODEL_LOWER="$(echo "${MODEL}" | tr '[:upper:]' '[:lower:]')"
+if [[ "${MODEL_LOWER}" == claude* || "${MODEL_LOWER}" == anthropic/* ]]; then
+  : "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required when MODEL is Claude}"
+elif [[ "${MODEL_LOWER}" == gemini* || "${MODEL_LOWER}" == google/* ]]; then
+  : "${GEMINI_API_KEY:?GEMINI_API_KEY is required when MODEL is Gemini}"
+else
+  : "${OPENAI_API_KEY:?OPENAI_API_KEY is required}"
+fi
 
 mkdir -p "${OUTPUT_DIR}" "${LOG_DIR}"
 

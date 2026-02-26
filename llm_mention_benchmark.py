@@ -10,6 +10,9 @@ import os
 import re
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -55,6 +58,14 @@ USER_PROMPT_TEMPLATE = (
 )
 MAX_ATTEMPTS = 3
 BACKOFF_BASE_SECONDS = 1.0
+GEMINI_GENERATE_CONTENT_API_ROOT = (
+    "https://generativelanguage.googleapis.com/v1beta/models"
+)
+MODEL_OWNER_BY_PROVIDER = {
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "google": "Google",
+}
 
 
 @dataclass(frozen=True)
@@ -63,6 +74,77 @@ class EntitySpec:
     label: str
     aliases: List[str]
     is_competitor: bool
+
+
+class ProviderRequestError(RuntimeError):
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class GeminiRestClient:
+    def __init__(self, api_key: str) -> None:
+        self.api_key = api_key
+
+    def generate_content(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+    ) -> Dict[str, Any]:
+        model_path = urllib.parse.quote(model, safe="")
+        endpoint = (
+            f"{GEMINI_GENERATE_CONTENT_API_ROOT}/{model_path}:generateContent"
+            f"?key={urllib.parse.quote(self.api_key, safe='')}"
+        )
+        payload = {
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": {"temperature": temperature},
+        }
+        request = urllib.request.Request(
+            endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=90) as response:
+                raw = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            status_code = int(getattr(exc, "code", 0) or 0)
+            raw_error = ""
+            try:
+                raw_error = exc.read().decode("utf-8")
+            except Exception:  # noqa: BLE001
+                raw_error = ""
+            message = f"Gemini request failed ({status_code})."
+            try:
+                parsed = json.loads(raw_error) if raw_error else {}
+                if isinstance(parsed, dict):
+                    candidate_message = parsed.get("error", {}).get("message")
+                    if isinstance(candidate_message, str) and candidate_message.strip():
+                        message = candidate_message.strip()
+            except json.JSONDecodeError:
+                pass
+            raise ProviderRequestError(message, status_code=status_code) from exc
+        except urllib.error.URLError as exc:
+            raise ProviderRequestError(
+                f"Gemini request failed: {exc}",
+                status_code=None,
+            ) from exc
+
+        if not raw.strip():
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ProviderRequestError("Gemini returned invalid JSON.") from exc
+        if not isinstance(parsed, dict):
+            return {}
+        return parsed
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -77,7 +159,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         required=True,
         help='Comma-separated brand terms, e.g. "EasyLLM, Easy LLM Benchmarker".',
     )
-    parser.add_argument("--model", default="gpt-4o-mini", help="OpenAI model name.")
+    parser.add_argument(
+        "--model",
+        default="gpt-4o-mini",
+        help="LLM model name (OpenAI or Anthropic Claude).",
+    )
     parser.add_argument(
         "--runs", type=int, default=3, help="Responses per query (default: 3)."
     )
@@ -94,8 +180,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--api-key-env",
-        default="OPENAI_API_KEY",
-        help="Environment variable that stores the OpenAI API key.",
+        default="",
+        help=(
+            "Optional environment variable override for API key lookup. "
+            'Defaults to provider-specific vars ("OPENAI_API_KEY", '
+            '"ANTHROPIC_API_KEY", or "GEMINI_API_KEY").'
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -315,6 +405,52 @@ def create_openai_client(api_key: str) -> Any:
     return OpenAI(api_key=api_key)
 
 
+def create_anthropic_client(api_key: str) -> Any:
+    try:
+        from anthropic import Anthropic  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            'Missing dependency "anthropic". Install with: pip3 install anthropic'
+        ) from exc
+    return Anthropic(api_key=api_key)
+
+
+def create_gemini_client(api_key: str) -> Any:
+    return GeminiRestClient(api_key=api_key)
+
+
+def infer_provider_from_model(model: str) -> str:
+    normalized = str(model).strip().lower()
+    if normalized.startswith("claude") or normalized.startswith("anthropic/"):
+        return "anthropic"
+    if normalized.startswith("gemini") or normalized.startswith("google/"):
+        return "google"
+    return "openai"
+
+
+def resolve_api_key_env(provider: str, api_key_env_override: str) -> str:
+    override = str(api_key_env_override or "").strip()
+    if override:
+        return override
+    if provider == "anthropic":
+        return "ANTHROPIC_API_KEY"
+    if provider == "google":
+        return "GEMINI_API_KEY"
+    return "OPENAI_API_KEY"
+
+
+def create_llm_client(provider: str, api_key: str) -> Any:
+    if provider == "anthropic":
+        return create_anthropic_client(api_key)
+    if provider == "google":
+        return create_gemini_client(api_key)
+    return create_openai_client(api_key)
+
+
+def infer_model_owner(provider: str) -> str:
+    return MODEL_OWNER_BY_PROVIDER.get(provider, "Unknown")
+
+
 def normalize_api_key(raw_value: str | None) -> str:
     value = (raw_value or "").strip()
     # Guard against accidental quote wrapping in CI secrets.
@@ -417,6 +553,34 @@ def extract_response_text(response_obj: Any, response_dict: Dict[str, Any]) -> s
                 if isinstance(text, str) and text.strip():
                     texts.append(text.strip())
 
+    content_items = response_dict.get("content", [])
+    if isinstance(content_items, list):
+        for content in content_items:
+            if not isinstance(content, dict):
+                continue
+            text = content.get("text")
+            if isinstance(text, str) and text.strip():
+                texts.append(text.strip())
+
+    # Gemini responses usually return candidates[].content.parts[].text
+    candidates = response_dict.get("candidates", [])
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            content = candidate.get("content", {})
+            if not isinstance(content, dict):
+                continue
+            parts = content.get("parts", [])
+            if not isinstance(parts, list):
+                continue
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                text = part.get("text")
+                if isinstance(text, str) and text.strip():
+                    texts.append(text.strip())
+
     return "\n".join(texts).strip()
 
 
@@ -476,30 +640,88 @@ def extract_citations(response_dict: Dict[str, Any]) -> List[Dict[str, str]]:
                     if isinstance(nested, dict):
                         append(nested)
 
+    content_items = response_dict.get("content", [])
+    if isinstance(content_items, list):
+        for content in content_items:
+            if not isinstance(content, dict):
+                continue
+            content_citations = content.get("citations")
+            if isinstance(content_citations, list):
+                for candidate in content_citations:
+                    if isinstance(candidate, dict):
+                        append(candidate)
+
+    candidates = response_dict.get("candidates", [])
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            grounding = candidate.get("groundingMetadata", {})
+            if not isinstance(grounding, dict):
+                continue
+            chunks = grounding.get("groundingChunks", [])
+            if isinstance(chunks, list):
+                for chunk in chunks:
+                    if not isinstance(chunk, dict):
+                        continue
+                    web = chunk.get("web")
+                    if isinstance(web, dict):
+                        append(web)
+                    append(chunk)
+            citation_metadata = grounding.get("citationMetadata", {})
+            if isinstance(citation_metadata, dict):
+                sources = citation_metadata.get("citationSources", [])
+                if isinstance(sources, list):
+                    for source in sources:
+                        if isinstance(source, dict):
+                            append(source)
+
     return citations
 
 
 def generate_with_optional_retry(
     client: Any,
+    provider: str,
     model: str,
     query: str,
     temperature: float,
     web_search: bool,
 ) -> tuple[str, List[Dict[str, str]]]:
-    payload: Dict[str, Any] = {
-        "model": model,
-        "temperature": temperature,
-        "input": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": USER_PROMPT_TEMPLATE.format(query=query)},
-        ],
-    }
-    if web_search:
-        payload["tools"] = [{"type": "web_search_preview"}]
-
+    user_prompt = USER_PROMPT_TEMPLATE.format(query=query)
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            response_obj = client.responses.create(**payload)
+            if provider == "anthropic":
+                response_obj = client.messages.create(
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=1024,
+                    system=SYSTEM_PROMPT,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": user_prompt,
+                        }
+                    ],
+                )
+            elif provider == "google":
+                response_obj = client.generate_content(
+                    model=model,
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=user_prompt,
+                    temperature=temperature,
+                )
+            else:
+                payload: Dict[str, Any] = {
+                    "model": model,
+                    "temperature": temperature,
+                    "input": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                }
+                if web_search:
+                    payload["tools"] = [{"type": "web_search_preview"}]
+                response_obj = client.responses.create(**payload)
             response_dict = to_plain_dict(response_obj)
             text = extract_response_text(response_obj, response_dict)
             citations = extract_citations(response_dict)
@@ -619,10 +841,12 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
         print("--runs must be >= 1", file=sys.stderr)
         return 2
 
-    api_key = normalize_api_key(os.getenv(args.api_key_env))
+    provider = infer_provider_from_model(args.model)
+    api_key_env = resolve_api_key_env(provider, args.api_key_env)
+    api_key = normalize_api_key(os.getenv(api_key_env))
     if not api_key:
         print(
-            f'Missing API key env var "{args.api_key_env}". '
+            f'Missing API key env var "{api_key_env}" for provider "{provider}". '
             "Set it and rerun.",
             file=sys.stderr,
         )
@@ -655,7 +879,15 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
     viability_path = output_dir / "viability_index.csv"
     reset_jsonl(jsonl_path)
 
-    llm_client = client or create_openai_client(api_key)
+    llm_client = client or create_llm_client(provider, api_key)
+    effective_web_search = args.web_search if provider == "openai" else False
+    model_owner = infer_model_owner(provider)
+    if provider != "openai" and args.web_search:
+        print(
+            "Warning: --web-search is currently only applied to OpenAI models. "
+            f'Running {model_owner} requests without web-search tool support.',
+            file=sys.stderr,
+        )
     records: List[Dict[str, Any]] = []
     successful_calls = 0
     total_calls = len(queries) * args.runs
@@ -669,10 +901,11 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
             try:
                 response_text, citations = generate_with_optional_retry(
                     client=llm_client,
+                    provider=provider,
                     model=args.model,
                     query=query,
                     temperature=args.temperature,
-                    web_search=args.web_search,
+                    web_search=effective_web_search,
                 )
                 successful_calls += 1
             except Exception as exc:  # noqa: BLE001
@@ -682,9 +915,11 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
             record = {
                 "timestamp": timestamp,
                 "model": args.model,
+                "provider": provider,
+                "model_owner": model_owner,
                 "query": query,
                 "run_id": run_idx,
-                "web_search_enabled": args.web_search,
+                "web_search_enabled": effective_web_search,
                 "response_text": response_text,
                 "citations": citations,
                 "error": error,
@@ -698,7 +933,7 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
         specs=specs,
         queries=queries,
         runs_per_query=args.runs,
-        web_search_enabled=args.web_search,
+        web_search_enabled=effective_web_search,
     )
     comparison_fields = ["query", "runs", "web_search_enabled"]
     for spec in specs:
@@ -748,12 +983,27 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
                 for message in error_messages
             )
             if all_connection_errors:
-                print(
-                    "Hint: all calls failed with connection errors. "
-                    "Verify OPENAI_API_KEY in GitHub Secrets has no quotes/newlines, "
-                    "and that the runner can reach api.openai.com.",
-                    file=sys.stderr,
-                )
+                if provider == "anthropic":
+                    print(
+                        "Hint: all calls failed with connection errors. "
+                        "Verify ANTHROPIC_API_KEY in GitHub Secrets has no quotes/newlines, "
+                        "and that the runner can reach api.anthropic.com.",
+                        file=sys.stderr,
+                    )
+                elif provider == "google":
+                    print(
+                        "Hint: all calls failed with connection errors. "
+                        "Verify GEMINI_API_KEY in GitHub Secrets has no quotes/newlines, "
+                        "and that the runner can reach generativelanguage.googleapis.com.",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(
+                        "Hint: all calls failed with connection errors. "
+                        "Verify OPENAI_API_KEY in GitHub Secrets has no quotes/newlines, "
+                        "and that the runner can reach api.openai.com.",
+                        file=sys.stderr,
+                    )
 
     return 0 if successful_calls > 0 else 1
 

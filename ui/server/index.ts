@@ -42,12 +42,26 @@ const toggleSchema = z.object({
 });
 
 const PROMPT_LAB_DEFAULT_MODEL = "gpt-4o-mini";
-const PROMPT_LAB_FALLBACK_MODELS = [PROMPT_LAB_DEFAULT_MODEL, "gpt-4o"];
+const PROMPT_LAB_DEFAULT_CLAUDE_MODEL = "claude-3-5-sonnet-latest";
+const PROMPT_LAB_DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
+const PROMPT_LAB_FALLBACK_MODELS = [
+  PROMPT_LAB_DEFAULT_MODEL,
+  "gpt-4o",
+  "gpt-5.2",
+  PROMPT_LAB_DEFAULT_CLAUDE_MODEL,
+  "claude-4-6-sonnet-latest",
+  "claude-4-6-opus-latest",
+  PROMPT_LAB_DEFAULT_GEMINI_MODEL,
+  "gemini-3.0-flash",
+];
 const PROMPT_LAB_SYSTEM_PROMPT =
   "You are a helpful assistant. Answer with concise bullets and include direct library names.";
 const PROMPT_LAB_USER_PROMPT_TEMPLATE =
   "Query: {query}\nList relevant libraries/tools with a short rationale for each in bullet points.";
 const OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses";
+const ANTHROPIC_MESSAGES_API_URL = "https://api.anthropic.com/v1/messages";
+const GEMINI_GENERATE_CONTENT_API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models";
+const ANTHROPIC_API_VERSION = "2023-06-01";
 
 const promptLabRunSchema = z.object({
   query: z.string().min(1).max(600),
@@ -59,6 +73,8 @@ type HttpError = Error & {
   statusCode?: number;
   exposeMessage?: boolean;
 };
+
+type PromptLabProvider = "openai" | "anthropic" | "google";
 
 const app = express();
 app.disable("x-powered-by");
@@ -286,9 +302,91 @@ function isTruthyFlag(value: unknown): boolean {
 
 function splitCsvish(value: string): string[] {
   return value
-    .split(",")
+    .split(/[;,]/)
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function inferModelOwnerFromModel(model: string): string {
+  const normalized = model.trim().toLowerCase();
+  if (!normalized) return "Unknown";
+  if (
+    normalized.startsWith("gpt") ||
+    normalized.startsWith("o1") ||
+    normalized.startsWith("o3") ||
+    normalized.startsWith("openai/")
+  ) {
+    return "OpenAI";
+  }
+  if (normalized.startsWith("claude") || normalized.startsWith("anthropic/")) {
+    return "Anthropic";
+  }
+  if (normalized.startsWith("gemini") || normalized.startsWith("google/")) {
+    return "Google";
+  }
+  return "Unknown";
+}
+
+function parseModelOwnerMap(rawValue: string): Record<string, string> {
+  const entries = rawValue
+    .split(/[;,]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const parsed: Record<string, string> = {};
+  for (const entry of entries) {
+    const separatorIndex = entry.includes("=>") ? entry.indexOf("=>") : entry.indexOf(":");
+    if (separatorIndex < 0) continue;
+    const model = entry.slice(0, separatorIndex).trim();
+    const owner = entry.slice(separatorIndex + (entry.includes("=>") ? 2 : 1)).trim();
+    if (!model || !owner) continue;
+    parsed[model] = owner;
+  }
+  return parsed;
+}
+
+function buildModelOwnerSummaryFromRows(rows: Array<Record<string, unknown>>): {
+  modelOwners: string[];
+  modelOwnerMap: Record<string, string>;
+  modelOwnerStats: Array<{ owner: string; models: string[]; responseCount: number }>;
+} {
+  const ownerByModel = new Map<string, string>();
+  const countByOwner = new Map<string, number>();
+  const modelsByOwner = new Map<string, Set<string>>();
+
+  for (const row of rows) {
+    const model = String(row.model ?? "").trim();
+    if (!model) continue;
+    const rowOwner = String(row.model_owner ?? "").trim();
+    const owner = rowOwner || inferModelOwnerFromModel(model);
+    ownerByModel.set(model, owner);
+    countByOwner.set(owner, (countByOwner.get(owner) ?? 0) + 1);
+    const ownerModels = modelsByOwner.get(owner) ?? new Set<string>();
+    ownerModels.add(model);
+    modelsByOwner.set(owner, ownerModels);
+  }
+
+  const modelOwners = [...new Set(ownerByModel.values())].sort((a, b) =>
+    a.localeCompare(b),
+  );
+  const modelOwnerMap = Object.fromEntries(
+    [...ownerByModel.entries()].sort(([left], [right]) => left.localeCompare(right)),
+  );
+  const modelOwnerStats = [...countByOwner.entries()]
+    .map(([owner, responseCount]) => ({
+      owner,
+      models: [...(modelsByOwner.get(owner) ?? new Set<string>())].sort((a, b) =>
+        a.localeCompare(b),
+      ),
+      responseCount,
+    }))
+    .sort((left, right) => {
+      if (right.responseCount !== left.responseCount) {
+        return right.responseCount - left.responseCount;
+      }
+      return left.owner.localeCompare(right.owner);
+    });
+
+  return { modelOwners, modelOwnerMap, modelOwnerStats };
 }
 
 function getPromptLabAllowedModels(): string[] {
@@ -312,6 +410,43 @@ function resolvePromptLabModel(modelInput: string, allowedModels: string[]): str
   return resolved;
 }
 
+function inferPromptLabProvider(modelInput: string): PromptLabProvider {
+  const normalized = modelInput.trim().toLowerCase();
+  if (normalized.startsWith("claude") || normalized.startsWith("anthropic/")) {
+    return "anthropic";
+  }
+  if (normalized.startsWith("gemini") || normalized.startsWith("google/")) {
+    return "google";
+  }
+  return "openai";
+}
+
+function resolvePromptLabApiKey(provider: PromptLabProvider): string {
+  const keyName =
+    provider === "anthropic"
+      ? "ANTHROPIC_API_KEY"
+      : provider === "google"
+        ? "GEMINI_API_KEY"
+        : "OPENAI_API_KEY";
+  const apiKey = String(process.env[keyName] ?? "").trim();
+  if (!apiKey) {
+    const error = new Error(
+      `Prompt lab is not configured. Set ${keyName} on the server.`,
+    ) as HttpError;
+    error.statusCode = 503;
+    error.exposeMessage = true;
+    throw error;
+  }
+  return apiKey;
+}
+
+function resolvePromptLabModelOwner(provider: PromptLabProvider): string {
+  if (provider === "anthropic") return "Anthropic";
+  if (provider === "google") return "Google";
+  if (provider === "openai") return "OpenAI";
+  return "Unknown";
+}
+
 function extractPromptLabResponseText(responsePayload: Record<string, unknown>): string {
   const outputText = responsePayload.output_text;
   if (typeof outputText === "string" && outputText.trim()) {
@@ -332,6 +467,40 @@ function extractPromptLabResponseText(responsePayload: Record<string, unknown>):
         continue;
       }
       const text = (content as { text?: unknown }).text;
+      if (typeof text === "string" && text.trim()) {
+        texts.push(text.trim());
+      }
+    }
+  }
+
+  const contentItems = Array.isArray(responsePayload.content) ? responsePayload.content : [];
+  for (const content of contentItems) {
+    if (!content || typeof content !== "object") {
+      continue;
+    }
+    const text = (content as { text?: unknown }).text;
+    if (typeof text === "string" && text.trim()) {
+      texts.push(text.trim());
+    }
+  }
+
+  const candidates = Array.isArray(responsePayload.candidates) ? responsePayload.candidates : [];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const content = (candidate as { content?: unknown }).content;
+    if (!content || typeof content !== "object") {
+      continue;
+    }
+    const parts = Array.isArray((content as { parts?: unknown }).parts)
+      ? (content as { parts: unknown[] }).parts
+      : [];
+    for (const part of parts) {
+      if (!part || typeof part !== "object") {
+        continue;
+      }
+      const text = (part as { text?: unknown }).text;
       if (typeof text === "string" && text.trim()) {
         texts.push(text.trim());
       }
@@ -396,23 +565,54 @@ function extractPromptLabCitations(responsePayload: Record<string, unknown>): st
     }
   }
 
+  const contentItems = Array.isArray(responsePayload.content) ? responsePayload.content : [];
+  for (const content of contentItems) {
+    if (!content || typeof content !== "object") continue;
+    const contentCitations = (content as { citations?: unknown }).citations;
+    if (Array.isArray(contentCitations)) {
+      for (const citation of contentCitations) {
+        appendCitation(citation);
+      }
+    }
+  }
+
+  const candidates = Array.isArray(responsePayload.candidates) ? responsePayload.candidates : [];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const grounding = (candidate as { groundingMetadata?: unknown }).groundingMetadata;
+    if (!grounding || typeof grounding !== "object") continue;
+
+    const chunks = Array.isArray((grounding as { groundingChunks?: unknown }).groundingChunks)
+      ? (grounding as { groundingChunks: unknown[] }).groundingChunks
+      : [];
+    for (const chunk of chunks) {
+      if (!chunk || typeof chunk !== "object") continue;
+      appendCitation(chunk);
+      const web = (chunk as { web?: unknown }).web;
+      appendCitation(web);
+    }
+
+    const citationSources = Array.isArray(
+      (grounding as { citationMetadata?: { citationSources?: unknown } }).citationMetadata
+        ?.citationSources,
+    )
+      ? ((grounding as { citationMetadata?: { citationSources?: unknown[] } }).citationMetadata
+          ?.citationSources as unknown[])
+      : [];
+    for (const source of citationSources) {
+      appendCitation(source);
+    }
+  }
+
   return citations;
 }
 
-async function runPromptLabQuery(
+async function runOpenAiPromptLabQuery(
   query: string,
   model: string,
   webSearch: boolean,
 ): Promise<{ responseText: string; citations: string[] }> {
-  const apiKey = String(process.env.OPENAI_API_KEY ?? "").trim();
-  if (!apiKey) {
-    const error = new Error(
-      "Prompt lab is not configured. Set OPENAI_API_KEY on the server.",
-    ) as HttpError;
-    error.statusCode = 503;
-    error.exposeMessage = true;
-    throw error;
-  }
+  const apiKey = resolvePromptLabApiKey("openai");
 
   const body: Record<string, unknown> = {
     model,
@@ -467,6 +667,141 @@ async function runPromptLabQuery(
     responseText: extractPromptLabResponseText(responsePayload),
     citations: extractPromptLabCitations(responsePayload),
   };
+}
+
+async function runAnthropicPromptLabQuery(
+  query: string,
+  model: string,
+): Promise<{ responseText: string; citations: string[] }> {
+  const apiKey = resolvePromptLabApiKey("anthropic");
+
+  const body: Record<string, unknown> = {
+    model,
+    max_tokens: 1024,
+    temperature: 0.7,
+    system: PROMPT_LAB_SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content: PROMPT_LAB_USER_PROMPT_TEMPLATE.replace("{query}", query),
+      },
+    ],
+  };
+
+  const upstreamResponse = await fetch(ANTHROPIC_MESSAGES_API_URL, {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": ANTHROPIC_API_VERSION,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const raw = await upstreamResponse.text();
+  let payload: unknown = {};
+  if (raw) {
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = {};
+    }
+  }
+
+  if (!upstreamResponse.ok) {
+    const upstreamMessage =
+      typeof payload === "object" &&
+      payload !== null &&
+      typeof (payload as { error?: { message?: unknown } }).error?.message === "string"
+        ? (payload as { error: { message: string } }).error.message
+        : `Anthropic request failed (${upstreamResponse.status}).`;
+    const error = new Error(upstreamMessage) as Error & { statusCode?: number };
+    error.statusCode = upstreamResponse.status >= 500 ? 502 : upstreamResponse.status;
+    throw error;
+  }
+
+  const responsePayload =
+    payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+
+  return {
+    responseText: extractPromptLabResponseText(responsePayload),
+    citations: extractPromptLabCitations(responsePayload),
+  };
+}
+
+async function runGeminiPromptLabQuery(
+  query: string,
+  model: string,
+): Promise<{ responseText: string; citations: string[] }> {
+  const apiKey = resolvePromptLabApiKey("google");
+  const modelPath = encodeURIComponent(model);
+  const url =
+    `${GEMINI_GENERATE_CONTENT_API_ROOT}/${modelPath}:generateContent` +
+    `?key=${encodeURIComponent(apiKey)}`;
+
+  const body: Record<string, unknown> = {
+    systemInstruction: { parts: [{ text: PROMPT_LAB_SYSTEM_PROMPT }] },
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: PROMPT_LAB_USER_PROMPT_TEMPLATE.replace("{query}", query) }],
+      },
+    ],
+    generationConfig: { temperature: 0.7 },
+  };
+
+  const upstreamResponse = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const raw = await upstreamResponse.text();
+  let payload: unknown = {};
+  if (raw) {
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = {};
+    }
+  }
+
+  if (!upstreamResponse.ok) {
+    const upstreamMessage =
+      typeof payload === "object" &&
+      payload !== null &&
+      typeof (payload as { error?: { message?: unknown } }).error?.message === "string"
+        ? (payload as { error: { message: string } }).error.message
+        : `Gemini request failed (${upstreamResponse.status}).`;
+    const error = new Error(upstreamMessage) as Error & { statusCode?: number };
+    error.statusCode = upstreamResponse.status >= 500 ? 502 : upstreamResponse.status;
+    throw error;
+  }
+
+  const responsePayload =
+    payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+
+  return {
+    responseText: extractPromptLabResponseText(responsePayload),
+    citations: extractPromptLabCitations(responsePayload),
+  };
+}
+
+async function runPromptLabQuery(
+  query: string,
+  model: string,
+  webSearch: boolean,
+): Promise<{ responseText: string; citations: string[] }> {
+  const provider = inferPromptLabProvider(model);
+  if (provider === "anthropic") {
+    return runAnthropicPromptLabQuery(query, model);
+  }
+  if (provider === "google") {
+    return runGeminiPromptLabQuery(query, model);
+  }
+  return runOpenAiPromptLabQuery(query, model, webSearch);
 }
 
 function inferPromptResponseCount(row: CsvRow | undefined, competitors: string[]): number | null {
@@ -584,16 +919,23 @@ function inferWindowFromJsonl(rows: Array<Record<string, unknown>>): {
   start: string | null;
   end: string | null;
   models: string[];
+  modelOwners: string[];
+  modelOwnerMap: Record<string, string>;
+  modelOwnerStats: Array<{ owner: string; models: string[]; responseCount: number }>;
 } {
   const timestamps = rows
     .map((row) => String(row.timestamp ?? ""))
     .filter(Boolean)
     .sort();
   const models = [...new Set(rows.map((row) => String(row.model ?? "")).filter(Boolean))];
+  const ownerSummary = buildModelOwnerSummaryFromRows(rows);
   return {
     start: timestamps[0] ?? null,
     end: timestamps.at(-1) ?? null,
     models,
+    modelOwners: ownerSummary.modelOwners,
+    modelOwnerMap: ownerSummary.modelOwnerMap,
+    modelOwnerStats: ownerSummary.modelOwnerStats,
   };
 }
 
@@ -682,7 +1024,9 @@ app.post("/api/prompt-lab/run", async (req, res) => {
         ? parsed.model.trim()
         : PROMPT_LAB_DEFAULT_MODEL;
     const model = resolvePromptLabModel(requestedModel, allowedModels);
-    const webSearch = parsed.webSearch ?? true;
+    const provider = inferPromptLabProvider(model);
+    const requestedWebSearch = parsed.webSearch ?? true;
+    const webSearch = provider === "openai" ? requestedWebSearch : false;
     const startedAt = Date.now();
 
     const result = await runPromptLabQuery(query, model, webSearch);
@@ -690,6 +1034,8 @@ app.post("/api/prompt-lab/run", async (req, res) => {
       ok: true,
       query,
       model,
+      provider,
+      modelOwner: resolvePromptLabModelOwner(provider),
       webSearchEnabled: webSearch,
       responseText: result.responseText,
       citations: result.citations,
@@ -826,7 +1172,23 @@ app.get("/api/dashboard", async (_req, res) => {
       };
     });
 
-    const models = kpi ? splitCsvish(kpi.models) : inferredWindow.models;
+    const models = kpi ? splitCsvish(String(kpi.models ?? "")) : inferredWindow.models;
+    const parsedModelOwners = kpi ? splitCsvish(String(kpi.model_owners ?? "")) : [];
+    const fallbackModelOwnerMap = Object.fromEntries(
+      models.map((modelName) => [modelName, inferModelOwnerFromModel(modelName)]),
+    );
+    const modelOwnerMap =
+      kpi && String(kpi.model_owner_map ?? "").trim()
+        ? parseModelOwnerMap(String(kpi.model_owner_map ?? ""))
+        : Object.keys(inferredWindow.modelOwnerMap).length > 0
+          ? inferredWindow.modelOwnerMap
+          : fallbackModelOwnerMap;
+    const modelOwners =
+      parsedModelOwners.length > 0
+        ? parsedModelOwners
+        : inferredWindow.modelOwners.length > 0
+          ? inferredWindow.modelOwners
+          : [...new Set(Object.values(modelOwnerMap))].sort((a, b) => a.localeCompare(b));
     const windowStartUtc = kpi?.window_start_utc ?? inferredWindow.start;
     const windowEndUtc = kpi?.window_end_utc ?? inferredWindow.end;
 
@@ -838,6 +1200,9 @@ app.get("/api/dashboard", async (_req, res) => {
         competitorCount: config.competitors.length,
         totalResponses: jsonlRows.length,
         models,
+        modelOwners,
+        modelOwnerMap,
+        modelOwnerStats: inferredWindow.modelOwnerStats,
         runMonth: kpi?.run_month ?? null,
         webSearchEnabled: kpi?.web_search_enabled ?? null,
         windowStartUtc,

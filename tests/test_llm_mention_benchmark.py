@@ -21,9 +21,38 @@ class FakeResponsesAPI:
         return self.payloads.pop(0)
 
 
+class FakeMessagesAPI:
+    def __init__(self, payloads):
+        self.payloads = list(payloads)
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if not self.payloads:
+            raise RuntimeError("No payload left")
+        return self.payloads.pop(0)
+
+
 class FakeClient:
     def __init__(self, payloads):
         self.responses = FakeResponsesAPI(payloads)
+
+
+class FakeAnthropicClient:
+    def __init__(self, payloads):
+        self.messages = FakeMessagesAPI(payloads)
+
+
+class FakeGeminiClient:
+    def __init__(self, payloads):
+        self.payloads = list(payloads)
+        self.calls = []
+
+    def generate_content(self, **kwargs):
+        self.calls.append(kwargs)
+        if not self.payloads:
+            raise RuntimeError("No payload left")
+        return self.payloads.pop(0)
 
 
 class MentionDetectionTests(unittest.TestCase):
@@ -161,6 +190,39 @@ class CitationExtractionTests(unittest.TestCase):
         self.assertEqual(bench.extract_citations({"output": []}), [])
 
 
+class ProviderRoutingTests(unittest.TestCase):
+    def test_infers_provider_from_model(self):
+        self.assertEqual(bench.infer_provider_from_model("gpt-4o-mini"), "openai")
+        self.assertEqual(
+            bench.infer_provider_from_model("claude-3-5-sonnet-latest"),
+            "anthropic",
+        )
+        self.assertEqual(
+            bench.infer_provider_from_model("gemini-2.0-flash"),
+            "google",
+        )
+
+    def test_resolves_provider_default_api_key_env(self):
+        self.assertEqual(bench.resolve_api_key_env("openai", ""), "OPENAI_API_KEY")
+        self.assertEqual(
+            bench.resolve_api_key_env("anthropic", ""),
+            "ANTHROPIC_API_KEY",
+        )
+        self.assertEqual(
+            bench.resolve_api_key_env("google", ""),
+            "GEMINI_API_KEY",
+        )
+        self.assertEqual(
+            bench.resolve_api_key_env("anthropic", "CUSTOM_KEY"),
+            "CUSTOM_KEY",
+        )
+
+    def test_infers_model_owner_from_provider(self):
+        self.assertEqual(bench.infer_model_owner("openai"), "OpenAI")
+        self.assertEqual(bench.infer_model_owner("anthropic"), "Anthropic")
+        self.assertEqual(bench.infer_model_owner("google"), "Google")
+
+
 class CliIntegrationTests(unittest.TestCase):
     def test_main_writes_expected_outputs(self):
         template_payloads = [
@@ -247,6 +309,135 @@ class CliIntegrationTests(unittest.TestCase):
             for request_payload in fake_client.responses.calls:
                 self.assertIn("tools", request_payload)
                 self.assertEqual(request_payload["tools"], [{"type": "web_search_preview"}])
+
+    def test_main_routes_claude_models_to_anthropic_client(self):
+        payloads = []
+        for idx, _query in enumerate(bench.DEFAULT_QUERIES):
+            payloads.append(
+                {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Claude response {idx + 1} mentioning Highcharts.",
+                        }
+                    ]
+                }
+            )
+        fake_client = FakeAnthropicClient(payloads)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "benchmark_config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "queries": bench.DEFAULT_QUERIES,
+                        "competitors": bench.COMPETITORS,
+                        "aliases": bench.COMPETITOR_ALIASES,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {"ANTHROPIC_API_KEY": "test-key"},
+                clear=False,
+            ):
+                with mock.patch.object(
+                    bench,
+                    "create_anthropic_client",
+                    return_value=fake_client,
+                ):
+                    exit_code = bench.main(
+                        [
+                            "--our-terms",
+                            "EasyLLM",
+                            "--model",
+                            "claude-3-5-sonnet-latest",
+                            "--runs",
+                            "1",
+                            "--output-dir",
+                            temp_dir,
+                            "--config",
+                            str(config_path),
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+
+            for request_payload in fake_client.messages.calls:
+                self.assertEqual(
+                    request_payload["model"],
+                    "claude-3-5-sonnet-latest",
+                )
+                self.assertNotIn("tools", request_payload)
+
+    def test_main_routes_gemini_models_to_gemini_client(self):
+        payloads = []
+        for idx, _query in enumerate(bench.DEFAULT_QUERIES):
+            payloads.append(
+                {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {
+                                        "text": (
+                                            f"Gemini response {idx + 1} mentioning Highcharts."
+                                        )
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            )
+        fake_client = FakeGeminiClient(payloads)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "benchmark_config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "queries": bench.DEFAULT_QUERIES,
+                        "competitors": bench.COMPETITORS,
+                        "aliases": bench.COMPETITOR_ALIASES,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {"GEMINI_API_KEY": "test-key"},
+                clear=False,
+            ):
+                with mock.patch.object(
+                    bench,
+                    "create_gemini_client",
+                    return_value=fake_client,
+                ):
+                    exit_code = bench.main(
+                        [
+                            "--our-terms",
+                            "EasyLLM",
+                            "--model",
+                            "gemini-2.0-flash",
+                            "--runs",
+                            "1",
+                            "--output-dir",
+                            temp_dir,
+                            "--config",
+                            str(config_path),
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(len(fake_client.calls), len(bench.DEFAULT_QUERIES))
+            for request_payload in fake_client.calls:
+                self.assertEqual(request_payload["model"], "gemini-2.0-flash")
+                self.assertIn("system_prompt", request_payload)
+                self.assertIn("user_prompt", request_payload)
 
 
 if __name__ == "__main__":

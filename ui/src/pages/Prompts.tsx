@@ -331,6 +331,26 @@ function normalizeQueryKey(query: string): string {
   return query.trim().toLowerCase()
 }
 
+function buildQueryTagsForQueries(
+  nextQueries: string[],
+  rawQueryTags: Record<string, string[]>,
+): Record<string, string[]> {
+  const lookup = new Map<string, string[]>()
+  for (const [query, tags] of Object.entries(rawQueryTags)) {
+    lookup.set(normalizeQueryKey(query), tags)
+  }
+
+  return Object.fromEntries(
+    nextQueries.map((query) => [
+      query,
+      normalizePromptTags(
+        lookup.get(normalizeQueryKey(query)) ?? inferPromptTags(query),
+        query,
+      ),
+    ]),
+  )
+}
+
 function PromptTagChips({
   tags,
   muted,
@@ -863,12 +883,13 @@ function QueryCsvImporter({
   onApply,
 }: {
   existingQueries: string[]
-  onApply: (nextQueries: string[]) => void
+  onApply: (nextQueries: string[]) => Promise<void> | void
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [rawText, setRawText] = useState('')
   const [sourceLabel, setSourceLabel] = useState('')
   const [mode, setMode] = useState<'append' | 'replace'>('append')
+  const [isApplying, setIsApplying] = useState(false)
   const [status, setStatus] = useState<{ type: 'idle' | 'success' | 'error'; text: string }>({
     type: 'idle',
     text: '',
@@ -918,21 +939,33 @@ function QueryCsvImporter({
     }
   }
 
-  function applyImport() {
+  async function applyImport() {
     if (!canApply) return
 
-    if (mode === 'append') {
-      onApply(mergedAppendQueries)
+    const nextQueries = mode === 'append' ? mergedAppendQueries : replaceQueries
+    setIsApplying(true)
+    setStatus({ type: 'idle', text: '' })
+    try {
+      await onApply(nextQueries)
+      if (mode === 'append') {
+        setStatus({
+          type: 'success',
+          text: `Imported and saved. Added ${appendNewCount} prompt${appendNewCount === 1 ? '' : 's'}.`,
+        })
+      } else {
+        setStatus({
+          type: 'success',
+          text: `Imported and saved. Replaced with ${replaceQueries.length} prompt${replaceQueries.length === 1 ? '' : 's'}.`,
+        })
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
       setStatus({
-        type: 'success',
-        text: `Added ${appendNewCount} prompt${appendNewCount === 1 ? '' : 's'} from import.`,
+        type: 'error',
+        text: message ? `Import failed: ${message}` : 'Import failed. Please try again.',
       })
-    } else {
-      onApply(replaceQueries)
-      setStatus({
-        type: 'success',
-        text: `Replaced prompt list with ${replaceQueries.length} imported prompt${replaceQueries.length === 1 ? '' : 's'}.`,
-      })
+    } finally {
+      setIsApplying(false)
     }
   }
 
@@ -1177,19 +1210,21 @@ function QueryCsvImporter({
               <button
                 type="button"
                 disabled={!canApply}
-                onClick={applyImport}
+                onClick={() => { void applyImport() }}
                 className="inline-flex items-center rounded-lg text-xs font-semibold"
                 style={{
-                  background: canApply ? '#2A6032' : '#EDEBE6',
-                  color: canApply ? '#FFFFFF' : '#B0BAB2',
-                  border: `1px solid ${canApply ? '#1F4A26' : '#DDD8CE'}`,
+                  background: canApply && !isApplying ? '#2A6032' : '#EDEBE6',
+                  color: canApply && !isApplying ? '#FFFFFF' : '#B0BAB2',
+                  border: `1px solid ${canApply && !isApplying ? '#1F4A26' : '#DDD8CE'}`,
                   padding: '7px 11px',
-                  cursor: canApply ? 'pointer' : 'not-allowed',
+                  cursor: canApply && !isApplying ? 'pointer' : 'not-allowed',
                 }}
               >
-                {mode === 'append'
-                  ? `Apply import (+${appendNewCount})`
-                  : `Replace with ${replaceQueries.length}`}
+                {isApplying
+                  ? 'Applying…'
+                  : mode === 'append'
+                    ? `Apply import (+${appendNewCount})`
+                    : `Replace with ${replaceQueries.length}`}
               </button>
             </div>
 
@@ -1320,11 +1355,11 @@ function normalizeQueryLabErrorMessage(error: unknown): string {
     normalized === 'internal server error.' ||
     normalized === 'prompt lab run failed.'
   ) {
-    return 'Query Lab server error. If this is a new setup, set OPENAI_API_KEY on the server.'
+    return 'Query Lab server error. If this is a new setup, set OPENAI_API_KEY (GPT), ANTHROPIC_API_KEY (Claude), or GEMINI_API_KEY (Gemini) on the server.'
   }
 
   if (normalized.includes('not configured')) {
-    return `${raw} Add OPENAI_API_KEY to your server environment and retry.`
+    return `${raw} Add OPENAI_API_KEY (GPT), ANTHROPIC_API_KEY (Claude), or GEMINI_API_KEY (Gemini) to your server environment and retry.`
   }
 
   return raw
@@ -1344,7 +1379,7 @@ function QueryLab({
   const [response, setResponse] = useState('')
   const [mentions, setMentions] = useState<LabMention[]>([])
   const [errorText, setErrorText] = useState('')
-  const [model, setModel] = useState<'gpt-4o-mini' | 'gpt-4o'>('gpt-4o-mini')
+  const [model, setModel] = useState('gpt-4o-mini')
   const [webSearch, setWebSearch] = useState(true)
   const [elapsedMs, setElapsedMs] = useState(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -1354,6 +1389,9 @@ function QueryLab({
   const canRun =
     queryText.trim().length > 0 &&
     status !== 'running'
+  const normalizedModel = model.trim().toLowerCase()
+  const isOpenAiModel =
+    normalizedModel.startsWith('gpt') || normalizedModel.startsWith('o1') || normalizedModel.startsWith('o3') || normalizedModel.startsWith('openai/')
 
   function startTimer() {
     const t0 = Date.now()
@@ -1378,7 +1416,7 @@ function QueryLab({
       const result = await api.promptLabRun({
         query: normalizedQuery,
         model,
-        webSearch,
+        webSearch: isOpenAiModel ? webSearch : false,
       })
       if (onQueryRun) {
         await onQueryRun(normalizedQuery)
@@ -1487,7 +1525,7 @@ function QueryLab({
               {/* Model pill */}
               <select
                 value={model}
-                onChange={(e) => setModel(e.target.value as typeof model)}
+                onChange={(e) => setModel(e.target.value)}
                 style={{
                   appearance: 'none', WebkitAppearance: 'none',
                   background: '#F2EDE6', border: '1px solid #DCCFBC',
@@ -1498,12 +1536,20 @@ function QueryLab({
               >
                 <option value="gpt-4o-mini">GPT-4o mini</option>
                 <option value="gpt-4o">GPT-4o</option>
+                <option value="gpt-5.2">GPT 5.2</option>
+                <option value="claude-3-5-sonnet-latest">Claude 3.5 Sonnet</option>
+                <option value="claude-4-6-sonnet-latest">Claude Sonnet 4.6</option>
+                <option value="claude-4-6-opus-latest">Claude Opus 4.6</option>
+                <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                <option value="gemini-3.0-flash">Gemini 3.0 Flash</option>
               </select>
 
               {/* Web search */}
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
-                <Toggle active={webSearch} onChange={setWebSearch} />
-                <span style={{ fontSize: 11, color: '#7A8E7C', fontWeight: 500 }}>Web search</span>
+                <Toggle active={webSearch} onChange={setWebSearch} disabled={!isOpenAiModel} />
+                <span style={{ fontSize: 11, color: '#7A8E7C', fontWeight: 500 }}>
+                  {!isOpenAiModel ? 'Web search (OpenAI only)' : 'Web search'}
+                </span>
               </label>
             </div>
 
@@ -1930,22 +1976,34 @@ export default function Prompts() {
   function handleQueryListChange(nextQueries: string[]) {
     mark(() => {
       setQueries(nextQueries)
-      setQueryTags((prev) => {
-        const lookup = new Map<string, string[]>()
-        for (const [query, tags] of Object.entries(prev)) {
-          lookup.set(query.trim().toLowerCase(), tags)
-        }
-        return Object.fromEntries(
-          nextQueries.map((query) => [
-            query,
-            normalizePromptTags(
-              lookup.get(query.trim().toLowerCase()) ?? inferPromptTags(query),
-              query,
-            ),
-          ]),
-        )
-      })
+      setQueryTags((prev) => buildQueryTagsForQueries(nextQueries, prev))
     })
+  }
+
+  async function handleQueryImportApply(nextQueries: string[]) {
+    if (nextQueries.length === 0) {
+      throw new Error('Import must include at least one prompt.')
+    }
+
+    const nextQueryTags = buildQueryTagsForQueries(nextQueries, queryTags)
+    const payload: BenchmarkConfig = {
+      queries: nextQueries,
+      queryTags: nextQueryTags,
+      competitors,
+      aliases: configQuery.data?.config.aliases ?? {},
+    }
+
+    try {
+      const updated = await api.updateConfig(payload)
+      applySavedConfig(updated, { showSuccess: false })
+      setQueries(updated.config.queries)
+      setQueryTags(normalizeQueryTagsMap(updated.config.queries, updated.config.queryTags))
+      setCompetitors(updated.config.competitors)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setSaveErr(message)
+      throw error
+    }
   }
 
   const hasHighcharts = competitors.some((c) => c.toLowerCase() === 'highcharts')
@@ -2134,7 +2192,7 @@ export default function Prompts() {
                 />
                 <QueryCsvImporter
                   existingQueries={queries}
-                  onApply={handleQueryListChange}
+                  onApply={handleQueryImportApply}
                 />
               </div>
 

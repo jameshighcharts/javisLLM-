@@ -123,6 +123,26 @@ function formatDateTime(value: string | null | undefined) {
   })
 }
 
+function inferModelOwner(model: string): string {
+  const normalized = model.trim().toLowerCase()
+  if (!normalized) return 'Unknown'
+  if (
+    normalized.startsWith('gpt') ||
+    normalized.startsWith('o1') ||
+    normalized.startsWith('o3') ||
+    normalized.startsWith('openai/')
+  ) {
+    return 'OpenAI'
+  }
+  if (normalized.startsWith('claude') || normalized.startsWith('anthropic/')) {
+    return 'Anthropic'
+  }
+  if (normalized.startsWith('gemini') || normalized.startsWith('google/')) {
+    return 'Google'
+  }
+  return 'Unknown'
+}
+
 function shortRunId(value: string) {
   if (value.length <= 8) return value
   return `${value.slice(0, 8)}…`
@@ -565,6 +585,7 @@ function ResponseExplorer({
   runOptions: PromptDrilldownRunPoint[]
 }) {
   const [selectedRunId, setSelectedRunId] = useState<string>('all')
+  const [selectedOwner, setSelectedOwner] = useState<string>('all')
   const [selectedTag, setSelectedTag] = useState<string>('all')
   const [searchTerm, setSearchTerm] = useState('')
   const [expandedResponseIds, setExpandedResponseIds] = useState<Set<number>>(new Set())
@@ -573,8 +594,10 @@ function ResponseExplorer({
     () =>
       responses.map((response) => {
         const tags = extractOutputTags(response.responseText)
+        const modelOwner = inferModelOwner(response.model)
         return {
           response,
+          modelOwner,
           tags,
           allText: [
             response.responseText,
@@ -582,6 +605,7 @@ function ResponseExplorer({
             response.citations.join(' '),
             response.error ?? '',
             response.model,
+            modelOwner,
             response.webSearchEnabled ? 'web on' : 'web off',
             ...Object.entries(tags).flatMap(([key, value]) => [key, value]),
           ]
@@ -601,9 +625,16 @@ function ResponseExplorer({
     return [...new Set(responseSearchRows.flatMap((row) => Object.keys(row.tags)).filter(Boolean))]
       .sort((left, right) => left.localeCompare(right))
   }, [responseSearchRows])
+  const availableOwners = useMemo(() => {
+    return [...new Set(responseSearchRows.map((row) => row.modelOwner).filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right))
+  }, [responseSearchRows])
 
   const effectiveTag = selectedTag === 'all' || availableTags.includes(selectedTag)
     ? selectedTag
+    : 'all'
+  const effectiveOwner = selectedOwner === 'all' || availableOwners.includes(selectedOwner)
+    ? selectedOwner
     : 'all'
 
   const filteredResponses = useMemo(() => {
@@ -611,6 +642,7 @@ function ResponseExplorer({
 
     return responseSearchRows
       .filter((row) => effectiveRunId === 'all' || row.response.runId === effectiveRunId)
+      .filter((row) => effectiveOwner === 'all' || row.modelOwner === effectiveOwner)
       .filter((row) => {
         const tagValue = effectiveTag === 'all' ? '' : row.tags[effectiveTag] ?? ''
 
@@ -625,7 +657,7 @@ function ResponseExplorer({
         return haystack.includes(term)
       })
       .map((row) => row.response)
-  }, [responseSearchRows, effectiveRunId, effectiveTag, searchTerm])
+  }, [responseSearchRows, effectiveRunId, effectiveOwner, effectiveTag, searchTerm])
 
   if (responses.length === 0) {
     return (
@@ -659,6 +691,22 @@ function ResponseExplorer({
                     {run.runMonth ?? shortRunId(run.runId)} · {new Date(run.timestamp).toLocaleDateString()}
                   </option>
                 ))}
+            </select>
+          </label>
+          <label className="flex items-center justify-between gap-2 text-sm sm:text-xs sm:inline-flex sm:justify-start" style={{ color: '#7A8E7C' }}>
+            Model owner
+            <select
+              value={effectiveOwner}
+              onChange={(event) => setSelectedOwner(event.target.value)}
+              className="px-2.5 py-2 sm:py-1.5 rounded-lg text-sm sm:text-xs"
+              style={{ border: '1px solid #DDD0BC', background: '#FFFFFF', color: '#2A3A2C' }}
+            >
+              <option value="all">All owners</option>
+              {availableOwners.map((owner) => (
+                <option key={owner} value={owner}>
+                  {owner}
+                </option>
+              ))}
             </select>
           </label>
           <label className="flex items-center justify-between gap-2 text-sm sm:text-xs sm:inline-flex sm:justify-start" style={{ color: '#7A8E7C' }}>
@@ -705,6 +753,7 @@ function ResponseExplorer({
           const output = isExpanded
             ? response.responseText
             : truncate(response.responseText, 420)
+          const modelOwner = inferModelOwner(response.model)
 
           return (
             <div
@@ -723,6 +772,12 @@ function ResponseExplorer({
                 </div>
 
                 <div className="flex items-center gap-2 text-xs">
+                  <span
+                    className="px-2 py-0.5 rounded-full font-medium"
+                    style={{ background: '#F8F5F0', color: '#7A8E7C', border: '1px solid #DDD0BC' }}
+                  >
+                    {modelOwner}
+                  </span>
                   <span
                     className="px-2 py-0.5 rounded-full font-medium"
                     style={{ background: '#F2EDE6', color: '#607860', border: '1px solid #DDD0BC' }}

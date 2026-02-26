@@ -1,9 +1,18 @@
+export interface ModelOwnerStat {
+  owner: string
+  models: string[]
+  responseCount: number
+}
+
 export interface DashboardSummary {
   overallScore: number
   queryCount: number
   competitorCount: number
   totalResponses: number
   models: string[]
+  modelOwners: string[]
+  modelOwnerMap: Record<string, string>
+  modelOwnerStats: ModelOwnerStat[]
   runMonth: string | null
   webSearchEnabled: string | null
   windowStartUtc: string | null
@@ -18,6 +27,8 @@ export interface KpiRow {
   window_start_utc: string
   window_end_utc: string
   models: string
+  model_owners?: string
+  model_owner_map?: string
   web_search_enabled: string
   run_month: string
   run_id: string
@@ -226,6 +237,8 @@ export interface PromptLabRunResponse {
   ok: boolean
   query: string
   model: string
+  provider?: string
+  modelOwner?: string
   webSearchEnabled: boolean
   responseText: string
   citations: string[]

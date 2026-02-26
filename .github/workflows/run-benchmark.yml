@@ -11,7 +11,7 @@ on:
         required: false
         default: "Highcharts"
       model:
-        description: "OpenAI model"
+        description: "LLM model (OpenAI, Claude, or Gemini)"
         required: false
         default: "gpt-4o-mini"
       runs:
@@ -128,6 +128,8 @@ jobs:
       - name: Run prompt benchmark
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           RUNS_INPUT: ${{ github.event.inputs.runs }}
           TEMP_INPUT: ${{ github.event.inputs.temperature }}
           OUR_TERMS_INPUT: ${{ github.event.inputs.our_terms }}
