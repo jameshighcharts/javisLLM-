@@ -18,6 +18,10 @@ on:
         description: "Optional comma-separated model list (overrides model)"
         required: false
         default: ""
+      model_count:
+        description: "Deprecated compatibility input (ignored)"
+        required: false
+        default: ""
       runs:
         description: "Runs per prompt (1-3)"
         required: false
@@ -41,7 +45,7 @@ permissions:
 jobs:
   benchmark:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     env:
       PYTHONUNBUFFERED: "1"
     steps:

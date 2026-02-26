@@ -292,7 +292,6 @@ module.exports = async (req, res) => {
       trigger_id: triggerId,
       model,
       models: models.join(','),
-      model_count: String(models.length),
       runs: String(runs),
       temperature: String(temperature),
       web_search: webSearch ? 'true' : 'false',

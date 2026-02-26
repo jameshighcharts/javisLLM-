@@ -193,6 +193,15 @@ export default function Runs() {
     return message
   }, [runsQuery.isError, runsQuery.error])
 
+  const triggerErrorMessage = useMemo(() => {
+    if (!triggerMutation.isError) return ''
+    const message = (triggerMutation.error as Error).message || 'Unable to trigger run.'
+    if (message.includes('Unexpected inputs provided') && message.includes('model_count')) {
+      return 'Trigger workflow is out of sync. Pull latest main and retry.'
+    }
+    return message
+  }, [triggerMutation.isError, triggerMutation.error])
+
   const inputStyle = {
     border: '1px solid #DDD0BC',
     background: '#FFFFFF',
@@ -462,6 +471,9 @@ export default function Runs() {
                         )
                       })}
                     </div>
+                    <p className="text-xs" style={{ color: '#9AAE9C' }}>
+                      One run can include all selected providers. Dashboard and Under the Hood aggregate scores across selected models.
+                    </p>
                   </div>
                   <label className="space-y-1">
                     <span className="text-xs font-medium" style={{ color: '#7A8E7C' }}>Runs per prompt</span>
@@ -519,7 +531,7 @@ export default function Runs() {
                 className="rounded-lg px-3 py-2 text-sm"
                 style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b' }}
               >
-                {(triggerMutation.error as Error).message}
+                {triggerErrorMessage}
               </div>
             )}
             {!hasManagedRunAccess && (
