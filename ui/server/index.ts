@@ -87,6 +87,7 @@ const repoRoot = path.resolve(serverDir, "..", "..");
 const configPath = path.join(repoRoot, "config", "benchmark_config.json");
 const outputDir = path.join(repoRoot, "output");
 const SUPABASE_PAGE_SIZE = 1000;
+const DASHBOARD_RECENT_RUN_SCAN_LIMIT = 25;
 const localEnvPaths = [
   path.join(repoRoot, ".env.monthly"),
   path.join(repoRoot, ".env"),
@@ -1653,6 +1654,26 @@ function roundTo(value: number, decimals = 2): number {
   return Math.round(value * factor) / factor;
 }
 
+function hasRunResponses(responseCount: unknown): boolean {
+  return Math.max(0, Math.round(asNumber(responseCount))) > 0;
+}
+
+function selectDashboardRun<T extends { response_count: number | null; ended_at: string | null }>(
+  runs: T[],
+): T | null {
+  if (runs.length === 0) return null;
+
+  const completedWithResponses = runs.find(
+    (run) => hasRunResponses(run.response_count) && Boolean(String(run.ended_at ?? "").trim()),
+  );
+  if (completedWithResponses) return completedWithResponses;
+
+  const withResponses = runs.find((run) => hasRunResponses(run.response_count));
+  if (withResponses) return withResponses;
+
+  return runs[0];
+}
+
 function parseSupabaseList(value: unknown): string[] {
   if (Array.isArray(value)) {
     return uniqueNonEmpty(value.map((item) => String(item ?? "")));
@@ -2044,22 +2065,22 @@ async function fetchDashboardFromSupabaseViewsForServer(config: BenchmarkConfig)
     sort_order: number;
   }>;
 
-  const latestRunResult = await client
+  const recentRunsResult = await client
     .from("mv_run_summary")
     .select(
       "run_id,run_month,model,models,models_csv,model_owners,model_owners_csv,model_owner_map,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,query_count,competitor_count,input_tokens,output_tokens,total_tokens,total_duration_ms,avg_duration_ms",
     )
     .order("created_at", { ascending: false })
-    .limit(1);
+    .limit(DASHBOARD_RECENT_RUN_SCAN_LIMIT);
 
-  if (latestRunResult.error) {
-    if (isMissingRelation(latestRunResult.error)) {
+  if (recentRunsResult.error) {
+    if (isMissingRelation(recentRunsResult.error)) {
       return emptyDashboardFromConfig(config);
     }
-    throw asError(latestRunResult.error, "Failed to load mv_run_summary for dashboard");
+    throw asError(recentRunsResult.error, "Failed to load mv_run_summary for dashboard");
   }
 
-  const latestRun = ((latestRunResult.data ?? [])[0] ?? null) as MvRunSummaryRow | null;
+  const latestRun = selectDashboardRun((recentRunsResult.data ?? []) as MvRunSummaryRow[]);
   if (!latestRun) {
     return emptyDashboardFromConfig(config);
   }
@@ -2427,7 +2448,7 @@ async function fetchUnderTheHoodFromSupabaseViewsForServer(
     .filter((value): value is string => Boolean(value))
     .sort((left, right) => Date.parse(left) - Date.parse(right));
 
-  const latestRun = selectedRuns[0];
+  const latestRun = selectDashboardRun(selectedRuns) ?? selectedRuns[0];
   const webSearchStates = new Set(
     selectedRuns
       .map((run) => run.web_search_enabled)

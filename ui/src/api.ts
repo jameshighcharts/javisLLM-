@@ -26,6 +26,7 @@ import { calculateTokenCostUsd, getResolvedModelPricing } from './utils/modelPri
 const BASE = '/api'
 const SUPABASE_PAGE_SIZE = 1000
 const SUPABASE_IN_CLAUSE_CHUNK_SIZE = 500
+const DASHBOARD_RECENT_RUN_SCAN_LIMIT = 25
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const SUPABASE_ANON_KEY =
@@ -114,6 +115,9 @@ type TimeSeriesResponseRow = {
   id: number
   run_id: string
   query_id: string
+  model?: string | null
+  provider?: string | null
+  model_owner?: string | null
 }
 
 type MvRunSummaryRow = {
@@ -194,6 +198,11 @@ type MvVisibilityScoreRow = {
 type TimeSeriesOptions = {
   tags?: string[]
   mode?: 'any' | 'all'
+  providers?: string[]
+}
+
+type DashboardOptions = {
+  providers?: string[]
 }
 
 type PromptDrilldownPromptRow = {
@@ -471,6 +480,69 @@ function inferModelOwnerFromModel(model: string): string {
     return 'Google'
   }
   return 'Unknown'
+}
+
+type LlmProviderKey = 'chatgpt' | 'claude' | 'gemini'
+
+function normalizeProviderKey(value: string): LlmProviderKey | null {
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) return null
+  if (
+    normalized.includes('chatgpt') ||
+    normalized.includes('openai') ||
+    normalized.startsWith('gpt') ||
+    normalized.startsWith('o1') ||
+    normalized.startsWith('o3')
+  ) {
+    return 'chatgpt'
+  }
+  if (normalized.includes('claude') || normalized.includes('anthropic')) {
+    return 'claude'
+  }
+  if (normalized.includes('gemini') || normalized.includes('google')) {
+    return 'gemini'
+  }
+  return null
+}
+
+function normalizeSelectedProviders(providers?: string[]): LlmProviderKey[] {
+  if (!Array.isArray(providers) || providers.length === 0) return []
+  return [
+    ...new Set(
+      providers
+        .map((provider) => normalizeProviderKey(provider))
+        .filter((provider): provider is LlmProviderKey => provider !== null),
+    ),
+  ]
+}
+
+function inferProviderFromResponseRow(
+  response: {
+    provider?: string | null
+    model_owner?: string | null
+    model?: string | null
+  },
+): LlmProviderKey | null {
+  const directProvider = normalizeProviderKey(String(response.provider ?? ''))
+  if (directProvider) return directProvider
+
+  const modelOwnerProvider = normalizeProviderKey(String(response.model_owner ?? ''))
+  if (modelOwnerProvider) return modelOwnerProvider
+
+  return normalizeProviderKey(String(response.model ?? ''))
+}
+
+function responseMatchesProviderFilter(
+  response: {
+    provider?: string | null
+    model_owner?: string | null
+    model?: string | null
+  },
+  selectedProviderSet: Set<LlmProviderKey>,
+): boolean {
+  if (selectedProviderSet.size === 0) return true
+  const provider = inferProviderFromResponseRow(response)
+  return provider ? selectedProviderSet.has(provider) : false
 }
 
 function buildModelOwnerSummaryFromModels(models: string[]): {
@@ -1331,13 +1403,17 @@ async function togglePromptInSupabase(query: string, active: boolean): Promise<v
   }
 }
 
-async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
+async function fetchDashboardFromSupabase(
+  options: DashboardOptions = {},
+): Promise<DashboardResponse> {
   if (!supabase) {
     throw new Error('Supabase is not configured.')
   }
 
   const configResponse = await fetchConfigFromSupabase()
   const config = configResponse.config
+  const selectedProviders = normalizeSelectedProviders(options.providers)
+  const selectedProviderSet = new Set(selectedProviders)
 
   // Fetch ALL queries (active and paused) so we can show isPaused state in the grid
   const activeQueryResultWithTags = await fetchAllSupabasePages<PromptQueryRow>((from, to) =>
@@ -1488,7 +1564,12 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
     throw asError(responseRowsError, 'Failed to load benchmark_responses from Supabase')
   }
 
-  const responses = responseRows
+  const responses =
+    selectedProviderSet.size > 0
+      ? responseRows.filter((response) =>
+          responseMatchesProviderFilter(response, selectedProviderSet),
+        )
+      : responseRows
   const responseIds = responses.map((row) => row.id)
 
   const mentionRows: ResponseMentionRow[] = []
@@ -1705,10 +1786,23 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
   })
 
   const responseModelSet = [...new Set(responses.map((row) => row.model).filter(Boolean))]
-  const models = responseModelSet.length > 0 ? responseModelSet : latestRun.model ? [latestRun.model] : []
+  const models =
+    responseModelSet.length > 0
+      ? responseModelSet
+      : selectedProviderSet.size === 0 && latestRun.model
+        ? [latestRun.model]
+        : []
   const { modelOwners, modelOwnerMap } = buildModelOwnerSummaryFromModels(models)
   const modelOwnerStats = buildModelOwnerStatsFromResponses(responses)
   const modelStatsSummary = buildModelStatsFromResponses(responses)
+  const highchartsSeries = competitorSeries.find((series) => series.isHighcharts) ?? null
+  const derivedOverallScore =
+    0.7 * (highchartsSeries?.mentionRatePct ?? 0) +
+    0.3 * (highchartsSeries?.shareOfVoicePct ?? 0)
+  const overallScore =
+    selectedProviderSet.size > 0
+      ? Number(derivedOverallScore.toFixed(2))
+      : Number((latestRun.overall_score ?? 0).toFixed(2))
   const modelOwnerMapString = Object.entries(modelOwnerMap)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([model, owner]) => `${model}=>${owner}`)
@@ -1716,7 +1810,7 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
 
   const kpi: KpiRow = {
     metric_name: 'AI Visibility Overall',
-    ai_visibility_overall_score: Number((latestRun.overall_score ?? 0).toFixed(2)),
+    ai_visibility_overall_score: overallScore,
     score_scale: '0-100',
     queries_count: String(queryRows.length),
     window_start_utc: latestRun.started_at ?? '',
@@ -1732,7 +1826,7 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
   return {
     generatedAt: new Date().toISOString(),
     summary: {
-      overallScore: Number((latestRun.overall_score ?? 0).toFixed(2)),
+      overallScore,
       queryCount: config.queries.length,
       competitorCount: config.competitors.length,
       totalResponses,
@@ -2204,6 +2298,8 @@ async function fetchTimeseriesFromSupabase(
   }
 
   const selectedTags = normalizeSelectedTags(options.tags)
+  const selectedProviders = normalizeSelectedProviders(options.providers)
+  const selectedProviderSet = new Set(selectedProviders)
   const tagFilterMode: 'any' | 'all' = options.mode === 'all' ? 'all' : 'any'
   const selectedTagSet = new Set(selectedTags)
 
@@ -2287,26 +2383,49 @@ async function fetchTimeseriesFromSupabase(
     let responseOffset = 0
 
     while (true) {
-      const responseResult = await supabase
+      const responseResultWithProvider = await supabase
         .from('benchmark_responses')
-        .select('id,run_id,query_id')
+        .select('id,run_id,query_id,model,provider,model_owner')
         .in('run_id', runIdChunk)
         .order('id', { ascending: true })
         .range(responseOffset, responseOffset + SUPABASE_PAGE_SIZE - 1)
 
-      if (responseResult.error) {
-        if (isMissingRelation(responseResult.error)) {
-          return { ok: true, competitors, points: [] }
-        }
-        throw asError(responseResult.error, 'Failed to load benchmark_responses for time series')
+      let responseError = responseResultWithProvider.error
+      let pageRows = (responseResultWithProvider.data ?? []) as TimeSeriesResponseRow[]
+
+      if (responseError && isMissingColumn(responseError)) {
+        const responseResultFallback = await supabase
+          .from('benchmark_responses')
+          .select('id,run_id,query_id,model')
+          .in('run_id', runIdChunk)
+          .order('id', { ascending: true })
+          .range(responseOffset, responseOffset + SUPABASE_PAGE_SIZE - 1)
+        responseError = responseResultFallback.error
+        pageRows = ((responseResultFallback.data ?? []) as TimeSeriesResponseRow[]).map((row) => ({
+          ...row,
+          provider: null,
+          model_owner: null,
+        }))
       }
 
-      const pageRows = (responseResult.data ?? []) as TimeSeriesResponseRow[]
+      if (responseError) {
+        if (isMissingRelation(responseError)) {
+          return { ok: true, competitors, points: [] }
+        }
+        throw asError(responseError, 'Failed to load benchmark_responses for time series')
+      }
+
       if (pageRows.length === 0) {
         break
       }
 
       for (const response of pageRows) {
+        if (
+          selectedProviderSet.size > 0 &&
+          !responseMatchesProviderFilter(response, selectedProviderSet)
+        ) {
+          continue
+        }
         if (shouldFilterByTags) {
           const promptTags = tagsByPromptId.get(response.query_id)
           if (!promptTags || !promptMatchesTagFilter(promptTags, selectedTagSet, tagFilterMode)) {
@@ -2423,10 +2542,11 @@ async function fetchTimeseriesFromSupabase(
           : 0
 
       const derivedAiVisibility = 0.7 * highchartsRatePct + 0.3 * highchartsSovPct
-      // `overall_score` is global per run, not tag-scoped. When tags are selected we must
-      // use the derived value from filtered mentions so segmented trends stay accurate.
+      // `overall_score` is global per run, not tag- or provider-scoped. When segmentation
+      // is active we must use the derived value from filtered mentions.
       const storedAiVisibility =
         selectedTagSet.size === 0 &&
+        selectedProviderSet.size === 0 &&
         typeof run.overall_score === 'number' &&
         Number.isFinite(run.overall_score)
           ? run.overall_score
@@ -2474,6 +2594,26 @@ async function fetchTimeseriesFromSupabase(
 function roundTo(value: number, decimals = 2): number {
   const factor = 10 ** decimals
   return Math.round(value * factor) / factor
+}
+
+function hasRunResponses(responseCount: unknown): boolean {
+  return Math.max(0, Math.round(toFiniteNumber(responseCount))) > 0
+}
+
+function selectDashboardRun<T extends { response_count: number | null; ended_at: string | null }>(
+  runs: T[],
+): T | null {
+  if (runs.length === 0) return null
+
+  const completedWithResponses = runs.find(
+    (run) => hasRunResponses(run.response_count) && Boolean(String(run.ended_at ?? '').trim()),
+  )
+  if (completedWithResponses) return completedWithResponses
+
+  const withResponses = runs.find((run) => hasRunResponses(run.response_count))
+  if (withResponses) return withResponses
+
+  return runs[0]
 }
 
 function resolveRunModels(row: MvRunSummaryRow): string[] {
@@ -3306,22 +3446,22 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
     throw asError(competitorResult.error, 'Failed to load competitors for dashboard')
   }
 
-  const latestRunResult = await supabase
+  const recentRunsResult = await supabase
     .from('mv_run_summary')
     .select(
       'run_id,run_month,model,models,models_csv,model_owners,model_owners_csv,model_owner_map,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,query_count,competitor_count,input_tokens,output_tokens,total_tokens,total_duration_ms,avg_duration_ms',
     )
     .order('created_at', { ascending: false })
-    .limit(1)
+    .limit(DASHBOARD_RECENT_RUN_SCAN_LIMIT)
 
-  if (latestRunResult.error) {
-    if (isMissingRelation(latestRunResult.error)) {
+  if (recentRunsResult.error) {
+    if (isMissingRelation(recentRunsResult.error)) {
       return emptyDashboard(config)
     }
-    throw asError(latestRunResult.error, 'Failed to load mv_run_summary for dashboard')
+    throw asError(recentRunsResult.error, 'Failed to load mv_run_summary for dashboard')
   }
 
-  const latestRun = ((latestRunResult.data ?? [])[0] ?? null) as MvRunSummaryRow | null
+  const latestRun = selectDashboardRun((recentRunsResult.data ?? []) as MvRunSummaryRow[])
   if (!latestRun) {
     return emptyDashboard(config)
   }
@@ -3698,7 +3838,7 @@ async function fetchUnderTheHoodFromSupabaseViews(
     .filter((value): value is string => Boolean(toValidTimestamp(value)))
     .sort((left, right) => Date.parse(left) - Date.parse(right))
 
-  const latestRun = selectedRuns[0]
+  const latestRun = selectDashboardRun(selectedRuns) ?? selectedRuns[0]
   const webSearchStates = new Set(
     selectedRuns
       .map((run) => run.web_search_enabled)
@@ -4590,19 +4730,46 @@ export const api = {
     })
   },
 
-  async dashboard() {
+  async dashboard(optionsOrContext?: DashboardOptions | unknown) {
+    const options =
+      optionsOrContext &&
+      typeof optionsOrContext === 'object' &&
+      !Array.isArray(optionsOrContext) &&
+      !('queryKey' in optionsOrContext)
+        ? (optionsOrContext as DashboardOptions)
+        : {}
+    const normalizedProviders = normalizeSelectedProviders(options.providers)
+    const params = new URLSearchParams()
+    if (normalizedProviders.length > 0) {
+      params.set('providers', normalizedProviders.join(','))
+    }
+    const suffix = params.size > 0 ? `?${params.toString()}` : ''
+
     if (hasSupabaseConfig()) {
+      if (normalizedProviders.length > 0) {
+        try {
+          return await fetchDashboardFromSupabase({
+            providers: normalizedProviders,
+          })
+        } catch (primaryError) {
+          try {
+            return await json<DashboardResponse>(`/dashboard${suffix}`)
+          } catch {
+            throw asError(primaryError, 'Supabase dashboard query failed')
+          }
+        }
+      }
       try {
         return await fetchDashboardFromSupabaseViews()
       } catch (primaryError) {
         try {
-          return await json<DashboardResponse>('/dashboard')
+          return await json<DashboardResponse>(`/dashboard${suffix}`)
         } catch {
           throw asError(primaryError, 'Supabase dashboard query failed')
         }
       }
     }
-    return json<DashboardResponse>('/dashboard')
+    return json<DashboardResponse>(`/dashboard${suffix}`)
   },
 
   async underTheHood(range: UnderTheHoodRange = 'all'): Promise<UnderTheHoodResponse> {
@@ -4662,15 +4829,25 @@ export const api = {
 
   async timeseries(options: TimeSeriesOptions = {}): Promise<TimeSeriesResponse> {
     const normalizedTags = normalizeSelectedTags(options.tags)
+    const normalizedProviders = normalizeSelectedProviders(options.providers)
     const params = new URLSearchParams()
     if (normalizedTags.length > 0) {
       params.set('tags', normalizedTags.join(','))
       params.set('mode', options.mode === 'all' ? 'all' : 'any')
     }
+    if (normalizedProviders.length > 0) {
+      params.set('providers', normalizedProviders.join(','))
+    }
     const suffix = params.size > 0 ? `?${params.toString()}` : ''
 
     if (hasSupabaseConfig()) {
       try {
+        if (normalizedProviders.length > 0) {
+          return await fetchTimeseriesFromSupabase({
+            ...options,
+            providers: normalizedProviders,
+          })
+        }
         return await fetchTimeseriesFromSupabaseViews(options)
       } catch {
         try {

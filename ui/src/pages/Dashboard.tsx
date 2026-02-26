@@ -111,6 +111,29 @@ type TagSummary = {
   count: number
 }
 
+type ProviderFilterValue = 'chatgpt' | 'claude' | 'gemini'
+
+const PROVIDER_FILTER_OPTIONS: Array<{
+  value: ProviderFilterValue
+  label: string
+}> = [
+  { value: 'chatgpt', label: 'ChatGPT' },
+  { value: 'claude', label: 'Claude' },
+  { value: 'gemini', label: 'Gemini' },
+]
+
+function normalizeProviderList(providers: ProviderFilterValue[]): ProviderFilterValue[] {
+  return [...new Set(providers.map((provider) => provider.trim().toLowerCase()))]
+    .filter((provider): provider is ProviderFilterValue =>
+      provider === 'chatgpt' || provider === 'claude' || provider === 'gemini',
+    )
+    .sort((left, right) => left.localeCompare(right))
+}
+
+function providerLabel(provider: ProviderFilterValue): string {
+  return PROVIDER_FILTER_OPTIONS.find((option) => option.value === provider)?.label ?? provider
+}
+
 function normalizeTagList(tags: string[]): string[] {
   return [...new Set(tags.map((tag) => tag.trim().toLowerCase()).filter(Boolean))].sort()
 }
@@ -345,10 +368,13 @@ function RunMetaCard({ summary }: { summary: DashboardResponse['summary'] }) {
 function DashboardTagFilterBar({
   tags,
   selectedTags,
+  selectedProviders,
   mode,
   onToggleTag,
+  onToggleProvider,
   onModeChange,
   onClear,
+  onClearProviders,
   totalCount,
   matchedCount,
   trackedCount,
@@ -356,10 +382,13 @@ function DashboardTagFilterBar({
 }: {
   tags: TagSummary[]
   selectedTags: string[]
+  selectedProviders: ProviderFilterValue[]
   mode: TagFilterMode
   onToggleTag: (tag: string) => void
+  onToggleProvider: (provider: ProviderFilterValue) => void
   onModeChange: (mode: TagFilterMode) => void
   onClear: () => void
+  onClearProviders: () => void
   totalCount: number
   matchedCount: number
   trackedCount: number
@@ -375,12 +404,14 @@ function DashboardTagFilterBar({
   }, [tags, search])
 
   const hasActiveFilter = selectedTags.length > 0
+  const hasActiveProviderFilter = selectedProviders.length > 0
+  const hasAnyFilter = hasActiveFilter || hasActiveProviderFilter
   const allSelected = selectedTags.length === 0
 
   return (
     <div
       className="rounded-xl border shadow-sm overflow-hidden"
-      style={{ background: '#FFFFFF', borderColor: hasActiveFilter ? '#B8CCBA' : '#DDD0BC', transition: 'border-color 0.2s' }}
+      style={{ background: '#FFFFFF', borderColor: hasAnyFilter ? '#B8CCBA' : '#DDD0BC', transition: 'border-color 0.2s' }}
     >
       {/* ── Trigger row ── */}
       <button
@@ -390,7 +421,7 @@ function DashboardTagFilterBar({
         style={{ background: '#FDFCF8', cursor: 'pointer' }}
       >
         <span className="text-sm font-semibold" style={{ color: '#2A3A2C' }}>
-          Segment by tags
+          Segment by Tags &amp; Model
         </span>
         <svg
           width="16" height="16" viewBox="0 0 24 24" fill="none"
@@ -428,6 +459,31 @@ function DashboardTagFilterBar({
             {totalCount} prompts
           </span>
         )}
+        <span className="text-xs" style={{ color: '#D2C7B8' }}>
+          •
+        </span>
+        {hasActiveProviderFilter ? (
+          <div className="flex items-center gap-1.5">
+            {selectedProviders.slice(0, 3).map((provider) => (
+              <span
+                key={provider}
+                className="px-2 py-0.5 rounded-full text-[11px] font-medium"
+                style={{ background: '#EEF5EF', color: '#3D5840', border: '1px solid #C8DDC9' }}
+              >
+                {providerLabel(provider)}
+              </span>
+            ))}
+            {selectedProviders.length > 3 && (
+              <span className="text-[11px]" style={{ color: '#9AAE9C' }}>
+                +{selectedProviders.length - 3}
+              </span>
+            )}
+          </div>
+        ) : (
+          <span className="text-xs" style={{ color: '#B0A898' }}>
+            all providers
+          </span>
+        )}
       </button>
 
       {/* ── Expandable body ── */}
@@ -439,92 +495,92 @@ function DashboardTagFilterBar({
         }}
       >
         <div style={{ overflow: 'hidden' }}>
-          <div style={{ borderTop: '1px solid #F2EDE6' }}>
+          <div className="px-4 pt-3 pb-4 flex flex-col gap-3" style={{ borderTop: '1px solid #EDE6DC', background: '#FDFCF8' }}>
 
-            {/* Controls row */}
-            <div className="px-4 pt-3 pb-2 flex items-center justify-between gap-3 flex-wrap" style={{ background: '#FDFCF8' }}>
+            {/* Tags section */}
+            <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: '#9AAE9C', flexShrink: 0 }}>Tags</span>
+                <div className="flex-1" />
+                {/* Search input */}
                 <div
-                  className="flex items-center gap-2 rounded-lg px-3 py-2 sm:py-1.5"
+                  className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5"
                   style={{ background: '#FFFFFF', border: '1px solid #E8E0D2' }}
                 >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#C4BAB0" strokeWidth="2">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#C4BAB0" strokeWidth="2.5">
                     <circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" strokeLinecap="round" />
                   </svg>
                   <input
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Search tags"
-                    className="text-sm sm:text-xs bg-transparent outline-none"
-                    style={{ color: '#2A3A2C', width: 120 }}
+                    placeholder="Search"
+                    className="text-xs bg-transparent outline-none"
+                    style={{ color: '#2A3A2C', width: 80 }}
                   />
                 </div>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  className="px-3 py-2 sm:px-2.5 sm:py-1.5 rounded-lg text-sm sm:text-xs font-semibold"
-                  style={{
-                    background: mode === 'any' ? '#3D5C40' : '#FFFFFF',
-                    color: mode === 'any' ? '#FEFAE8' : '#7A8E7C',
-                    border: `1px solid ${mode === 'any' ? '#3D5C40' : '#DDD0BC'}`,
-                  }}
-                  onClick={() => onModeChange('any')}
+                {/* Match mode toggle */}
+                <div
+                  className="flex items-center rounded-lg overflow-hidden"
+                  style={{ border: '1px solid #E8E0D2', background: '#FFFFFF' }}
                 >
-                  Match Any
-                </button>
+                  <button
+                    type="button"
+                    className="px-2.5 py-1.5 text-xs font-medium transition-all"
+                    style={{
+                      background: mode === 'any' ? '#3D5C40' : 'transparent',
+                      color: mode === 'any' ? '#FEFAE8' : '#9AAE9C',
+                    }}
+                    onClick={() => onModeChange('any')}
+                  >
+                    any
+                  </button>
+                  <div style={{ width: 1, alignSelf: 'stretch', background: '#E8E0D2' }} />
+                  <button
+                    type="button"
+                    className="px-2.5 py-1.5 text-xs font-medium transition-all"
+                    style={{
+                      background: mode === 'all' ? '#3D5C40' : 'transparent',
+                      color: mode === 'all' ? '#FEFAE8' : '#9AAE9C',
+                    }}
+                    onClick={() => onModeChange('all')}
+                  >
+                    all
+                  </button>
+                </div>
+                {/* Clear tags */}
                 <button
                   type="button"
-                  className="px-3 py-2 sm:px-2.5 sm:py-1.5 rounded-lg text-sm sm:text-xs font-semibold"
-                  style={{
-                    background: mode === 'all' ? '#3D5C40' : '#FFFFFF',
-                    color: mode === 'all' ? '#FEFAE8' : '#7A8E7C',
-                    border: `1px solid ${mode === 'all' ? '#3D5C40' : '#DDD0BC'}`,
-                  }}
-                  onClick={() => onModeChange('all')}
-                >
-                  Match All
-                </button>
-                <button
-                  type="button"
-                  className="px-3 py-2 sm:px-2.5 sm:py-1.5 rounded-lg text-sm sm:text-xs font-medium"
-                  style={{
-                    background: '#FFFFFF',
-                    color: hasActiveFilter ? '#2A3A2C' : '#C4BAB0',
-                    border: '1px solid #DDD0BC',
-                    cursor: hasActiveFilter ? 'pointer' : 'default',
-                  }}
+                  className="text-xs font-medium transition-all"
+                  style={{ color: hasActiveFilter ? '#7A8E7C' : '#C4BAB0', cursor: hasActiveFilter ? 'pointer' : 'default' }}
                   onClick={onClear}
                   disabled={!hasActiveFilter}
                 >
                   Clear
                 </button>
               </div>
-            </div>
 
-            {/* Tag pills */}
-            <div className="px-4 pb-4 pt-2" style={{ background: '#FFFFFF' }}>
+              {/* Tag pills */}
               {isLoading ? (
-                <div className="flex flex-wrap gap-2">
-                  {Array.from({ length: 7 }).map((_, index) => (
-                    <Skeleton key={index} className="h-8 w-20 rounded-full" />
+                <div className="flex flex-wrap gap-1.5">
+                  {Array.from({ length: 6 }).map((_, index) => (
+                    <Skeleton key={index} className="h-7 w-20 rounded-full" />
                   ))}
                 </div>
               ) : (
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-1.5">
                   <button
                     type="button"
                     onClick={onClear}
-                    className="inline-flex items-center gap-2 px-3 py-2 sm:py-1.5 rounded-full text-sm sm:text-xs font-medium transition-all"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all"
                     style={{
                       background: allSelected ? '#3D5C40' : '#F2EDE6',
                       color: allSelected ? '#FEFAE8' : '#5A7060',
                       border: `1px solid ${allSelected ? '#3D5C40' : '#DDD0BC'}`,
                     }}
                   >
-                    <span>All</span>
+                    All
                     <span
-                      className="inline-flex items-center justify-center min-w-[20px] h-[20px] sm:min-w-[18px] sm:h-[18px] px-1 rounded-full text-[10px] font-semibold"
+                      className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold"
                       style={{
                         background: allSelected ? 'rgba(255,255,255,0.18)' : '#E8E0D2',
                         color: allSelected ? '#FEFAE8' : '#7A8E7C',
@@ -541,16 +597,16 @@ function DashboardTagFilterBar({
                           key={entry.tag}
                           type="button"
                           onClick={() => onToggleTag(entry.tag)}
-                          className="inline-flex items-center gap-2 px-3 py-2 sm:py-1.5 rounded-full text-sm sm:text-xs font-medium transition-all"
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all"
                           style={{
                             background: active ? '#3D5C40' : '#F2EDE6',
                             color: active ? '#FEFAE8' : '#5A7060',
                             border: `1px solid ${active ? '#3D5C40' : '#DDD0BC'}`,
                           }}
                         >
-                          <span>{entry.tag}</span>
+                          {entry.tag}
                           <span
-                            className="inline-flex items-center justify-center min-w-[20px] h-[20px] sm:min-w-[18px] sm:h-[18px] px-1 rounded-full text-[10px] font-semibold"
+                            className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold"
                             style={{
                               background: active ? 'rgba(255,255,255,0.18)' : '#E8E0D2',
                               color: active ? '#FEFAE8' : '#7A8E7C',
@@ -562,8 +618,56 @@ function DashboardTagFilterBar({
                       )
                     })
                   ) : (
-                    <p className="text-sm" style={{ color: '#9AAE9C' }}>No tags matched your search.</p>
+                    <p className="text-xs" style={{ color: '#9AAE9C' }}>No tags matched.</p>
                   )}
+                </div>
+              )}
+            </div>
+
+            {/* Divider */}
+            <div style={{ height: 1, background: '#EDE6DC' }} />
+
+            {/* Providers section */}
+            <div className="flex flex-col gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: '#9AAE9C' }}>Model</span>
+              {isLoading ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <Skeleton key={index} className="h-7 w-20 rounded-full" />
+                  ))}
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={onClearProviders}
+                    className="px-2.5 py-1 rounded-full text-xs font-medium transition-all"
+                    style={{
+                      background: hasActiveProviderFilter ? '#F2EDE6' : '#3D5C40',
+                      color: hasActiveProviderFilter ? '#5A7060' : '#FEFAE8',
+                      border: `1px solid ${hasActiveProviderFilter ? '#DDD0BC' : '#3D5C40'}`,
+                    }}
+                  >
+                    All
+                  </button>
+                  {PROVIDER_FILTER_OPTIONS.map((provider) => {
+                    const active = selectedProviders.includes(provider.value)
+                    return (
+                      <button
+                        key={provider.value}
+                        type="button"
+                        onClick={() => onToggleProvider(provider.value)}
+                        className="px-2.5 py-1 rounded-full text-xs font-medium transition-all"
+                        style={{
+                          background: active ? '#3D5C40' : '#F2EDE6',
+                          color: active ? '#FEFAE8' : '#5A7060',
+                          border: `1px solid ${active ? '#3D5C40' : '#DDD0BC'}`,
+                        }}
+                      >
+                        {provider.label}
+                      </button>
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -2150,20 +2254,35 @@ export default function Dashboard() {
   const setHeaderExtra = useHeaderExtra()
   const [tagFilterMode, setTagFilterMode] = useState<TagFilterMode>('any')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [selectedProviders, setSelectedProviders] = useState<ProviderFilterValue[]>([])
   const [hidden, setHidden] = useState<Set<string>>(new Set<string>())
 
   const normalizedSelectedTags = useMemo(() => normalizeTagList(selectedTags), [selectedTags])
+  const normalizedSelectedProviders = useMemo(
+    () => normalizeProviderList(selectedProviders),
+    [selectedProviders],
+  )
   const selectedTagSet = useMemo(() => new Set(normalizedSelectedTags), [normalizedSelectedTags])
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['dashboard'],
-    queryFn: api.dashboard,
+    queryKey: ['dashboard', normalizedSelectedProviders.join(',')],
+    queryFn: () => api.dashboard({ providers: normalizedSelectedProviders }),
     refetchInterval: 60_000,
   })
 
   const { data: tsData, isLoading: isTimeseriesLoading } = useQuery({
-    queryKey: ['timeseries', normalizedSelectedTags.join(','), tagFilterMode],
-    queryFn: () => api.timeseries({ tags: normalizedSelectedTags, mode: tagFilterMode }),
+    queryKey: [
+      'timeseries',
+      normalizedSelectedTags.join(','),
+      tagFilterMode,
+      normalizedSelectedProviders.join(','),
+    ],
+    queryFn: () =>
+      api.timeseries({
+        tags: normalizedSelectedTags,
+        mode: tagFilterMode,
+        providers: normalizedSelectedProviders,
+      }),
     retry: false,
     staleTime: 30_000,
     refetchInterval: 60_000,
@@ -2226,7 +2345,9 @@ export default function Dashboard() {
   const hcRate = hcEntry?.mentionRatePct ?? 0
   const hcSov = hcEntry?.shareOfVoicePct ?? 0
   const derivedOverallScore = 0.7 * hcRate + 0.3 * hcSov
-  const overallScore = normalizedSelectedTags.length > 0
+  const hasSegmentFilters =
+    normalizedSelectedTags.length > 0 || normalizedSelectedProviders.length > 0
+  const overallScore = hasSegmentFilters
     ? derivedOverallScore
     : (s?.overallScore ?? derivedOverallScore)
   const avgPromptHighcharts =
@@ -2267,6 +2388,19 @@ export default function Dashboard() {
 
   function clearTagFilter() {
     setSelectedTags([])
+  }
+
+  function toggleProvider(provider: ProviderFilterValue) {
+    setSelectedProviders((prev) => {
+      const next = new Set(normalizeProviderList(prev))
+      if (next.has(provider)) next.delete(provider)
+      else next.add(provider)
+      return [...next].sort((left, right) => left.localeCompare(right)) as ProviderFilterValue[]
+    })
+  }
+
+  function clearProviderFilter() {
+    setSelectedProviders([])
   }
 
   function toggleCompetitor(name: string) {
@@ -2311,14 +2445,17 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-4 max-w-[1360px]">
-      {/* Global tag filter */}
+      {/* Global segments */}
       <DashboardTagFilterBar
         tags={tagSummary}
         selectedTags={normalizedSelectedTags}
+        selectedProviders={normalizedSelectedProviders}
         mode={tagFilterMode}
         onToggleTag={toggleTag}
+        onToggleProvider={toggleProvider}
         onModeChange={setTagFilterMode}
         onClear={clearTagFilter}
+        onClearProviders={clearProviderFilter}
         totalCount={promptStatusAll.length}
         matchedCount={promptStatus.length}
         trackedCount={tracked.length}
@@ -2335,7 +2472,7 @@ export default function Dashboard() {
             points={timeseriesPoints}
             hcEntity={hcEntry?.entity ?? null}
             isLoading={isLoading || isTimeseriesLoading}
-            useDerivedAiVisibility={normalizedSelectedTags.length > 0}
+            useDerivedAiVisibility={hasSegmentFilters}
           />
         </div>
         <SovCard sov={hcSov} isLoading={isLoading} />
@@ -2349,8 +2486,17 @@ export default function Dashboard() {
           className="xl:col-span-7"
           title="LLM Mention Rate Over Time"
           sub={
-            normalizedSelectedTags.length > 0
-              ? `% of responses mentioning each brand for selected tags (${tagFilterMode})`
+            hasSegmentFilters
+              ? `% of responses mentioning each brand (${[
+                  normalizedSelectedTags.length > 0
+                    ? `tags ${tagFilterMode}`
+                    : null,
+                  normalizedSelectedProviders.length > 0
+                    ? `providers: ${normalizedSelectedProviders.map((provider) => providerLabel(provider)).join(', ')}`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')})`
               : '% of responses that mention each brand across runs'
           }
           action={
@@ -2414,7 +2560,7 @@ export default function Dashboard() {
           <div>
             <div className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>Prompt Performance</div>
             <div className="text-xs mt-0.5" style={{ color: '#9AAE9C' }}>
-              Mention &amp; viability rates per query — scoped by prompt-tag filter
+              Mention &amp; viability rates per query — scoped by selected segments
             </div>
           </div>
         </div>

@@ -16,6 +16,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
@@ -25,6 +26,18 @@ from supabase import Client, create_client
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH = ROOT_DIR / "config" / "benchmark_config.json"
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "output"
+BENCHMARK_RESPONSE_OPTIONAL_COLUMNS = {
+    "model_run_id",
+    "model_index",
+    "provider",
+    "model_owner",
+    "duration_ms",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+}
+BENCHMARK_RESPONSE_CONFLICT_MODEL_AWARE = "run_id,query_id,run_iteration,model"
+BENCHMARK_RESPONSE_CONFLICT_LEGACY = "run_id,query_id,run_iteration"
 
 
 class SyncError(RuntimeError):
@@ -170,8 +183,29 @@ def normalize_query_tags(
     }
 
 
-def is_missing_column_error(error: Any) -> bool:
-    return "42703" in str(error)
+def extract_missing_column_name(error: Any, table_name: str) -> str | None:
+    text = str(error)
+    cache_match = re.search(
+        rf"Could not find the '([^']+)' column of '{re.escape(table_name)}' in the schema cache",
+        text,
+    )
+    if cache_match:
+        return cache_match.group(1)
+    relation_match = re.search(
+        rf'column "([^"]+)" of relation "{re.escape(table_name)}" does not exist',
+        text,
+    )
+    if relation_match:
+        return relation_match.group(1)
+    generic_match = re.search(r'column "([^"]+)" does not exist', text)
+    if generic_match:
+        return generic_match.group(1)
+    return None
+
+
+def is_on_conflict_constraint_error(error: Any) -> bool:
+    text = str(error)
+    return "42P10" in text or "no unique or exclusion constraint matching" in text.lower()
 
 
 def slugify(value: str) -> str:
@@ -223,6 +257,99 @@ def execute_or_raise(result: Any, context: str) -> List[Dict[str, Any]]:
     return []
 
 
+def upsert_with_optional_columns(
+    client: Client,
+    table_name: str,
+    rows: Sequence[Dict[str, Any]],
+    *,
+    on_conflict: str,
+    optional_columns: set[str],
+    context: str,
+) -> None:
+    if not rows:
+        return
+
+    payload = [dict(row) for row in rows]
+    skipped_columns: set[str] = set()
+    while True:
+        try:
+            client.table(table_name).upsert(payload, on_conflict=on_conflict).execute()
+            return
+        except Exception as exc:  # noqa: BLE001
+            missing_column = extract_missing_column_name(exc, table_name)
+            if (
+                missing_column
+                and missing_column in optional_columns
+                and missing_column not in skipped_columns
+            ):
+                skipped_columns.add(missing_column)
+                for row in payload:
+                    row.pop(missing_column, None)
+                print(
+                    f"Supabase table '{table_name}' missing optional column '{missing_column}'. "
+                    "Retrying without it."
+                )
+                continue
+            raise SyncError(f"{context}: {exc}") from exc
+
+
+def upsert_benchmark_response_chunk(
+    client: Client,
+    rows: Sequence[Dict[str, Any]],
+    *,
+    allow_legacy_conflict: bool,
+) -> None:
+    if not rows:
+        return
+
+    payload = [dict(row) for row in rows]
+    skipped_columns: set[str] = set()
+    conflict_target = BENCHMARK_RESPONSE_CONFLICT_MODEL_AWARE
+
+    while True:
+        try:
+            client.table("benchmark_responses").upsert(
+                payload,
+                on_conflict=conflict_target,
+            ).execute()
+            return
+        except Exception as exc:  # noqa: BLE001
+            missing_column = extract_missing_column_name(exc, "benchmark_responses")
+            if (
+                missing_column
+                and missing_column in BENCHMARK_RESPONSE_OPTIONAL_COLUMNS
+                and missing_column not in skipped_columns
+            ):
+                skipped_columns.add(missing_column)
+                for row in payload:
+                    row.pop(missing_column, None)
+                print(
+                    "Supabase table 'benchmark_responses' missing optional column "
+                    f"'{missing_column}'. Retrying without it."
+                )
+                continue
+
+            if (
+                conflict_target == BENCHMARK_RESPONSE_CONFLICT_MODEL_AWARE
+                and is_on_conflict_constraint_error(exc)
+            ):
+                if not allow_legacy_conflict:
+                    raise SyncError(
+                        "Supabase schema is missing model-aware uniqueness for "
+                        "`benchmark_responses` required by multi-model runs. "
+                        "Apply supabase/sql/006_benchmark_response_model_metrics.sql "
+                        "and rerun."
+                    ) from exc
+                conflict_target = BENCHMARK_RESPONSE_CONFLICT_LEGACY
+                print(
+                    "Supabase `benchmark_responses` uses legacy uniqueness; falling back "
+                    "to on_conflict='run_id,query_id,run_iteration' for this single-model run."
+                )
+                continue
+
+            raise SyncError(f"Failed to upsert benchmark_responses rows: {exc}") from exc
+
+
 def batched(items: Sequence[Dict[str, Any]], size: int) -> Iterable[List[Dict[str, Any]]]:
     for idx in range(0, len(items), size):
         yield list(items[idx : idx + size])
@@ -251,16 +378,14 @@ def sync_config(client: Client, config: Dict[str, Any]) -> Tuple[Dict[str, str],
         }
         for index, query in enumerate(queries)
     ]
-    prompt_upsert = client.table("prompt_queries").upsert(
-        query_rows, on_conflict="query_text"
-    ).execute()
-    prompt_error = getattr(prompt_upsert, "error", None)
-    if prompt_error and is_missing_column_error(prompt_error):
-        query_rows_no_tags = [{k: v for k, v in row.items() if k != "tags"} for row in query_rows]
-        prompt_upsert = client.table("prompt_queries").upsert(
-            query_rows_no_tags, on_conflict="query_text"
-        ).execute()
-    execute_or_raise(prompt_upsert, "Failed to upsert prompt_queries")
+    upsert_with_optional_columns(
+        client,
+        "prompt_queries",
+        query_rows,
+        on_conflict="query_text",
+        optional_columns={"tags"},
+        context="Failed to upsert prompt_queries",
+    )
 
     all_queries = execute_or_raise(
         client.table("prompt_queries").select("id,query_text,is_active").execute(),
@@ -458,13 +583,13 @@ def sync_run_data(
         )
 
     if response_payload:
+        unique_models = {str(row.get("model") or "") for row in response_payload if row.get("model")}
+        allow_legacy_conflict = len(unique_models) <= 1
         for chunk in batched(response_payload, 300):
-            execute_or_raise(
-                client.table("benchmark_responses").upsert(
-                    chunk,
-                    on_conflict="run_id,query_id,run_iteration,model",
-                ).execute(),
-                "Failed to upsert benchmark_responses rows",
+            upsert_benchmark_response_chunk(
+                client,
+                chunk,
+                allow_legacy_conflict=allow_legacy_conflict,
             )
 
     run_response_rows = execute_or_raise(
@@ -544,7 +669,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SyncError as exc:
         print(f"Supabase sync failed: {exc}", file=sys.stderr)
         print(
-            "If run tables do not exist yet, apply supabase/sql/001_init_schema.sql first.",
+            "If run tables are missing, apply supabase/sql/001_init_schema.sql first. "
+            "If multi-model/token fields fail, also apply "
+            "supabase/sql/006_benchmark_response_model_metrics.sql.",
+            file=sys.stderr,
+        )
+        return 1
+    except Exception as exc:  # noqa: BLE001
+        print(f"Supabase sync failed: {exc}", file=sys.stderr)
+        print(
+            "Unexpected Supabase API error. Verify credentials and apply the latest schema "
+            "migrations, including supabase/sql/006_benchmark_response_model_metrics.sql.",
             file=sys.stderr,
         )
         return 1

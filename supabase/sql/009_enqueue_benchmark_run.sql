@@ -160,6 +160,12 @@ begin
     total_responses = coalesce(br.total_responses, 0)
   where br.id = p_run_id;
 
+  -- If there are no active prompts, no jobs are created and the worker will never see
+  -- this run. Finalize immediately so runs are not left pending forever.
+  if v_query_count = 0 then
+    perform public.finalize_benchmark_run(p_run_id);
+  end if;
+
   return jsonb_build_object(
     'run_id', p_run_id,
     'jobs_enqueued', v_jobs_enqueued,

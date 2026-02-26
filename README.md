@@ -185,6 +185,7 @@ Schema SQL:
 - `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/003_restrict_public_response_reads.sql`
 - `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/004_prompt_query_tags.sql`
 - `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/005_competitor_blog_posts.sql`
+- `/Users/jamesm/projects/easy_llm_benchmarker/supabase/sql/006_benchmark_response_model_metrics.sql`
 Apply in numeric order when provisioning a new project.
 
 Environment variables:
