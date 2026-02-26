@@ -2,10 +2,9 @@ import { useQuery } from '@tanstack/react-query'
 import Highcharts from 'highcharts'
 import HighchartsReact from 'highcharts-react-official'
 import type { CSSProperties, ReactNode } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
-import { useHeaderExtra } from '../components/Layout'
 import type {
   CompetitorSeries,
   DashboardResponse,
@@ -336,32 +335,6 @@ function Card({
       </div>
       <div className="p-5 pt-4">{children}</div>
     </div>
-  )
-}
-
-// ── Run Meta Card ─────────────────────────────────────────────────────────────
-
-function RunMetaCard({ summary }: { summary: DashboardResponse['summary'] }) {
-  const runLabel = summary.runMonth
-    ? new Date(summary.runMonth + '-01').toLocaleString('default', { month: 'long', year: 'numeric' })
-    : null
-  const model = summary.models.length > 0 ? summary.models.join(', ') : null
-  const modelOwners = summary.modelOwners.length > 0 ? summary.modelOwners.join(', ') : null
-  const webSearch = summary.webSearchEnabled ? (summary.webSearchEnabled === 'yes' ? 'ON' : 'OFF') : null
-
-  const parts = [
-    runLabel,
-    model ? `Model: "${model}"` : null,
-    modelOwners ? `Owners: ${modelOwners}` : null,
-    webSearch ? `Web search: ${webSearch}` : null,
-  ].filter(Boolean).join(',  ')
-
-  if (!parts) return null
-
-  return (
-    <p className="text-[11px]" style={{ color: '#B0A898' }}>
-      {parts}
-    </p>
   )
 }
 
@@ -2251,7 +2224,6 @@ function PromptStatusTable({
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const setHeaderExtra = useHeaderExtra()
   const [tagFilterMode, setTagFilterMode] = useState<TagFilterMode>('any')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [selectedProviders, setSelectedProviders] = useState<ProviderFilterValue[]>([])
@@ -2289,38 +2261,6 @@ export default function Dashboard() {
   })
 
   const s = data?.summary
-
-  useEffect(() => {
-    if (!data) return
-    const runLabel = data.summary.runMonth
-      ? new Date(data.summary.runMonth + '-01').toLocaleString('default', { month: 'long', year: 'numeric' })
-      : null
-    const models = data.summary.models.join(', ') || null
-    const modelOwners = data.summary.modelOwners.join(', ') || null
-    const webSearch = data.summary.webSearchEnabled
-      ? (data.summary.webSearchEnabled === 'yes' ? 'ON' : 'OFF')
-      : null
-    const pills = [
-      runLabel,
-      models ? `Model: "${models}"` : null,
-      modelOwners ? `Owners: ${modelOwners}` : null,
-      webSearch ? `Web search: ${webSearch}` : null,
-    ].filter(Boolean) as string[]
-    setHeaderExtra(
-      <div className="hidden sm:flex items-center gap-2 ml-auto">
-        {pills.map((val) => (
-          <span
-            key={val}
-            className="text-[11px] font-medium px-2.5 py-1 rounded-md"
-            style={{ background: '#F0EBE3', color: '#7A8E7C', border: '1px solid #DDD0BC' }}
-          >
-            {val}
-          </span>
-        ))}
-      </div>
-    )
-    return () => setHeaderExtra(null)
-  }, [data, setHeaderExtra])
 
   const promptStatusAll = data?.promptStatus ?? []
   const competitorSeriesAll = data?.competitorSeries ?? []
