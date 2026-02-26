@@ -9,6 +9,12 @@ import type {
   PromptDrilldownResponseItem,
   PromptDrilldownRunPoint,
 } from '../types'
+import {
+  calculateTokenCostUsd,
+  formatUsd,
+  formatUsdPerMillion,
+  getResolvedModelPricing,
+} from '../utils/modelPricing'
 
 const HC_COLOR = '#8FBB93'
 const RIVAL_COLORS = ['#C8A87A', '#A89CB8', '#D49880', '#C8B858', '#7AABB8', '#C89878']
@@ -151,6 +157,10 @@ function shortRunId(value: string) {
 function truncate(value: string, limit: number) {
   if (value.length <= limit) return value
   return `${value.slice(0, limit)}…`
+}
+
+function formatInteger(value: number) {
+  return Math.max(0, Math.round(value)).toLocaleString()
 }
 
 type OutputTagMap = Record<string, string>
@@ -754,6 +764,12 @@ function ResponseExplorer({
             ? response.responseText
             : truncate(response.responseText, 420)
           const modelOwner = response.modelOwner ?? inferModelOwner(response.model)
+          const promptTokens = Math.max(0, Math.round(response.promptTokens ?? 0))
+          const completionTokens = Math.max(0, Math.round(response.completionTokens ?? 0))
+          const pricing = getResolvedModelPricing(response.model)
+          const estimatedCosts = pricing
+            ? calculateTokenCostUsd(promptTokens, completionTokens, pricing)
+            : null
 
           return (
             <div
@@ -793,6 +809,29 @@ function ResponseExplorer({
                     }}
                   >
                     web {response.webSearchEnabled ? 'on' : 'off'}
+                  </span>
+                  <span
+                    className="px-2 py-0.5 rounded-full font-medium tabular-nums"
+                    style={{ background: '#F8F5F0', color: '#7A8E7C', border: '1px solid #DDD0BC' }}
+                  >
+                    in {formatInteger(promptTokens)}
+                  </span>
+                  <span
+                    className="px-2 py-0.5 rounded-full font-medium tabular-nums"
+                    style={{ background: '#F8F5F0', color: '#7A8E7C', border: '1px solid #DDD0BC' }}
+                  >
+                    out {formatInteger(completionTokens)}
+                  </span>
+                  <span
+                    className="px-2 py-0.5 rounded-full font-semibold tabular-nums"
+                    style={{
+                      background: estimatedCosts ? '#F0F7F1' : '#F8FAFC',
+                      color: estimatedCosts ? '#2A5C2E' : '#64748b',
+                      border: `1px solid ${estimatedCosts ? '#C8DEC9' : '#E2E8F0'}`,
+                    }}
+                    title={pricing ? `${formatUsdPerMillion(pricing.inputUsdPerMillion)} in, ${formatUsdPerMillion(pricing.outputUsdPerMillion)} out` : 'No pricing found'}
+                  >
+                    {estimatedCosts ? formatUsd(estimatedCosts.totalCostUsd) : 'cost n/a'}
                   </span>
                 </div>
               </div>
@@ -912,6 +951,114 @@ export default function PromptDrilldown() {
     retry: false,
   })
 
+  const data = drilldownQuery.data
+  const loading = drilldownQuery.isLoading || !data
+
+  const costSummary = useMemo(() => {
+    const responses = data?.responses ?? []
+    const unpricedModelSet = new Set<string>()
+    const modelBuckets = new Map<
+      string,
+      {
+        model: string
+        owner: string
+        responseCount: number
+        inputTokens: number
+        outputTokens: number
+        totalTokens: number
+        inputCostUsd: number
+        outputCostUsd: number
+        totalCostUsd: number
+        pricing: ReturnType<typeof getResolvedModelPricing> | null
+      }
+    >()
+
+    let totalInputTokens = 0
+    let totalOutputTokens = 0
+    let totalTokens = 0
+    let totalInputCostUsd = 0
+    let totalOutputCostUsd = 0
+    let totalCostUsd = 0
+    let pricedResponseCount = 0
+
+    for (const response of responses) {
+      const model = response.model
+      const owner = response.modelOwner ?? inferModelOwner(response.model)
+      const inputTokens = Math.max(0, Math.round(response.promptTokens ?? 0))
+      const outputTokens = Math.max(0, Math.round(response.completionTokens ?? 0))
+      const responseTotalTokens = Math.max(
+        0,
+        Math.round(response.totalTokens ?? inputTokens + outputTokens),
+      )
+      const pricing = getResolvedModelPricing(model)
+      const costs = pricing
+        ? calculateTokenCostUsd(inputTokens, outputTokens, pricing)
+        : null
+
+      totalInputTokens += inputTokens
+      totalOutputTokens += outputTokens
+      totalTokens += responseTotalTokens
+      totalInputCostUsd += costs?.inputCostUsd ?? 0
+      totalOutputCostUsd += costs?.outputCostUsd ?? 0
+      totalCostUsd += costs?.totalCostUsd ?? 0
+      if (costs) {
+        pricedResponseCount += 1
+      } else {
+        unpricedModelSet.add(model)
+      }
+
+      const existingBucket = modelBuckets.get(model)
+      if (existingBucket) {
+        existingBucket.responseCount += 1
+        existingBucket.inputTokens += inputTokens
+        existingBucket.outputTokens += outputTokens
+        existingBucket.totalTokens += responseTotalTokens
+        existingBucket.inputCostUsd += costs?.inputCostUsd ?? 0
+        existingBucket.outputCostUsd += costs?.outputCostUsd ?? 0
+        existingBucket.totalCostUsd += costs?.totalCostUsd ?? 0
+        if (!existingBucket.pricing && pricing) {
+          existingBucket.pricing = pricing
+        }
+      } else {
+        modelBuckets.set(model, {
+          model,
+          owner,
+          responseCount: 1,
+          inputTokens,
+          outputTokens,
+          totalTokens: responseTotalTokens,
+          inputCostUsd: costs?.inputCostUsd ?? 0,
+          outputCostUsd: costs?.outputCostUsd ?? 0,
+          totalCostUsd: costs?.totalCostUsd ?? 0,
+          pricing,
+        })
+      }
+    }
+
+    const modelRows = [...modelBuckets.values()].sort((left, right) => {
+      if (right.totalCostUsd !== left.totalCostUsd) {
+        return right.totalCostUsd - left.totalCostUsd
+      }
+      if (right.responseCount !== left.responseCount) {
+        return right.responseCount - left.responseCount
+      }
+      return left.model.localeCompare(right.model)
+    })
+
+    return {
+      totalInputTokens,
+      totalOutputTokens,
+      totalTokens,
+      totalInputCostUsd,
+      totalOutputCostUsd,
+      totalCostUsd,
+      pricedResponseCount,
+      modelRows,
+      unpricedModels: [...unpricedModelSet].sort((left, right) => left.localeCompare(right)),
+      avgCostPerResponseUsd: pricedResponseCount > 0 ? totalCostUsd / pricedResponseCount : 0,
+    }
+  }, [data])
+
   if (!query) {
     return (
       <div
@@ -942,9 +1089,6 @@ export default function PromptDrilldown() {
       </div>
     )
   }
-
-  const data = drilldownQuery.data
-  const loading = drilldownQuery.isLoading || !data
 
   return (
     <div className="max-w-[1200px] space-y-4">
@@ -999,8 +1143,8 @@ export default function PromptDrilldown() {
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {Array.from({ length: 4 }).map((_, index) => (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {Array.from({ length: 6 }).map((_, index) => (
             <div
               key={index}
               className="rounded-xl border animate-pulse h-[118px]"
@@ -1009,7 +1153,7 @@ export default function PromptDrilldown() {
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <SummaryCard
             label="Highcharts Rate"
             value={`${data.summary.highchartsRatePct.toFixed(1)}%`}
@@ -1031,6 +1175,17 @@ export default function PromptDrilldown() {
             label="Tracked Runs"
             value={String(data.summary.trackedRuns)}
             sub={data.summary.lastRunAt ? `Last run ${formatDateTime(data.summary.lastRunAt)}` : 'No runs yet'}
+          />
+          <SummaryCard
+            label="Estimated Prompt Cost"
+            value={formatUsd(costSummary.totalCostUsd)}
+            sub={`${costSummary.pricedResponseCount}/${data.summary.totalResponses} outputs priced`}
+            accent="#2A5C2E"
+          />
+          <SummaryCard
+            label="Avg Cost / Output"
+            value={formatUsd(costSummary.avgCostPerResponseUsd)}
+            sub={`${formatInteger(costSummary.totalInputTokens)} in · ${formatInteger(costSummary.totalOutputTokens)} out`}
           />
         </div>
       )}
@@ -1096,6 +1251,149 @@ export default function PromptDrilldown() {
             <div className="h-[220px] rounded-lg animate-pulse" style={{ background: '#E5DDD0' }} />
           ) : (
             <RunHistoryTable runPoints={data.runPoints} />
+          )}
+        </div>
+      </div>
+
+      <div
+        className="rounded-xl border shadow-sm overflow-hidden"
+        style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
+      >
+        <div className="px-5 py-4" style={{ borderBottom: '1px solid #F2EDE6' }}>
+          <div className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>
+            Prompt Cost Breakdown
+          </div>
+          <div className="text-xs mt-0.5" style={{ color: '#9AAE9C' }}>
+            Estimated input/output token cost per model for this prompt.
+          </div>
+        </div>
+        <div className="p-4 space-y-3">
+          {loading ? (
+            <div className="h-[220px] rounded-lg animate-pulse" style={{ background: '#E5DDD0' }} />
+          ) : (
+            <>
+              {costSummary.unpricedModels.length > 0 && (
+                <div
+                  className="rounded-lg border px-3 py-2 text-xs"
+                  style={{ background: '#FFFBEB', borderColor: '#FCD34D', color: '#92400E' }}
+                >
+                  Missing pricing for: {costSummary.unpricedModels.join(', ')}
+                </div>
+              )}
+
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[1140px] border-collapse">
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #F2EDE6', background: '#FDFCF8' }}>
+                      <th className="px-4 py-3 text-left text-xs font-medium" style={{ color: '#7A8E7C' }}>Model</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Responses</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Input tokens</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Output tokens</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Input rate</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Output rate</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Input cost</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Output cost</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Total cost</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Cost / output</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {costSummary.modelRows.map((row, index) => {
+                      const avgCostPerResponse =
+                        row.responseCount > 0 ? row.totalCostUsd / row.responseCount : 0
+                      return (
+                        <tr
+                          key={row.model}
+                          style={{
+                            borderBottom:
+                              index < costSummary.modelRows.length - 1
+                                ? '1px solid #F2EDE6'
+                                : 'none',
+                          }}
+                        >
+                          <td className="px-4 py-3">
+                            <div className="text-sm font-semibold" style={{ color: '#2A3A2C' }}>
+                              {row.model}
+                            </div>
+                            <div className="text-xs" style={{ color: '#8FA191' }}>
+                              {row.owner}
+                            </div>
+                            {row.pricing?.matchedBy === 'family' && (
+                              <div className="text-[11px]" style={{ color: '#B45309' }}>
+                                family price match
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right text-sm tabular-nums" style={{ color: '#2A3A2C' }}>
+                            {formatInteger(row.responseCount)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-sm tabular-nums" style={{ color: '#2A3A2C' }}>
+                            {formatInteger(row.inputTokens)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-sm tabular-nums" style={{ color: '#2A3A2C' }}>
+                            {formatInteger(row.outputTokens)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-sm tabular-nums" style={{ color: '#3D5840' }}>
+                            {row.pricing ? formatUsdPerMillion(row.pricing.inputUsdPerMillion) : 'n/a'}
+                          </td>
+                          <td className="px-4 py-3 text-right text-sm tabular-nums" style={{ color: '#3D5840' }}>
+                            {row.pricing ? formatUsdPerMillion(row.pricing.outputUsdPerMillion) : 'n/a'}
+                          </td>
+                          <td className="px-4 py-3 text-right text-sm tabular-nums" style={{ color: '#3D5840' }}>
+                            {row.pricing ? formatUsd(row.inputCostUsd) : 'n/a'}
+                          </td>
+                          <td className="px-4 py-3 text-right text-sm tabular-nums" style={{ color: '#3D5840' }}>
+                            {row.pricing ? formatUsd(row.outputCostUsd) : 'n/a'}
+                          </td>
+                          <td className="px-4 py-3 text-right text-sm font-semibold tabular-nums" style={{ color: '#2A3A2C' }}>
+                            {row.pricing ? formatUsd(row.totalCostUsd) : 'n/a'}
+                          </td>
+                          <td className="px-4 py-3 text-right text-sm font-semibold tabular-nums" style={{ color: '#2A5C2E' }}>
+                            {row.pricing ? formatUsd(avgCostPerResponse) : 'n/a'}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div
+                  className="rounded-lg border px-3 py-2"
+                  style={{ background: '#FDFCF8', borderColor: '#E5DDD0' }}
+                >
+                  <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: '#8FA191' }}>
+                    Input Cost
+                  </div>
+                  <div className="text-lg font-semibold tabular-nums" style={{ color: '#2A3A2C' }}>
+                    {formatUsd(costSummary.totalInputCostUsd)}
+                  </div>
+                </div>
+                <div
+                  className="rounded-lg border px-3 py-2"
+                  style={{ background: '#FDFCF8', borderColor: '#E5DDD0' }}
+                >
+                  <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: '#8FA191' }}>
+                    Output Cost
+                  </div>
+                  <div className="text-lg font-semibold tabular-nums" style={{ color: '#2A3A2C' }}>
+                    {formatUsd(costSummary.totalOutputCostUsd)}
+                  </div>
+                </div>
+                <div
+                  className="rounded-lg border px-3 py-2"
+                  style={{ background: '#F0F7F1', borderColor: '#C8DEC9' }}
+                >
+                  <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: '#2A5C2E' }}>
+                    Total Prompt Cost
+                  </div>
+                  <div className="text-lg font-semibold tabular-nums" style={{ color: '#2A5C2E' }}>
+                    {formatUsd(costSummary.totalCostUsd)}
+                  </div>
+                </div>
+              </div>
+            </>
           )}
         </div>
       </div>

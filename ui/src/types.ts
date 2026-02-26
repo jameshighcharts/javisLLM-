@@ -87,6 +87,13 @@ export interface PromptStatus {
   topCompetitor: { entity: string; ratePct: number } | null
   latestRunResponseCount?: number | null
   competitorRates?: PromptCompetitorRate[]
+  latestInputTokens?: number
+  latestOutputTokens?: number
+  latestTotalTokens?: number
+  estimatedInputCostUsd?: number
+  estimatedOutputCostUsd?: number
+  estimatedTotalCostUsd?: number
+  estimatedAvgCostPerResponseUsd?: number
 }
 
 export interface PromptCompetitorRate {
@@ -110,6 +117,17 @@ export interface DashboardResponse {
     kpiPresent: boolean
     llmOutputsPresent: boolean
   }
+}
+
+export type UnderTheHoodRange = '1d' | '7d' | '30d' | 'all'
+
+export interface UnderTheHoodResponse {
+  generatedAt: string
+  range: UnderTheHoodRange
+  rangeLabel: string
+  rangeStartUtc: string | null
+  rangeEndUtc: string | null
+  summary: DashboardSummary
 }
 
 export interface BenchmarkConfig {
@@ -348,4 +366,38 @@ export interface BenchmarkRunsResponse {
   workflow: string
   repo: string
   runs: BenchmarkWorkflowRun[]
+}
+
+export interface BenchmarkRunCostItem {
+  runId: string
+  runMonth: string | null
+  createdAt: string | null
+  startedAt: string | null
+  endedAt: string | null
+  webSearchEnabled: boolean | null
+  responseCount: number
+  models: string[]
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  pricedResponseCount: number
+  unpricedModels: string[]
+  estimatedInputCostUsd: number
+  estimatedOutputCostUsd: number
+  estimatedTotalCostUsd: number
+}
+
+export interface BenchmarkRunCostsResponse {
+  generatedAt: string
+  runCount: number
+  totals: {
+    responseCount: number
+    inputTokens: number
+    outputTokens: number
+    totalTokens: number
+    estimatedInputCostUsd: number
+    estimatedOutputCostUsd: number
+    estimatedTotalCostUsd: number
+  }
+  runs: BenchmarkRunCostItem[]
 }

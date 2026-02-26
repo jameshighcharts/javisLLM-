@@ -16,6 +16,8 @@ type BenchmarkConfig = {
   pausedQueries: string[];
 };
 
+type UnderTheHoodRange = "1d" | "7d" | "30d" | "all";
+
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(serverDir, "..", "..");
 const configPath = path.join(repoRoot, "config", "benchmark_config.json");
@@ -359,6 +361,130 @@ function splitCsvish(value: string): string[] {
     .split(/[;,]/)
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+const UNDER_THE_HOOD_RANGE_OPTIONS: UnderTheHoodRange[] = ["1d", "7d", "30d", "all"];
+
+function normalizeUnderTheHoodRange(value: unknown): UnderTheHoodRange {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase() as UnderTheHoodRange;
+  return UNDER_THE_HOOD_RANGE_OPTIONS.includes(normalized) ? normalized : "all";
+}
+
+function rangeLabelForUnderTheHood(range: UnderTheHoodRange): string {
+  if (range === "1d") return "Last 1 day";
+  if (range === "7d") return "Last 7 days";
+  if (range === "30d") return "Last 30 days";
+  return "All time";
+}
+
+function rangeStartMsForUnderTheHood(range: UnderTheHoodRange, nowMs: number): number | null {
+  if (range === "1d") return nowMs - 24 * 60 * 60 * 1000;
+  if (range === "7d") return nowMs - 7 * 24 * 60 * 60 * 1000;
+  if (range === "30d") return nowMs - 30 * 24 * 60 * 60 * 1000;
+  return null;
+}
+
+function timestampMs(value: unknown): number | null {
+  const parsed = Date.parse(String(value ?? "").trim());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+type ModelPricing = {
+  inputUsdPerMillion: number;
+  outputUsdPerMillion: number;
+};
+
+const MODEL_PRICING_BY_MODEL: Record<string, ModelPricing> = {
+  "gpt-5.2": { inputUsdPerMillion: 1.75, outputUsdPerMillion: 14 },
+  "gpt-4o": { inputUsdPerMillion: 2.5, outputUsdPerMillion: 10 },
+  "gpt-4o-mini": { inputUsdPerMillion: 0.15, outputUsdPerMillion: 0.6 },
+  "claude-sonnet-4-5-20250929": { inputUsdPerMillion: 3, outputUsdPerMillion: 15 },
+  "claude-opus-4-1-20250805": { inputUsdPerMillion: 15, outputUsdPerMillion: 75 },
+  "claude-opus-4-20250514": { inputUsdPerMillion: 15, outputUsdPerMillion: 75 },
+  "gemini-2.5-flash": { inputUsdPerMillion: 0.3, outputUsdPerMillion: 2.5 },
+};
+
+const MODEL_PRICING_FAMILY_RULES: Array<{
+  test: (normalizedModel: string) => boolean;
+  pricing: ModelPricing;
+}> = [
+  {
+    test: (model) => model === "gpt-5.2" || model.startsWith("gpt-5.2-"),
+    pricing: MODEL_PRICING_BY_MODEL["gpt-5.2"],
+  },
+  {
+    test: (model) => model === "gpt-4o",
+    pricing: MODEL_PRICING_BY_MODEL["gpt-4o"],
+  },
+  {
+    test: (model) => model === "gpt-4o-mini" || model.startsWith("gpt-4o-mini-"),
+    pricing: MODEL_PRICING_BY_MODEL["gpt-4o-mini"],
+  },
+  {
+    test: (model) => model === "claude-sonnet-4-5" || model.startsWith("claude-sonnet-4-5-"),
+    pricing: MODEL_PRICING_BY_MODEL["claude-sonnet-4-5-20250929"],
+  },
+  {
+    test: (model) => model === "claude-sonnet-4" || model.startsWith("claude-sonnet-4-"),
+    pricing: MODEL_PRICING_BY_MODEL["claude-sonnet-4-5-20250929"],
+  },
+  {
+    test: (model) => model.startsWith("claude-opus-4-5"),
+    pricing: MODEL_PRICING_BY_MODEL["claude-opus-4-1-20250805"],
+  },
+  {
+    test: (model) => model === "claude-opus-4-1" || model.startsWith("claude-opus-4-1-"),
+    pricing: MODEL_PRICING_BY_MODEL["claude-opus-4-1-20250805"],
+  },
+  {
+    test: (model) => model === "claude-opus-4" || model.startsWith("claude-opus-4-"),
+    pricing: MODEL_PRICING_BY_MODEL["claude-opus-4-20250514"],
+  },
+  {
+    test: (model) => model === "gemini-2.5-flash" || model.startsWith("gemini-2.5-flash-"),
+    pricing: MODEL_PRICING_BY_MODEL["gemini-2.5-flash"],
+  },
+];
+
+function safeTokenInt(value: unknown): number {
+  const parsed = Number(value ?? 0);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.max(0, Math.round(parsed));
+}
+
+function resolveModelPricingForServer(model: string): ModelPricing | null {
+  const normalized = model.trim().toLowerCase();
+  if (!normalized) return null;
+  const exact = MODEL_PRICING_BY_MODEL[normalized];
+  if (exact) return exact;
+  const familyMatch = MODEL_PRICING_FAMILY_RULES.find((rule) => rule.test(normalized));
+  return familyMatch?.pricing ?? null;
+}
+
+function estimateResponseCostForServer(
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+): {
+  inputCostUsd: number;
+  outputCostUsd: number;
+  totalCostUsd: number;
+  priced: boolean;
+} {
+  const pricing = resolveModelPricingForServer(model);
+  if (!pricing) {
+    return { inputCostUsd: 0, outputCostUsd: 0, totalCostUsd: 0, priced: false };
+  }
+  const inputCostUsd = (inputTokens / 1_000_000) * pricing.inputUsdPerMillion;
+  const outputCostUsd = (outputTokens / 1_000_000) * pricing.outputUsdPerMillion;
+  return {
+    inputCostUsd,
+    outputCostUsd,
+    totalCostUsd: inputCostUsd + outputCostUsd,
+    priced: true,
+  };
 }
 
 function inferModelOwnerFromModel(model: string): string {
@@ -1520,6 +1646,280 @@ app.post("/api/prompt-lab/run", async (req, res) => {
   }
 });
 
+app.get("/api/under-the-hood", async (req, res) => {
+  try {
+    const range = normalizeUnderTheHoodRange(req.query.range);
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const rangeStartMs = rangeStartMsForUnderTheHood(range, nowMs);
+    const rangeStartUtc = rangeStartMs !== null ? new Date(rangeStartMs).toISOString() : null;
+
+    const [config, jsonlRows] = await Promise.all([
+      loadConfig(),
+      readJsonl(dashboardFiles.jsonl),
+    ]);
+
+    const filteredRows = jsonlRows.filter((row) => {
+      if (rangeStartMs === null) return true;
+      const rowTs =
+        timestampMs(row.timestamp) ??
+        timestampMs(row.created_at) ??
+        timestampMs(row.run_created_at);
+      if (rowTs === null) return false;
+      return rowTs >= rangeStartMs && rowTs <= nowMs;
+    });
+
+    const inferredWindow = inferWindowFromJsonl(filteredRows);
+    const runMonths = filteredRows
+      .map((row) => String(row.run_month ?? "").trim())
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
+    const latestRunMonth = runMonths.at(-1) ?? null;
+
+    const webSearchStates = new Set(
+      filteredRows.map((row) => isTruthyFlag(row.web_search_enabled)),
+    );
+    const webSearchEnabled =
+      webSearchStates.size === 0
+        ? null
+        : webSearchStates.size === 1
+          ? webSearchStates.has(true)
+            ? "yes"
+            : "no"
+          : "mixed";
+
+    res.json({
+      generatedAt: new Date().toISOString(),
+      range,
+      rangeLabel: rangeLabelForUnderTheHood(range),
+      rangeStartUtc,
+      rangeEndUtc: nowIso,
+      summary: {
+        overallScore: 0,
+        queryCount: config.queries.length,
+        competitorCount: config.competitors.length,
+        totalResponses: filteredRows.length,
+        models: inferredWindow.models,
+        modelOwners: inferredWindow.modelOwners,
+        modelOwnerMap: inferredWindow.modelOwnerMap,
+        modelOwnerStats: inferredWindow.modelOwnerStats,
+        modelStats: inferredWindow.modelStats,
+        tokenTotals: inferredWindow.tokenTotals,
+        durationTotals: inferredWindow.durationTotals,
+        runMonth: latestRunMonth,
+        webSearchEnabled,
+        windowStartUtc: inferredWindow.start,
+        windowEndUtc: inferredWindow.end,
+      },
+    });
+  } catch (error) {
+    sendApiError(res, 500, "Unable to build under-the-hood response.", error);
+  }
+});
+
+app.get("/api/run-costs", async (req, res) => {
+  try {
+    const parsedLimit = Number(req.query.limit);
+    const limit = Number.isFinite(parsedLimit)
+      ? Math.max(1, Math.min(200, Math.round(parsedLimit)))
+      : 30;
+
+    const jsonlRows = await readJsonl(dashboardFiles.jsonl);
+    if (jsonlRows.length === 0) {
+      res.json({
+        generatedAt: new Date().toISOString(),
+        runCount: 0,
+        totals: {
+          responseCount: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          estimatedInputCostUsd: 0,
+          estimatedOutputCostUsd: 0,
+          estimatedTotalCostUsd: 0,
+        },
+        runs: [],
+      });
+      return;
+    }
+
+    const buckets = new Map<
+      string,
+      {
+        runId: string;
+        runMonth: string | null;
+        createdAt: string | null;
+        startedAt: string | null;
+        endedAt: string | null;
+        webSearchValues: Set<boolean>;
+        models: Set<string>;
+        unpricedModels: Set<string>;
+        responseCount: number;
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+        pricedResponseCount: number;
+        estimatedInputCostUsd: number;
+        estimatedOutputCostUsd: number;
+        estimatedTotalCostUsd: number;
+      }
+    >();
+
+    for (const row of jsonlRows) {
+      const timestampRaw = String(
+        row.timestamp ?? row.created_at ?? row.run_created_at ?? "",
+      ).trim();
+      const runIdRaw = String(row.run_id ?? row.runId ?? "").trim();
+      const runMonthRaw = String(row.run_month ?? "").trim();
+      const runCreatedAtRaw = String(row.run_created_at ?? "").trim();
+      const fallbackRunId =
+        runMonthRaw && runCreatedAtRaw
+          ? `${runMonthRaw}-${runCreatedAtRaw}`
+          : runCreatedAtRaw
+            ? `run-${runCreatedAtRaw}`
+            : runMonthRaw && timestampRaw
+              ? `${runMonthRaw}-${timestampRaw.slice(0, 10)}`
+          : timestampRaw
+            ? `run-${timestampRaw.slice(0, 10)}`
+            : "run-unknown";
+      const runId = runIdRaw || fallbackRunId;
+
+      let bucket = buckets.get(runId);
+      if (!bucket) {
+        bucket = {
+          runId,
+          runMonth: runMonthRaw || null,
+          createdAt: timestampRaw || null,
+          startedAt: timestampRaw || null,
+          endedAt: timestampRaw || null,
+          webSearchValues: new Set<boolean>(),
+          models: new Set<string>(),
+          unpricedModels: new Set<string>(),
+          responseCount: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          pricedResponseCount: 0,
+          estimatedInputCostUsd: 0,
+          estimatedOutputCostUsd: 0,
+          estimatedTotalCostUsd: 0,
+        };
+        buckets.set(runId, bucket);
+      }
+
+      const modelName = String(row.model ?? "").trim();
+      if (modelName) {
+        bucket.models.add(modelName);
+      }
+      if (timestampRaw) {
+        if (!bucket.createdAt || timestampRaw < bucket.createdAt) bucket.createdAt = timestampRaw;
+        if (!bucket.startedAt || timestampRaw < bucket.startedAt) bucket.startedAt = timestampRaw;
+        if (!bucket.endedAt || timestampRaw > bucket.endedAt) bucket.endedAt = timestampRaw;
+      }
+
+      bucket.webSearchValues.add(isTruthyFlag(row.web_search_enabled));
+
+      const inputTokens = safeTokenInt(
+        row.prompt_tokens ?? row.input_tokens ?? row.usage?.prompt_tokens,
+      );
+      const outputTokens = safeTokenInt(
+        row.completion_tokens ?? row.output_tokens ?? row.usage?.completion_tokens,
+      );
+      const totalTokens =
+        safeTokenInt(row.total_tokens ?? row.usage?.total_tokens) || inputTokens + outputTokens;
+      bucket.responseCount += 1;
+      bucket.inputTokens += inputTokens;
+      bucket.outputTokens += outputTokens;
+      bucket.totalTokens += totalTokens;
+
+      const costs = estimateResponseCostForServer(modelName, inputTokens, outputTokens);
+      bucket.estimatedInputCostUsd += costs.inputCostUsd;
+      bucket.estimatedOutputCostUsd += costs.outputCostUsd;
+      bucket.estimatedTotalCostUsd += costs.totalCostUsd;
+      if (costs.priced) {
+        bucket.pricedResponseCount += 1;
+      } else if (modelName) {
+        bucket.unpricedModels.add(modelName);
+      }
+    }
+
+    const runs = [...buckets.values()]
+      .map((bucket) => ({
+        runId: bucket.runId,
+        runMonth: bucket.runMonth,
+        createdAt: bucket.createdAt,
+        startedAt: bucket.startedAt,
+        endedAt: bucket.endedAt,
+        webSearchEnabled:
+          bucket.webSearchValues.size === 1
+            ? bucket.webSearchValues.has(true)
+            : bucket.webSearchValues.size === 0
+              ? null
+              : null,
+        responseCount: bucket.responseCount,
+        models: [...bucket.models].sort((left, right) => left.localeCompare(right)),
+        inputTokens: bucket.inputTokens,
+        outputTokens: bucket.outputTokens,
+        totalTokens: bucket.totalTokens,
+        pricedResponseCount: bucket.pricedResponseCount,
+        unpricedModels: [...bucket.unpricedModels].sort((left, right) => left.localeCompare(right)),
+        estimatedInputCostUsd: Number(bucket.estimatedInputCostUsd.toFixed(6)),
+        estimatedOutputCostUsd: Number(bucket.estimatedOutputCostUsd.toFixed(6)),
+        estimatedTotalCostUsd: Number(bucket.estimatedTotalCostUsd.toFixed(6)),
+      }))
+      .sort((left, right) => {
+        const leftMs = Date.parse(left.createdAt ?? "");
+        const rightMs = Date.parse(right.createdAt ?? "");
+        if (Number.isFinite(leftMs) && Number.isFinite(rightMs)) {
+          return rightMs - leftMs;
+        }
+        if (Number.isFinite(leftMs)) return -1;
+        if (Number.isFinite(rightMs)) return 1;
+        return right.runId.localeCompare(left.runId);
+      })
+      .slice(0, limit);
+
+    const totals = runs.reduce(
+      (sum, run) => {
+        sum.responseCount += run.responseCount;
+        sum.inputTokens += run.inputTokens;
+        sum.outputTokens += run.outputTokens;
+        sum.totalTokens += run.totalTokens;
+        sum.estimatedInputCostUsd += run.estimatedInputCostUsd;
+        sum.estimatedOutputCostUsd += run.estimatedOutputCostUsd;
+        sum.estimatedTotalCostUsd += run.estimatedTotalCostUsd;
+        return sum;
+      },
+      {
+        responseCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        estimatedInputCostUsd: 0,
+        estimatedOutputCostUsd: 0,
+        estimatedTotalCostUsd: 0,
+      },
+    );
+
+    res.json({
+      generatedAt: new Date().toISOString(),
+      runCount: runs.length,
+      totals: {
+        responseCount: totals.responseCount,
+        inputTokens: totals.inputTokens,
+        outputTokens: totals.outputTokens,
+        totalTokens: totals.totalTokens,
+        estimatedInputCostUsd: Number(totals.estimatedInputCostUsd.toFixed(6)),
+        estimatedOutputCostUsd: Number(totals.estimatedOutputCostUsd.toFixed(6)),
+        estimatedTotalCostUsd: Number(totals.estimatedTotalCostUsd.toFixed(6)),
+      },
+      runs,
+    });
+  } catch (error) {
+    sendApiError(res, 500, "Unable to build run-costs response.", error);
+  }
+});
+
 app.get("/api/dashboard", async (_req, res) => {
   try {
     const [config, comparisonRows, competitorRows, kpiRows, jsonlRows] = await Promise.all([
@@ -1570,12 +1970,106 @@ app.get("/api/dashboard", async (_req, res) => {
           }));
 
     const promptLookup = new Map(queryRows.map((row) => [row.query, row]));
+    const latestRunId =
+      jsonlRows
+        .map((row) => ({
+          runId: String(row.run_id ?? row.runId ?? "").trim(),
+          rowTimestampMs:
+            timestampMs(row.timestamp) ??
+            timestampMs(row.created_at) ??
+            timestampMs(row.run_created_at),
+        }))
+        .filter((entry) => Boolean(entry.runId) && entry.rowTimestampMs !== null)
+        .sort((left, right) => (right.rowTimestampMs ?? 0) - (left.rowTimestampMs ?? 0))
+        .at(0)?.runId ?? null;
+
+    const latestRunRows = latestRunId
+      ? jsonlRows.filter((row) => String(row.run_id ?? row.runId ?? "").trim() === latestRunId)
+      : jsonlRows;
+
+    const responsesByQueryKey = new Map<string, Array<Record<string, unknown>>>();
+    for (const row of latestRunRows) {
+      const queryText = String(
+        row.query ?? row.query_text ?? row.prompt ?? row.prompt_text ?? "",
+      ).trim();
+      if (!queryText) continue;
+      const key = queryText.toLowerCase();
+      const bucket = responsesByQueryKey.get(key) ?? [];
+      bucket.push(row);
+      responsesByQueryKey.set(key, bucket);
+    }
     const queryTags = normalizeQueryTagsMap(config.queries, config.queryTags);
 
     const pausedSet = new Set(config.pausedQueries ?? []);
     const promptStatus = config.queries.map((query) => {
       const row = promptLookup.get(query);
+      const queryResponses = responsesByQueryKey.get(query.trim().toLowerCase()) ?? [];
       const latestRunResponseCount = inferPromptResponseCount(row, config.competitors);
+      const latestInputTokens = queryResponses.reduce(
+        (sum, responseRow) =>
+          sum +
+          safeTokenInt(
+            responseRow.prompt_tokens ??
+              responseRow.input_tokens ??
+              responseRow.usage?.prompt_tokens,
+          ),
+        0,
+      );
+      const latestOutputTokens = queryResponses.reduce(
+        (sum, responseRow) =>
+          sum +
+          safeTokenInt(
+            responseRow.completion_tokens ??
+              responseRow.output_tokens ??
+              responseRow.usage?.completion_tokens,
+          ),
+        0,
+      );
+      const latestTotalTokens = queryResponses.reduce((sum, responseRow) => {
+        const inputTokens = safeTokenInt(
+          responseRow.prompt_tokens ??
+            responseRow.input_tokens ??
+            responseRow.usage?.prompt_tokens,
+        );
+        const outputTokens = safeTokenInt(
+          responseRow.completion_tokens ??
+            responseRow.output_tokens ??
+            responseRow.usage?.completion_tokens,
+        );
+        const totalTokens =
+          safeTokenInt(responseRow.total_tokens ?? responseRow.usage?.total_tokens) ||
+          inputTokens + outputTokens;
+        return sum + totalTokens;
+      }, 0);
+      const promptCostTotals = queryResponses.reduce(
+        (totals, responseRow) => {
+          const modelName = String(responseRow.model ?? "");
+          const inputTokens = safeTokenInt(
+            responseRow.prompt_tokens ??
+              responseRow.input_tokens ??
+              responseRow.usage?.prompt_tokens,
+          );
+          const outputTokens = safeTokenInt(
+            responseRow.completion_tokens ??
+              responseRow.output_tokens ??
+              responseRow.usage?.completion_tokens,
+          );
+          const costs = estimateResponseCostForServer(modelName, inputTokens, outputTokens);
+          totals.inputCostUsd += costs.inputCostUsd;
+          totals.outputCostUsd += costs.outputCostUsd;
+          totals.totalCostUsd += costs.totalCostUsd;
+          if (costs.priced) {
+            totals.pricedResponses += 1;
+          }
+          return totals;
+        },
+        {
+          inputCostUsd: 0,
+          outputCostUsd: 0,
+          totalCostUsd: 0,
+          pricedResponses: 0,
+        },
+      );
 
       const competitorRatesAll = config.competitors.map((name) => {
         const entityKey = slugifyEntity(name);
@@ -1619,6 +2113,16 @@ app.get("/api/dashboard", async (_req, res) => {
         viabilityRatePct: Number((asNumber(row?.viability_index_rate) * 100).toFixed(2)),
         topCompetitor,
         latestRunResponseCount,
+        latestInputTokens,
+        latestOutputTokens,
+        latestTotalTokens,
+        estimatedInputCostUsd: Number(promptCostTotals.inputCostUsd.toFixed(6)),
+        estimatedOutputCostUsd: Number(promptCostTotals.outputCostUsd.toFixed(6)),
+        estimatedTotalCostUsd: Number(promptCostTotals.totalCostUsd.toFixed(6)),
+        estimatedAvgCostPerResponseUsd:
+          promptCostTotals.pricedResponses > 0
+            ? Number((promptCostTotals.totalCostUsd / promptCostTotals.pricedResponses).toFixed(6))
+            : 0,
         competitorRates: competitorRatesAll.map((entry) => ({
           entity: entry.entity,
           entityKey: entry.entityKey,

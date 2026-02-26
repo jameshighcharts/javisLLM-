@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import type {
   BenchmarkRunsResponse,
+  BenchmarkRunCostsResponse,
   BenchmarkTriggerResponse,
   BenchmarkConfig,
   CompetitorBlogsResponse,
@@ -16,8 +17,11 @@ import type {
   PromptStatus,
   PromptDrilldownResponse,
   PromptLabRunResponse,
+  UnderTheHoodRange,
+  UnderTheHoodResponse,
   TimeSeriesResponse,
 } from './types'
+import { calculateTokenCostUsd, getResolvedModelPricing } from './utils/modelPricing'
 
 const BASE = '/api'
 const SUPABASE_PAGE_SIZE = 1000
@@ -79,6 +83,15 @@ type BenchmarkResponseRow = {
   web_search_enabled: boolean
   error?: string | null
   duration_ms?: number | null
+  prompt_tokens?: number | null
+  completion_tokens?: number | null
+  total_tokens?: number | null
+}
+
+type RunCostResponseRow = {
+  id: number
+  run_id: string
+  model: string
   prompt_tokens?: number | null
   completion_tokens?: number | null
   total_tokens?: number | null
@@ -545,6 +558,40 @@ function buildModelStatsFromResponses(
   }
 }
 
+function safeTokenInt(value: unknown): number {
+  const parsed = Number(value ?? 0)
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0
+  return Math.max(0, Math.round(parsed))
+}
+
+function estimateResponseCostUsd(
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+): {
+  inputCostUsd: number
+  outputCostUsd: number
+  totalCostUsd: number
+  priced: boolean
+} {
+  const pricing = getResolvedModelPricing(model)
+  if (!pricing) {
+    return {
+      inputCostUsd: 0,
+      outputCostUsd: 0,
+      totalCostUsd: 0,
+      priced: false,
+    }
+  }
+  const costs = calculateTokenCostUsd(inputTokens, outputTokens, pricing)
+  return {
+    inputCostUsd: costs.inputCostUsd,
+    outputCostUsd: costs.outputCostUsd,
+    totalCostUsd: costs.totalCostUsd,
+    priced: true,
+  }
+}
+
 function monthKeyFromDate(value: string | null): string | null {
   if (!value) return null
   const parsed = new Date(value)
@@ -568,6 +615,38 @@ function formatMonthLabel(monthKey: string): string {
     year: 'numeric',
     timeZone: 'UTC',
   })
+}
+
+const UNDER_THE_HOOD_RANGE_OPTIONS: UnderTheHoodRange[] = ['1d', '7d', '30d', 'all']
+
+function normalizeUnderTheHoodRange(
+  value: string | UnderTheHoodRange | undefined,
+): UnderTheHoodRange {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase() as UnderTheHoodRange
+  return UNDER_THE_HOOD_RANGE_OPTIONS.includes(normalized) ? normalized : 'all'
+}
+
+function rangeLabelForUnderTheHood(range: UnderTheHoodRange): string {
+  if (range === '1d') return 'Last 1 day'
+  if (range === '7d') return 'Last 7 days'
+  if (range === '30d') return 'Last 30 days'
+  return 'All time'
+}
+
+function rangeStartMsForUnderTheHood(range: UnderTheHoodRange, nowMs: number): number | null {
+  if (range === '1d') return nowMs - 24 * 60 * 60 * 1000
+  if (range === '7d') return nowMs - 7 * 24 * 60 * 60 * 1000
+  if (range === '30d') return nowMs - 30 * 24 * 60 * 60 * 1000
+  return null
+}
+
+function timestampMs(value: string | null | undefined): number | null {
+  const valid = toValidTimestamp(value)
+  if (!valid) return null
+  const parsed = Date.parse(valid)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function hasSupabaseConfig() {
@@ -1393,6 +1472,41 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
     const queryResponses = responses.filter((response) => response.query_id === queryRow.id)
     const latestRunResponseCount = queryResponses.length
     const runs = historicalRunsByQuery.get(queryRow.id)?.size ?? 0
+    const latestInputTokens = queryResponses.reduce(
+      (sum, response) => sum + safeTokenInt(response.prompt_tokens),
+      0,
+    )
+    const latestOutputTokens = queryResponses.reduce(
+      (sum, response) => sum + safeTokenInt(response.completion_tokens),
+      0,
+    )
+    const latestTotalTokens = queryResponses.reduce((sum, response) => {
+      const inputTokens = safeTokenInt(response.prompt_tokens)
+      const outputTokens = safeTokenInt(response.completion_tokens)
+      const totalTokens =
+        safeTokenInt(response.total_tokens) || inputTokens + outputTokens
+      return sum + totalTokens
+    }, 0)
+    const promptCostTotals = queryResponses.reduce(
+      (totals, response) => {
+        const inputTokens = safeTokenInt(response.prompt_tokens)
+        const outputTokens = safeTokenInt(response.completion_tokens)
+        const costs = estimateResponseCostUsd(response.model, inputTokens, outputTokens)
+        totals.inputCostUsd += costs.inputCostUsd
+        totals.outputCostUsd += costs.outputCostUsd
+        totals.totalCostUsd += costs.totalCostUsd
+        if (costs.priced) {
+          totals.pricedResponses += 1
+        }
+        return totals
+      },
+      {
+        inputCostUsd: 0,
+        outputCostUsd: 0,
+        totalCostUsd: 0,
+        pricedResponses: 0,
+      },
+    )
 
     const competitorRatesAll = competitorRows.map((competitor) => {
       const mentions = queryResponses.reduce((count, response) => {
@@ -1462,6 +1576,18 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
       viabilityRatePct: Number(viabilityRatePct.toFixed(2)),
       topCompetitor,
       latestRunResponseCount,
+      latestInputTokens,
+      latestOutputTokens,
+      latestTotalTokens,
+      estimatedInputCostUsd: Number(promptCostTotals.inputCostUsd.toFixed(6)),
+      estimatedOutputCostUsd: Number(promptCostTotals.outputCostUsd.toFixed(6)),
+      estimatedTotalCostUsd: Number(promptCostTotals.totalCostUsd.toFixed(6)),
+      estimatedAvgCostPerResponseUsd:
+        promptCostTotals.pricedResponses > 0
+          ? Number(
+              (promptCostTotals.totalCostUsd / promptCostTotals.pricedResponses).toFixed(6),
+            )
+          : 0,
       competitorRates: competitorRatesAll.map((entry) => ({
         entity: entry.entity,
         entityKey: entry.entityKey,
@@ -1526,6 +1652,441 @@ async function fetchDashboardFromSupabase(): Promise<DashboardResponse> {
       kpiPresent: true,
       llmOutputsPresent: totalResponses > 0,
     },
+  }
+}
+
+function underTheHoodEmptySummary(
+  config: BenchmarkConfig,
+): UnderTheHoodResponse['summary'] {
+  return {
+    overallScore: 0,
+    queryCount: config.queries.length,
+    competitorCount: config.competitors.length,
+    totalResponses: 0,
+    models: [],
+    modelOwners: [],
+    modelOwnerMap: {},
+    modelOwnerStats: [],
+    modelStats: [],
+    tokenTotals: {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+    },
+    durationTotals: {
+      totalDurationMs: 0,
+      avgDurationMs: 0,
+    },
+    runMonth: null,
+    webSearchEnabled: null,
+    windowStartUtc: null,
+    windowEndUtc: null,
+  }
+}
+
+async function fetchUnderTheHoodFromSupabase(
+  rangeInput: UnderTheHoodRange = 'all',
+): Promise<UnderTheHoodResponse> {
+  if (!supabase) {
+    throw new Error('Supabase is not configured.')
+  }
+
+  const range = normalizeUnderTheHoodRange(rangeInput)
+  const nowMs = Date.now()
+  const nowIso = new Date(nowMs).toISOString()
+  const rangeStartMs = rangeStartMsForUnderTheHood(range, nowMs)
+  const rangeStartIso = rangeStartMs !== null ? new Date(rangeStartMs).toISOString() : null
+
+  const configResponse = await fetchConfigFromSupabase()
+  const config = configResponse.config
+
+  const runResult = await fetchAllSupabasePages<BenchmarkRunRow>((from, to) => {
+    let query = supabase
+      .from('benchmark_runs')
+      .select('id,run_month,model,web_search_enabled,started_at,ended_at,overall_score,created_at')
+      .order('created_at', { ascending: false })
+      .range(from, to)
+
+    // Push range filtering into the database to avoid scanning all historical runs.
+    if (rangeStartIso) {
+      query = query.gte('created_at', rangeStartIso)
+    }
+
+    return query
+  })
+
+  if (runResult.error) {
+    if (isMissingRelation(runResult.error)) {
+      return {
+        generatedAt: new Date().toISOString(),
+        range,
+        rangeLabel: rangeLabelForUnderTheHood(range),
+        rangeStartUtc: rangeStartIso,
+        rangeEndUtc: nowIso,
+        summary: underTheHoodEmptySummary(config),
+      }
+    }
+    throw asError(runResult.error, 'Failed to load benchmark_runs for under-the-hood')
+  }
+
+  const allRuns = runResult.rows
+  const selectedRuns = allRuns
+    .map((run) => {
+      const runMs =
+        timestampMs(run.created_at) ??
+        timestampMs(run.started_at) ??
+        timestampMs(run.ended_at)
+      return {
+        run,
+        runMs,
+      }
+    })
+    .filter((entry) => {
+      if (rangeStartMs === null) return true
+      if (entry.runMs === null) return false
+      return entry.runMs >= rangeStartMs && entry.runMs <= nowMs
+    })
+    .sort((left, right) => {
+      const leftMs = left.runMs ?? 0
+      const rightMs = right.runMs ?? 0
+      return rightMs - leftMs
+    })
+
+  if (selectedRuns.length === 0) {
+    return {
+      generatedAt: new Date().toISOString(),
+      range,
+      rangeLabel: rangeLabelForUnderTheHood(range),
+      rangeStartUtc: rangeStartIso,
+      rangeEndUtc: nowIso,
+      summary: underTheHoodEmptySummary(config),
+    }
+  }
+
+  const selectedRunRows = selectedRuns.map((entry) => entry.run)
+  const selectedRunIds = selectedRunRows.map((run) => run.id)
+  const responseRows: BenchmarkResponseRow[] = []
+
+  const runChunkSize = 100
+  for (let index = 0; index < selectedRunIds.length; index += runChunkSize) {
+    const runIdChunk = selectedRunIds.slice(index, index + runChunkSize)
+    let responseOffset = 0
+
+    while (true) {
+      const responseResultWithStats = await supabase
+        .from('benchmark_responses')
+        .select(
+          'id,query_id,run_iteration,model,provider,model_owner,web_search_enabled,error,duration_ms,prompt_tokens,completion_tokens,total_tokens',
+        )
+        .in('run_id', runIdChunk)
+        .order('id', { ascending: true })
+        .range(responseOffset, responseOffset + SUPABASE_PAGE_SIZE - 1)
+
+      let responseError = responseResultWithStats.error
+      let pageRows = (responseResultWithStats.data ?? []) as BenchmarkResponseRow[]
+
+      if (responseError && isMissingColumn(responseError)) {
+        const responseResultFallback = await supabase
+          .from('benchmark_responses')
+          .select('id,query_id,run_iteration,model,web_search_enabled,error')
+          .in('run_id', runIdChunk)
+          .order('id', { ascending: true })
+          .range(responseOffset, responseOffset + SUPABASE_PAGE_SIZE - 1)
+        responseError = responseResultFallback.error
+        pageRows = ((responseResultFallback.data ?? []) as BenchmarkResponseRow[]).map((row) => ({
+          ...row,
+          provider: null,
+          model_owner: null,
+          duration_ms: 0,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0,
+        }))
+      }
+
+      if (responseError) {
+        if (isMissingRelation(responseError)) {
+          return {
+            generatedAt: new Date().toISOString(),
+            range,
+            rangeLabel: rangeLabelForUnderTheHood(range),
+            rangeStartUtc: rangeStartIso,
+            rangeEndUtc: nowIso,
+            summary: underTheHoodEmptySummary(config),
+          }
+        }
+        throw asError(responseError, 'Failed to load benchmark_responses for under-the-hood')
+      }
+
+      if (pageRows.length === 0) {
+        break
+      }
+
+      responseRows.push(...pageRows)
+      responseOffset += pageRows.length
+    }
+  }
+
+  const modelStatsSummary = buildModelStatsFromResponses(responseRows)
+  const models = [...new Set(responseRows.map((row) => row.model).filter(Boolean))]
+  const { modelOwners, modelOwnerMap } = buildModelOwnerSummaryFromModels(models)
+  const modelOwnerStats = buildModelOwnerStatsFromResponses(responseRows)
+
+  const runTimestamps = selectedRunRows
+    .map((run) =>
+      pickTimestamp(run.started_at, run.created_at, run.ended_at),
+    )
+    .filter((value): value is string => Boolean(toValidTimestamp(value)))
+    .sort((left, right) => Date.parse(left) - Date.parse(right))
+
+  const latestRun = selectedRunRows[0] ?? null
+  const webSearchStates = new Set(
+    selectedRunRows.map((run) => Boolean(run.web_search_enabled)),
+  )
+  const webSearchEnabled =
+    webSearchStates.size === 0
+      ? null
+      : webSearchStates.size === 1
+        ? webSearchStates.has(true)
+          ? 'yes'
+          : 'no'
+        : 'mixed'
+
+  return {
+    generatedAt: new Date().toISOString(),
+    range,
+    rangeLabel: rangeLabelForUnderTheHood(range),
+    rangeStartUtc: rangeStartIso,
+    rangeEndUtc: nowIso,
+    summary: {
+      overallScore: Number((latestRun?.overall_score ?? 0).toFixed(2)),
+      queryCount: config.queries.length,
+      competitorCount: config.competitors.length,
+      totalResponses: responseRows.length,
+      models,
+      modelOwners,
+      modelOwnerMap,
+      modelOwnerStats,
+      modelStats: modelStatsSummary.modelStats,
+      tokenTotals: modelStatsSummary.tokenTotals,
+      durationTotals: modelStatsSummary.durationTotals,
+      runMonth: latestRun?.run_month ?? null,
+      webSearchEnabled,
+      windowStartUtc: runTimestamps[0] ?? null,
+      windowEndUtc: runTimestamps.at(-1) ?? null,
+    },
+  }
+}
+
+async function fetchRunCostsFromSupabase(limit = 30): Promise<BenchmarkRunCostsResponse> {
+  if (!supabase) {
+    throw new Error('Supabase is not configured.')
+  }
+
+  const clampedLimit = Math.max(1, Math.min(200, Math.round(limit)))
+  const runResult = await supabase
+    .from('benchmark_runs')
+    .select('id,run_month,created_at,started_at,ended_at,web_search_enabled')
+    .order('created_at', { ascending: false })
+    .limit(clampedLimit)
+
+  if (runResult.error) {
+    if (isMissingRelation(runResult.error)) {
+      return {
+        generatedAt: new Date().toISOString(),
+        runCount: 0,
+        totals: {
+          responseCount: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          estimatedInputCostUsd: 0,
+          estimatedOutputCostUsd: 0,
+          estimatedTotalCostUsd: 0,
+        },
+        runs: [],
+      }
+    }
+    throw asError(runResult.error, 'Failed to load benchmark_runs for run costs')
+  }
+
+  const runRows = (runResult.data ?? []) as Array<{
+    id: string
+    run_month: string | null
+    created_at: string | null
+    started_at: string | null
+    ended_at: string | null
+    web_search_enabled: boolean | null
+  }>
+
+  if (runRows.length === 0) {
+    return {
+      generatedAt: new Date().toISOString(),
+      runCount: 0,
+      totals: {
+        responseCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        estimatedInputCostUsd: 0,
+        estimatedOutputCostUsd: 0,
+        estimatedTotalCostUsd: 0,
+      },
+      runs: [],
+    }
+  }
+
+  const runIds = runRows.map((run) => run.id)
+  const responseRows: RunCostResponseRow[] = []
+  const runChunkSize = 100
+
+  for (let index = 0; index < runIds.length; index += runChunkSize) {
+    const runIdChunk = runIds.slice(index, index + runChunkSize)
+    let responseOffset = 0
+
+    while (true) {
+      const responseResultWithStats = await supabase
+        .from('benchmark_responses')
+        .select('id,run_id,model,prompt_tokens,completion_tokens,total_tokens')
+        .in('run_id', runIdChunk)
+        .order('id', { ascending: true })
+        .range(responseOffset, responseOffset + SUPABASE_PAGE_SIZE - 1)
+
+      let responseError = responseResultWithStats.error
+      let pageRows = (responseResultWithStats.data ?? []) as RunCostResponseRow[]
+
+      if (responseError && isMissingColumn(responseError)) {
+        const responseResultFallback = await supabase
+          .from('benchmark_responses')
+          .select('id,run_id,model')
+          .in('run_id', runIdChunk)
+          .order('id', { ascending: true })
+          .range(responseOffset, responseOffset + SUPABASE_PAGE_SIZE - 1)
+        responseError = responseResultFallback.error
+        pageRows = ((responseResultFallback.data ?? []) as RunCostResponseRow[]).map((row) => ({
+          ...row,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0,
+        }))
+      }
+
+      if (responseError) {
+        if (isMissingRelation(responseError)) {
+          break
+        }
+        throw asError(responseError, 'Failed to load benchmark_responses for run costs')
+      }
+
+      if (pageRows.length === 0) {
+        break
+      }
+
+      responseRows.push(...pageRows)
+      responseOffset += pageRows.length
+    }
+  }
+
+  const responsesByRunId = new Map<string, RunCostResponseRow[]>()
+  for (const response of responseRows) {
+    const bucket = responsesByRunId.get(response.run_id) ?? []
+    bucket.push(response)
+    responsesByRunId.set(response.run_id, bucket)
+  }
+
+  const runs = runRows.map((run) => {
+    const runResponses = responsesByRunId.get(run.id) ?? []
+    const modelSet = new Set<string>()
+    const unpricedModelSet = new Set<string>()
+
+    let inputTokens = 0
+    let outputTokens = 0
+    let totalTokens = 0
+    let pricedResponseCount = 0
+    let estimatedInputCostUsd = 0
+    let estimatedOutputCostUsd = 0
+    let estimatedTotalCostUsd = 0
+
+    for (const response of runResponses) {
+      modelSet.add(response.model)
+      const responseInputTokens = safeTokenInt(response.prompt_tokens)
+      const responseOutputTokens = safeTokenInt(response.completion_tokens)
+      const responseTotalTokens =
+        safeTokenInt(response.total_tokens) || responseInputTokens + responseOutputTokens
+      inputTokens += responseInputTokens
+      outputTokens += responseOutputTokens
+      totalTokens += responseTotalTokens
+
+      const costs = estimateResponseCostUsd(
+        response.model,
+        responseInputTokens,
+        responseOutputTokens,
+      )
+      estimatedInputCostUsd += costs.inputCostUsd
+      estimatedOutputCostUsd += costs.outputCostUsd
+      estimatedTotalCostUsd += costs.totalCostUsd
+      if (costs.priced) {
+        pricedResponseCount += 1
+      } else {
+        unpricedModelSet.add(response.model)
+      }
+    }
+
+    return {
+      runId: run.id,
+      runMonth: run.run_month,
+      createdAt: run.created_at,
+      startedAt: run.started_at,
+      endedAt: run.ended_at,
+      webSearchEnabled: run.web_search_enabled,
+      responseCount: runResponses.length,
+      models: [...modelSet].sort((left, right) => left.localeCompare(right)),
+      inputTokens,
+      outputTokens,
+      totalTokens,
+      pricedResponseCount,
+      unpricedModels: [...unpricedModelSet].sort((left, right) => left.localeCompare(right)),
+      estimatedInputCostUsd: Number(estimatedInputCostUsd.toFixed(6)),
+      estimatedOutputCostUsd: Number(estimatedOutputCostUsd.toFixed(6)),
+      estimatedTotalCostUsd: Number(estimatedTotalCostUsd.toFixed(6)),
+    }
+  })
+
+  const totals = runs.reduce(
+    (sum, run) => {
+      sum.responseCount += run.responseCount
+      sum.inputTokens += run.inputTokens
+      sum.outputTokens += run.outputTokens
+      sum.totalTokens += run.totalTokens
+      sum.estimatedInputCostUsd += run.estimatedInputCostUsd
+      sum.estimatedOutputCostUsd += run.estimatedOutputCostUsd
+      sum.estimatedTotalCostUsd += run.estimatedTotalCostUsd
+      return sum
+    },
+    {
+      responseCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      estimatedInputCostUsd: 0,
+      estimatedOutputCostUsd: 0,
+      estimatedTotalCostUsd: 0,
+    },
+  )
+
+  return {
+    generatedAt: new Date().toISOString(),
+    runCount: runs.length,
+    totals: {
+      responseCount: totals.responseCount,
+      inputTokens: totals.inputTokens,
+      outputTokens: totals.outputTokens,
+      totalTokens: totals.totalTokens,
+      estimatedInputCostUsd: Number(totals.estimatedInputCostUsd.toFixed(6)),
+      estimatedOutputCostUsd: Number(totals.estimatedOutputCostUsd.toFixed(6)),
+      estimatedTotalCostUsd: Number(totals.estimatedTotalCostUsd.toFixed(6)),
+    },
+    runs,
   }
 }
 
@@ -2703,6 +3264,25 @@ export const api = {
     })
   },
 
+  async runCosts(limit = 30): Promise<BenchmarkRunCostsResponse> {
+    const clampedLimit = Math.max(1, Math.min(200, Math.round(limit)))
+    const suffix = `?limit=${encodeURIComponent(String(clampedLimit))}`
+
+    if (hasSupabaseConfig()) {
+      try {
+        return await fetchRunCostsFromSupabase(clampedLimit)
+      } catch (primaryError) {
+        try {
+          return await json<BenchmarkRunCostsResponse>(`/run-costs${suffix}`)
+        } catch {
+          throw asError(primaryError, 'Supabase run-costs query failed')
+        }
+      }
+    }
+
+    return json<BenchmarkRunCostsResponse>(`/run-costs${suffix}`)
+  },
+
   async triggerBenchmark(
     data: {
       model?: string
@@ -2754,6 +3334,25 @@ export const api = {
       }
     }
     return json<DashboardResponse>('/dashboard')
+  },
+
+  async underTheHood(range: UnderTheHoodRange = 'all'): Promise<UnderTheHoodResponse> {
+    const normalizedRange = normalizeUnderTheHoodRange(range)
+    const suffix = `?range=${encodeURIComponent(normalizedRange)}`
+
+    if (hasSupabaseConfig()) {
+      try {
+        return await fetchUnderTheHoodFromSupabase(normalizedRange)
+      } catch (primaryError) {
+        try {
+          return await json<UnderTheHoodResponse>(`/under-the-hood${suffix}`)
+        } catch {
+          throw asError(primaryError, 'Supabase under-the-hood query failed')
+        }
+      }
+    }
+
+    return json<UnderTheHoodResponse>(`/under-the-hood${suffix}`)
   },
 
   async config() {

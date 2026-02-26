@@ -35,21 +35,6 @@ const NAV: NavItem[] = [
     ),
   },
   {
-    to: '/okr',
-    label: 'OKRs',
-    icon: (
-      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M4 19h16" />
-        <rect x="4" y="10" width="4" height="9" rx="1" />
-        <rect x="10" y="6" width="4" height="13" rx="1" />
-        <rect x="16" y="3" width="4" height="16" rx="1" />
-      </svg>
-    ),
-    children: [
-      { to: '/okr/kr-2-1', label: 'Key Result 2.1' },
-    ],
-  },
-  {
     to: '/prompts',
     label: 'Prompts',
     icon: (
@@ -110,6 +95,21 @@ const NAV: NavItem[] = [
         <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h10" />
       </svg>
     ),
+  },
+  {
+    to: '/okr',
+    label: 'OKRs',
+    icon: (
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 19h16" />
+        <rect x="4" y="10" width="4" height="9" rx="1" />
+        <rect x="10" y="6" width="4" height="13" rx="1" />
+        <rect x="16" y="3" width="4" height="16" rx="1" />
+      </svg>
+    ),
+    children: [
+      { to: '/okr/kr-2-1', label: 'Key Result 2.1' },
+    ],
   },
 ]
 

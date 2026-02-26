@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { BENCHMARK_MODEL_OPTIONS, BENCHMARK_MODEL_VALUES, dedupeModels } from '../modelOptions'
+import { formatUsd } from '../utils/modelPricing'
 import type { BenchmarkWorkflowRun } from '../types'
 
 const TRIGGER_TOKEN_STORAGE_KEY = 'benchmark_trigger_token'
@@ -47,6 +48,16 @@ function runStatusBadge(run: BenchmarkWorkflowRun) {
 function formatRunDate(value: string) {
   if (!value) return '—'
   return new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+function formatCount(value: number) {
+  return Math.max(0, Math.round(value)).toLocaleString()
+}
+
+function shortRunId(value: string) {
+  if (!value) return '—'
+  if (value.length <= 10) return value
+  return `${value.slice(0, 8)}…`
 }
 
 function fingerprintToken(value: string): string {
@@ -151,6 +162,12 @@ export default function Runs() {
     refetchInterval: hasManagedRunAccess ? 15_000 : false,
     retry: false,
   })
+  const runCostsQuery = useQuery({
+    queryKey: ['run-costs'],
+    queryFn: () => api.runCosts(30),
+    refetchInterval: 60_000,
+    retry: false,
+  })
   const configQuery = useQuery({
     queryKey: ['config'],
     queryFn: () => api.config(),
@@ -199,6 +216,8 @@ export default function Runs() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['benchmark-runs'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      queryClient.invalidateQueries({ queryKey: ['run-costs'] })
+      queryClient.invalidateQueries({ queryKey: ['under-the-hood'] })
     },
   })
 
@@ -659,6 +678,17 @@ export default function Runs() {
                 {runsErrorMessage}
               </div>
             )}
+            {runCostsQuery.data && runCostsQuery.data.runCount > 0 && (
+              <div
+                className="rounded-lg px-3 py-2 text-xs"
+                style={{ background: '#F0F7F1', border: '1px solid #C8DEC9', color: '#2A5C2E' }}
+              >
+                Estimated benchmark cost (latest {runCostsQuery.data.runCount} runs):{' '}
+                <span className="font-semibold tabular-nums">
+                  {formatUsd(runCostsQuery.data.totals.estimatedTotalCostUsd)}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -750,6 +780,91 @@ export default function Runs() {
                     </tr>
                   )
                 })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Benchmark run costs table */}
+      <div
+        className="rounded-xl border shadow-sm overflow-hidden"
+        style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
+      >
+        <div
+          className="px-4 sm:px-5 py-4 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between"
+          style={{ borderBottom: '1px solid #F2EDE6' }}
+        >
+          <div className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>
+            Benchmark Run Costs
+          </div>
+          <div className="text-xs" style={{ color: '#9AAE9C' }}>
+            Estimated input/output token spend per benchmark run
+          </div>
+        </div>
+
+        {runCostsQuery.isLoading ? (
+          <div className="p-5 space-y-2">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="h-11 rounded animate-pulse" style={{ background: '#F2EDE6' }} />
+            ))}
+          </div>
+        ) : runCostsQuery.isError ? (
+          <div className="p-5 text-sm" style={{ color: '#B91C1C' }}>
+            {(runCostsQuery.error as Error).message}
+          </div>
+        ) : (runCostsQuery.data?.runs ?? []).length === 0 ? (
+          <div className="p-5 text-sm" style={{ color: '#7A8E7C' }}>
+            No benchmark token data found yet.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[980px]">
+              <thead>
+                <tr style={{ borderBottom: '1px solid #F2EDE6' }}>
+                  <th className="px-5 py-3 text-xs font-medium text-left" style={{ color: '#7A8E7C' }}>Run ID</th>
+                  <th className="px-5 py-3 text-xs font-medium text-left" style={{ color: '#7A8E7C' }}>Created</th>
+                  <th className="px-5 py-3 text-xs font-medium text-right" style={{ color: '#7A8E7C' }}>Responses</th>
+                  <th className="px-5 py-3 text-xs font-medium text-right" style={{ color: '#7A8E7C' }}>Input tokens</th>
+                  <th className="px-5 py-3 text-xs font-medium text-right" style={{ color: '#7A8E7C' }}>Output tokens</th>
+                  <th className="px-5 py-3 text-xs font-medium text-right" style={{ color: '#7A8E7C' }}>Estimated cost</th>
+                  <th className="px-5 py-3 text-xs font-medium text-left" style={{ color: '#7A8E7C' }}>Models</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(runCostsQuery.data?.runs ?? []).map((run, i, all) => (
+                  <tr
+                    key={run.runId}
+                    style={{ borderBottom: i < all.length - 1 ? '1px solid #F2EDE6' : 'none' }}
+                  >
+                    <td className="px-5 py-3.5">
+                      <div className="text-sm font-medium tabular-nums" style={{ color: '#2A3A2C' }}>
+                        {shortRunId(run.runId)}
+                      </div>
+                      <div className="text-xs" style={{ color: '#9AAE9C' }}>
+                        {run.runMonth ?? 'No month'}
+                      </div>
+                    </td>
+                    <td className="px-5 py-3.5 text-sm" style={{ color: '#536654' }}>
+                      {formatRunDate(run.createdAt ?? run.startedAt ?? '')}
+                    </td>
+                    <td className="px-5 py-3.5 text-sm text-right tabular-nums" style={{ color: '#2A3A2C' }}>
+                      {formatCount(run.responseCount)}
+                    </td>
+                    <td className="px-5 py-3.5 text-sm text-right tabular-nums" style={{ color: '#2A3A2C' }}>
+                      {formatCount(run.inputTokens)}
+                    </td>
+                    <td className="px-5 py-3.5 text-sm text-right tabular-nums" style={{ color: '#2A3A2C' }}>
+                      {formatCount(run.outputTokens)}
+                    </td>
+                    <td className="px-5 py-3.5 text-sm text-right font-semibold tabular-nums" style={{ color: '#2A5C2E' }}>
+                      {formatUsd(run.estimatedTotalCostUsd)}
+                    </td>
+                    <td className="px-5 py-3.5 text-xs" style={{ color: '#607860' }}>
+                      {run.models.length > 0 ? run.models.join(', ') : '—'}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { BENCHMARK_MODEL_OPTIONS, BENCHMARK_MODEL_VALUES, dedupeModels } from '../modelOptions'
+import { formatUsd } from '../utils/modelPricing'
 import type {
   BenchmarkConfig,
   BenchmarkWorkflowRun,
@@ -491,6 +492,7 @@ type SortKey =
   | 'tags'
   | 'status'
   | 'runs'
+  | 'estimatedTotalCostUsd'
   | 'highchartsRatePct'
   | 'highchartsRank'
   | 'viabilityRatePct'
@@ -1394,10 +1396,16 @@ function QueryLab({
   trackedEntities,
   aliasesByEntity,
   onQueryRun,
+  competitors,
+  onCompetitorsChange,
+  hasHighcharts,
 }: {
   trackedEntities: string[]
   aliasesByEntity: Record<string, string[]>
   onQueryRun?: (query: string) => Promise<void> | void
+  competitors: string[]
+  onCompetitorsChange: (v: string[]) => void
+  hasHighcharts: boolean
 }) {
   const [queryText, setQueryText] = useState('')
   const [status, setStatus] = useState<LabStatus>('idle')
@@ -1832,29 +1840,65 @@ function QueryLab({
 
           {/* IDLE */}
           {status === 'idle' && (
-            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, padding: '20px 20px 18px' }}>
-              <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#C8D6CA', marginBottom: 14 }}>
-                Try a query
-              </p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 7, flex: 1 }}>
-                {LAB_SUGGESTIONS.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => { setQueryText(s); setTimeout(() => textareaRef.current?.focus(), 0) }}
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, padding: '20px 20px 18px', gap: 14, overflowY: 'auto' }}>
+              <div>
+                <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#C8D6CA', marginBottom: 14 }}>
+                  Try a query
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  {LAB_SUGGESTIONS.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => { setQueryText(s); setTimeout(() => textareaRef.current?.focus(), 0) }}
+                      style={{
+                        textAlign: 'left', background: 'transparent', border: '1px solid #E8E2D8',
+                        borderRadius: 10, padding: '9px 13px',
+                        fontSize: 12, color: '#6A8070', cursor: 'pointer',
+                        lineHeight: 1.45, fontWeight: 500,
+                        transition: 'background 0.12s, border-color 0.12s, color 0.12s',
+                      }}
+                      onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = '#F2EDE6'; b.style.borderColor = '#CBBFAC'; b.style.color = '#3A5040' }}
+                      onMouseLeave={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = 'transparent'; b.style.borderColor = '#E8E2D8'; b.style.color = '#6A8070' }}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Tracked entities */}
+              <div style={{ borderTop: '1px solid #EDE7DA', paddingTop: 14 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#2A3A2C', letterSpacing: '-0.01em' }}>Tracked entities</div>
+                    <div style={{ fontSize: 11, color: '#9AAE9C', marginTop: 2 }}>Companies, libraries or tools tracked in benchmarks</div>
+                  </div>
+                  <span
                     style={{
-                      textAlign: 'left', background: 'transparent', border: '1px solid #E8E2D8',
-                      borderRadius: 10, padding: '9px 13px',
-                      fontSize: 12, color: '#6A8070', cursor: 'pointer',
-                      lineHeight: 1.45, fontWeight: 500,
-                      transition: 'background 0.12s, border-color 0.12s, color 0.12s',
+                      fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 999,
+                      background: '#FEF6ED', color: '#B07030', border: '1px solid #F0D4A8',
                     }}
-                    onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = '#F2EDE6'; b.style.borderColor = '#CBBFAC'; b.style.color = '#3A5040' }}
-                    onMouseLeave={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.background = 'transparent'; b.style.borderColor = '#E8E2D8'; b.style.color = '#6A8070' }}
                   >
-                    {s}
-                  </button>
-                ))}
+                    {competitors.length}
+                  </span>
+                </div>
+                <TagInput
+                  items={competitors}
+                  onChange={onCompetitorsChange}
+                  placeholder="e.g. chart.js"
+                  showLogos={true}
+                />
+                {!hasHighcharts && competitors.length > 0 && (
+                  <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 500, color: '#dc2626' }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="8" x2="12" y2="12" />
+                      <line x1="12" y1="16" x2="12.01" y2="16" />
+                    </svg>
+                    "Highcharts" must be included
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -2369,6 +2413,7 @@ export default function Prompts() {
   const [queryTags, setQueryTags] = useState<Record<string, string[]>>({})
   const [competitors, setCompetitors] = useState<string[]>([])
   const [triggerToken, setTriggerToken] = useState(() => readStoredTriggerToken())
+  const [manageExpanded, setManageExpanded] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [saveErr, setSaveErr] = useState<string | null>(null)
@@ -2399,6 +2444,8 @@ export default function Prompts() {
       qc.invalidateQueries({ queryKey: ['dashboard'] }),
       qc.invalidateQueries({ queryKey: ['timeseries'] }),
       qc.invalidateQueries({ queryKey: ['prompt-drilldown'] }),
+      qc.invalidateQueries({ queryKey: ['under-the-hood'] }),
+      qc.invalidateQueries({ queryKey: ['run-costs'] }),
     ])
   }
 
@@ -2647,19 +2694,52 @@ export default function Prompts() {
         trackedEntities={competitors}
         aliasesByEntity={configQuery.data?.config.aliases ?? {}}
         onQueryRun={handleQueryLabRun}
+        competitors={competitors}
+        onCompetitorsChange={(v) => mark(() => setCompetitors(v))}
+        hasHighcharts={hasHighcharts}
       />
 
-      {/* ── Section divider ────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-4 pt-1">
+      {/* ── Section divider (collapsible toggle) ───────────────────────────── */}
+      <div className="flex items-center gap-3">
         <div className="flex-1 h-px" style={{ background: '#DDD0BC' }} />
-        <span className="text-xs font-semibold uppercase tracking-wider px-1" style={{ color: '#9AAE9C' }}>
-          Manage Queries &amp; Tracked Entities
-        </span>
+        <button
+          type="button"
+          onClick={() => setManageExpanded((v) => !v)}
+          className="flex items-center gap-2"
+          style={{
+            background: manageExpanded ? '#EEF5EF' : '#F0EBE2',
+            border: `1.5px solid ${manageExpanded ? '#A8CCA9' : '#C8BAA4'}`,
+            borderRadius: 20,
+            cursor: 'pointer',
+            padding: '7px 16px 7px 18px',
+            transition: 'background 0.15s, border-color 0.15s',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.07)',
+          }}
+        >
+          <span
+            style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: manageExpanded ? '#3A6E40' : '#6B5E4E', whiteSpace: 'nowrap' }}
+          >
+            Manage Queries &amp; Query Tags
+          </span>
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke={manageExpanded ? '#3A6E40' : '#6B5E4E'}
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ transition: 'transform 0.2s', transform: manageExpanded ? 'rotate(180deg)' : 'rotate(0deg)', flexShrink: 0 }}
+          >
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
         <div className="flex-1 h-px" style={{ background: '#DDD0BC' }} />
       </div>
 
       {/* ── Config editors ─────────────────────────────────────────────────── */}
-      {configQuery.isLoading ? (
+      {manageExpanded && (configQuery.isLoading ? (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           {[0, 1].map((i) => (
             <div key={i} className="rounded-xl border p-6" style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}>
@@ -2706,44 +2786,6 @@ export default function Prompts() {
                 />
               </div>
 
-              {/* Divider */}
-              <div className="mx-5" style={{ borderTop: '1px solid #E8E0D2' }} />
-
-              {/* Competitors */}
-              <div className="flex items-center justify-between p-5 pb-0">
-                <div>
-                  <div className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>
-                    Tracked entities
-                  </div>
-                  <div className="text-xs mt-0.5" style={{ color: '#7A8E7C' }}>
-                    Companies, libraries or tools tracked in benchmarks
-                  </div>
-                </div>
-                <span
-                  className="text-xs font-semibold tabular-nums px-2.5 py-1 rounded-full"
-                  style={{ background: '#FEF6ED', color: '#B07030', border: '1px solid #F0D4A8' }}
-                >
-                  {competitors.length}
-                </span>
-              </div>
-              <div className="p-5 pt-4">
-                <TagInput
-                  items={competitors}
-                  onChange={(v) => mark(() => setCompetitors(v))}
-                  placeholder="e.g. chart.js"
-                  showLogos={true}
-                />
-                {!hasHighcharts && competitors.length > 0 && (
-                  <div className="mt-3 flex items-center gap-2 text-xs font-medium" style={{ color: '#dc2626' }}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <circle cx="12" cy="12" r="10" />
-                      <line x1="12" y1="8" x2="12" y2="12" />
-                      <line x1="12" y1="16" x2="12.01" y2="16" />
-                    </svg>
-                    "Highcharts" must be included
-                  </div>
-                )}
-              </div>
             </div>
 
             {/* Right card: Prompt Tags */}
@@ -2937,9 +2979,17 @@ export default function Prompts() {
           )}
           <style>{`@keyframes spin-prompts-save-run { to { transform: rotate(360deg); } }`}</style>
         </>
-      )}
+      ))}
 
       {/* ── Prompts data grid ──────────────────────────────────────────────── */}
+      <div className="flex items-center gap-3 pt-1">
+        <div className="flex-1 h-px" style={{ background: '#DDD0BC' }} />
+        <span className="text-xs font-semibold uppercase tracking-wider px-1" style={{ color: '#9AAE9C', whiteSpace: 'nowrap' }}>
+          All Queries
+        </span>
+        <div className="flex-1 h-px" style={{ background: '#DDD0BC' }} />
+      </div>
+
       <div
         className="rounded-xl border shadow-sm overflow-hidden min-h-[420px]"
         style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
@@ -2959,6 +3009,16 @@ export default function Prompts() {
               <SortTh label="Tags" col="tags" current={sortKey} dir={sortDir} onSort={handleSort} width="180px" />
               <SortTh label="Status" col="status" current={sortKey} dir={sortDir} onSort={handleSort} width="130px" />
               <SortTh label="Runs" col="runs" current={sortKey} dir={sortDir} align="right" onSort={handleSort} width="60px" />
+              <SortTh
+                label="Est Cost"
+                col="estimatedTotalCostUsd"
+                current={sortKey}
+                dir={sortDir}
+                align="right"
+                onSort={handleSort}
+                width="120px"
+                info="Estimated API cost for this prompt in the latest tracked run."
+              />
               <SortTh
                 label="Highcharts %"
                 col="highchartsRatePct"
@@ -2998,7 +3058,7 @@ export default function Prompts() {
               {isLoading
                 ? Array.from({ length: 6 }).map((_, i) => (
                     <tr key={i} style={{ borderBottom: '1px solid #F2EDE6' }}>
-                      {Array.from({ length: 10 }).map((__, j) => (
+                      {Array.from({ length: 11 }).map((__, j) => (
                         <td key={j} className="px-4 py-4">
                           <Skeleton className="h-4" />
                         </td>
@@ -3062,6 +3122,14 @@ export default function Prompts() {
                         style={{ color: p.runs > 0 && !paused ? '#2A3A2C' : '#E5DDD0' }}
                       >
                         {p.runs > 0 ? p.runs : '–'}
+                      </td>
+                      <td
+                        className="px-4 py-3 text-right text-sm font-semibold tabular-nums"
+                        style={{ color: p.status === 'tracked' ? '#2A5C2E' : '#E5DDD0' }}
+                      >
+                        {p.status === 'tracked'
+                          ? formatUsd(p.estimatedTotalCostUsd ?? 0)
+                          : '–'}
                       </td>
                       <td className="px-4 py-3">
                         {p.status === 'tracked' ? (
