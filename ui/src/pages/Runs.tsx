@@ -6,6 +6,7 @@ import { BENCHMARK_MODEL_OPTIONS, BENCHMARK_MODEL_VALUES, dedupeModels } from '.
 import type { BenchmarkWorkflowRun } from '../types'
 
 const TRIGGER_TOKEN_STORAGE_KEY = 'benchmark_trigger_token'
+const MAX_PROMPT_LIMIT = 10000
 
 function canUseSessionStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined'
@@ -114,6 +115,7 @@ export default function Runs() {
   const [temperature, setTemperature] = useState(0.7)
   const [webSearch, setWebSearch] = useState(true)
   const [runMonth, setRunMonth] = useState('')
+  const [promptLimit, setPromptLimit] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const normalizedTriggerToken = triggerToken.trim()
   const hasManagedRunAccess = normalizedTriggerToken.length > 0
@@ -149,6 +151,35 @@ export default function Runs() {
     refetchInterval: hasManagedRunAccess ? 15_000 : false,
     retry: false,
   })
+  const configQuery = useQuery({
+    queryKey: ['config'],
+    queryFn: () => api.config(),
+    retry: false,
+  })
+  const totalPromptCount = configQuery.data?.config.queries.length ?? null
+  const normalizedPromptLimit = useMemo(() => {
+    const raw = promptLimit.trim()
+    if (!raw) return undefined
+    const parsed = Math.trunc(Number(raw))
+    if (!Number.isFinite(parsed) || parsed < 1) return undefined
+    if (parsed > MAX_PROMPT_LIMIT) return MAX_PROMPT_LIMIT
+    if (typeof totalPromptCount === 'number' && totalPromptCount > 0) {
+      return Math.min(parsed, totalPromptCount)
+    }
+    return parsed
+  }, [promptLimit, totalPromptCount])
+  const promptScopeLabel = useMemo(() => {
+    if (typeof totalPromptCount === 'number') {
+      if (normalizedPromptLimit) {
+        return `Will run first ${normalizedPromptLimit} of ${totalPromptCount} prompts.`
+      }
+      return `Will run all ${totalPromptCount} prompts.`
+    }
+    if (normalizedPromptLimit) {
+      return `Will run first ${normalizedPromptLimit} prompts.`
+    }
+    return 'Will run all prompts.'
+  }, [normalizedPromptLimit, totalPromptCount])
 
   const triggerMutation = useMutation({
     mutationFn: () =>
@@ -161,6 +192,7 @@ export default function Runs() {
           webSearch,
           ourTerms,
           runMonth: runMonth || undefined,
+          promptLimit: normalizedPromptLimit,
         },
         normalizedTriggerToken || undefined,
       ),
@@ -198,6 +230,9 @@ export default function Runs() {
     const message = (triggerMutation.error as Error).message || 'Unable to trigger run.'
     if (message.includes('Unexpected inputs provided') && message.includes('model_count')) {
       return 'Trigger workflow is out of sync. Pull latest main and retry.'
+    }
+    if (message.includes('Unexpected inputs provided') && message.includes('prompt_limit')) {
+      return 'Prompt-limit workflow support is not deployed yet. Pull latest main and retry.'
     }
     return message
   }, [triggerMutation.isError, triggerMutation.error])
@@ -512,6 +547,40 @@ export default function Runs() {
                       className="w-full px-3 py-2 rounded-lg text-sm"
                       style={inputStyle}
                     />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-xs font-medium" style={{ color: '#7A8E7C' }}>
+                      Prompts to run (optional)
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={
+                        typeof totalPromptCount === 'number'
+                          ? Math.min(totalPromptCount, MAX_PROMPT_LIMIT)
+                          : MAX_PROMPT_LIMIT
+                      }
+                      value={promptLimit}
+                      onChange={(e) => {
+                        const digitsOnly = e.target.value.replace(/\D+/g, '')
+                        if (!digitsOnly) {
+                          setPromptLimit('')
+                          return
+                        }
+                        const parsed = Math.min(MAX_PROMPT_LIMIT, Math.max(1, Number(digitsOnly)))
+                        if (typeof totalPromptCount === 'number' && totalPromptCount > 0) {
+                          setPromptLimit(String(Math.min(parsed, totalPromptCount)))
+                          return
+                        }
+                        setPromptLimit(String(parsed))
+                      }}
+                      className="w-full px-3 py-2 rounded-lg text-sm"
+                      style={inputStyle}
+                      placeholder={typeof totalPromptCount === 'number' ? `All (${totalPromptCount})` : 'All'}
+                    />
+                    <span className="text-xs" style={{ color: '#9AAE9C' }}>
+                      {promptScopeLabel}
+                    </span>
                   </label>
                 </div>
               </div>

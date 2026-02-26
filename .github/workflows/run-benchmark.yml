@@ -38,6 +38,10 @@ on:
         description: "Optional override (YYYY-MM)"
         required: false
         default: ""
+      prompt_limit:
+        description: "Optional number of prompts to run (1+)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -88,6 +92,7 @@ jobs:
           TEMP_INPUT: ${{ github.event.inputs.temperature }}
           WEB_SEARCH_INPUT: ${{ github.event.inputs.web_search }}
           RUN_MONTH_INPUT: ${{ github.event.inputs.run_month }}
+          PROMPT_LIMIT_INPUT: ${{ github.event.inputs.prompt_limit }}
         run: |
           set -euo pipefail
 
@@ -139,6 +144,17 @@ jobs:
             exit 1
           fi
 
+          if [[ -n "${PROMPT_LIMIT_INPUT}" ]]; then
+            if [[ ! "${PROMPT_LIMIT_INPUT}" =~ ^[0-9]+$ ]]; then
+              echo "prompt_limit must be an integer"
+              exit 1
+            fi
+            if (( PROMPT_LIMIT_INPUT < 1 )); then
+              echo "prompt_limit must be >= 1"
+              exit 1
+            fi
+          fi
+
       - name: Pull live config from Supabase
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -159,6 +175,7 @@ jobs:
           MODEL_INPUT: ${{ github.event.inputs.model }}
           MODELS_INPUT: ${{ github.event.inputs.models }}
           WEB_SEARCH_INPUT: ${{ github.event.inputs.web_search }}
+          PROMPT_LIMIT_INPUT: ${{ github.event.inputs.prompt_limit }}
         run: |
           set -euo pipefail
           TARGET_MODELS="${MODELS_INPUT:-${MODEL_INPUT}}"
@@ -173,6 +190,9 @@ jobs:
           )
           if [[ "${WEB_SEARCH_INPUT}" == "true" ]]; then
             CMD+=(--web-search)
+          fi
+          if [[ -n "${PROMPT_LIMIT_INPUT}" ]]; then
+            CMD+=(--prompt-limit "${PROMPT_LIMIT_INPUT}")
           fi
           "${CMD[@]}"
 

@@ -29,6 +29,7 @@ const FALLBACK_ALLOWED_MODELS = [
 ]
 const OUR_TERMS_DEFAULT = 'Highcharts'
 const MAX_OUR_TERMS_LENGTH = 300
+const MAX_PROMPT_LIMIT = 10000
 const RUN_MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/
 const OUR_TERMS_REGEX = /^[\w\s.,&()+/\-]+$/i
 
@@ -233,6 +234,31 @@ function resolveRunMonth(value) {
   return normalized
 }
 
+function resolvePromptLimit(value) {
+  if (value === null || value === undefined || String(value).trim() === '') {
+    return null
+  }
+
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+    const error = new Error('promptLimit must be an integer.')
+    error.statusCode = 400
+    throw error
+  }
+  if (parsed < 1) {
+    const error = new Error('promptLimit must be at least 1.')
+    error.statusCode = 400
+    throw error
+  }
+  if (parsed > MAX_PROMPT_LIMIT) {
+    const error = new Error(`promptLimit must be <= ${MAX_PROMPT_LIMIT}.`)
+    error.statusCode = 400
+    throw error
+  }
+
+  return parsed
+}
+
 function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms)
@@ -287,8 +313,9 @@ module.exports = async (req, res) => {
     const temperature = normalizeNumber(body.temperature, 0.7, 0, 2)
     const webSearch = parseWebSearch(body.webSearch)
     const runMonth = resolveRunMonth(body.runMonth)
+    const promptLimit = resolvePromptLimit(body.promptLimit ?? body.prompt_limit)
 
-    await dispatchWorkflow({
+    const workflowInputs = {
       trigger_id: triggerId,
       model,
       models: models.join(','),
@@ -297,7 +324,12 @@ module.exports = async (req, res) => {
       web_search: webSearch ? 'true' : 'false',
       our_terms: ourTerms,
       run_month: runMonth,
-    })
+    }
+    if (promptLimit !== null) {
+      workflowInputs.prompt_limit = String(promptLimit)
+    }
+
+    await dispatchWorkflow(workflowInputs)
 
     const matchedRun = await findTriggeredRun(triggerId)
 
@@ -308,6 +340,7 @@ module.exports = async (req, res) => {
       repo: `${config.owner}/${config.repo}`,
       ref: config.ref,
       models,
+      promptLimit,
       run: matchedRun,
       message: matchedRun
         ? 'Benchmark run queued in GitHub Actions.'

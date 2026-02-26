@@ -338,6 +338,7 @@ export interface BenchmarkTriggerResponse {
   repo: string
   ref: string
   models?: string[]
+  promptLimit?: number | null
   run: BenchmarkWorkflowRun | null
   message: string
 }

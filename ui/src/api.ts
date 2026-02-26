@@ -2713,6 +2713,7 @@ export const api = {
       webSearch: boolean
       ourTerms: string
       runMonth?: string
+      promptLimit?: number
     },
     triggerToken?: string,
   ) {

@@ -536,6 +536,74 @@ class CliIntegrationTests(unittest.TestCase):
             non_overall_rows = [row for row in comparison_rows if row["query"] != "OVERALL"]
             self.assertTrue(all(row["runs"] == "2" for row in non_overall_rows))
 
+    def test_main_respects_prompt_limit(self):
+        config_queries = [
+            "prompt one",
+            "prompt two",
+            "prompt three",
+            "prompt four",
+        ]
+        fake_client = FakeClient(
+            [
+                {"output_text": "Highcharts mention in first prompt."},
+                {"output_text": "Highcharts mention in second prompt."},
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "benchmark_config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "queries": config_queries,
+                        "competitors": bench.COMPETITORS,
+                        "aliases": bench.COMPETITOR_ALIASES,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False):
+                with mock.patch.object(
+                    bench, "create_openai_client", return_value=fake_client
+                ):
+                    exit_code = bench.main(
+                        [
+                            "--our-terms",
+                            "EasyLLM",
+                            "--model",
+                            "gpt-4o-mini",
+                            "--runs",
+                            "1",
+                            "--prompt-limit",
+                            "2",
+                            "--output-dir",
+                            temp_dir,
+                            "--config",
+                            str(config_path),
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(len(fake_client.responses.calls), 2)
+
+            jsonl_path = Path(temp_dir) / "llm_outputs.jsonl"
+            parsed = [
+                json.loads(line)
+                for line in jsonl_path.read_text(encoding="utf-8").strip().splitlines()
+            ]
+            self.assertEqual(len(parsed), 2)
+            self.assertEqual([row["query"] for row in parsed], config_queries[:2])
+
+            with (Path(temp_dir) / "comparison_table.csv").open(
+                newline="", encoding="utf-8"
+            ) as handle:
+                comparison_rows = list(csv.DictReader(handle))
+            self.assertEqual(len(comparison_rows), 3)
+            self.assertEqual(
+                [row["query"] for row in comparison_rows],
+                ["prompt one", "prompt two", "OVERALL"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

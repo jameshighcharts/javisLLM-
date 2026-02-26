@@ -203,6 +203,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "Defaults to config/benchmark_config.json."
         ),
     )
+    parser.add_argument(
+        "--prompt-limit",
+        type=int,
+        default=0,
+        help=(
+            "Optional limit on number of prompts (queries) to run, in config order. "
+            "0 means run all prompts."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -906,6 +915,9 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
     if args.runs < 1:
         print("--runs must be >= 1", file=sys.stderr)
         return 2
+    if args.prompt_limit < 0:
+        print("--prompt-limit must be >= 0", file=sys.stderr)
+        return 2
 
     selected_models = parse_model_names(str(args.model or ""))
     providers_by_model = {
@@ -951,6 +963,12 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"Config error: {exc}", file=sys.stderr)
         return 2
+    total_config_queries = len(queries)
+    if args.prompt_limit > 0:
+        queries = queries[: args.prompt_limit]
+        print(
+            f"Prompt limit enabled: running {len(queries)}/{total_config_queries} prompts."
+        )
 
     specs = build_entity_specs(
         our_terms=our_terms,
@@ -1080,7 +1098,7 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
     print(f"Wrote viability CSV: {viability_path}")
     print(
         f"Config source: {config_source} "
-        f"(queries={len(queries)}, competitors={len(competitors)})"
+        f"(queries={len(queries)}/{total_config_queries}, competitors={len(competitors)})"
     )
     print(f"Models: {', '.join(selected_models)}")
     print(f"Successful calls: {successful_calls}/{total_calls}")
