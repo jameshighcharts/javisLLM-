@@ -708,20 +708,21 @@ function ScoreStatCard({ score, isLoading }: { score: number; isLoading: boolean
             </svg>
           </button>
           <div
-            className="pointer-events-none absolute right-0 top-5 z-20 w-72 rounded-md border px-2 py-1.5 text-[10px] leading-snug opacity-0 transition-opacity shadow-sm group-hover:opacity-100 group-focus-within:opacity-100"
+            className="pointer-events-none absolute right-0 top-5 z-20 w-56 rounded-lg border px-3 py-2.5 text-[10px] opacity-0 transition-opacity shadow-sm group-hover:opacity-100 group-focus-within:opacity-100"
             style={{ background: '#FFFFFF', borderColor: '#DDD0BC', color: '#6E8472' }}
           >
-            <div>AI Visibility Score (0-100)</div>
-            <div className="mt-1">
-              Presence% = <code>(Highcharts mentions / responses) × 100</code>
-            </div>
-            <div className="mt-1">
-              Share of Voice% = <code>(Highcharts mentions / (Highcharts mentions + competitor mentions)) × 100</code>
-            </div>
-            <div className="mt-1">
-              Score = <code>0.7 × Presence% + 0.3 × Share of Voice%</code>
-            </div>
-            <div className="mt-1">Goal = {SCORE_TARGET}</div>
+            <p className="font-semibold text-[11px] mb-2" style={{ color: '#2A3A2C' }}>AI Visibility · 0–100</p>
+            {([
+              ['Presence', 'mentions ÷ responses'],
+              ['Share of Voice', 'HC ÷ all mentions'],
+              ['Score', '0.7 × Presence + 0.3 × SoV'],
+              ['Goal', String(SCORE_TARGET)],
+            ] as [string, string][]).map(([label, val]) => (
+              <div key={label} className="flex items-baseline justify-between gap-3 mt-2">
+                <span>{label}</span>
+                <span className="text-right" style={{ color: '#4A6050' }}>{val}</span>
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -1005,26 +1006,31 @@ function SnapshotTrendCard({
             i
           </button>
           <div
-            className="pointer-events-none absolute right-0 top-5 z-20 w-72 rounded-md border px-2 py-1.5 text-[10px] leading-snug opacity-0 transition-opacity shadow-sm group-hover:opacity-100 group-focus-within:opacity-100"
+            className="pointer-events-none absolute right-0 top-5 z-20 w-56 rounded-lg border px-3 py-2.5 text-[10px] opacity-0 transition-opacity shadow-sm group-hover:opacity-100 group-focus-within:opacity-100"
             style={{ background: '#FFFFFF', borderColor: '#DDD0BC', color: '#6E8472' }}
           >
-            <div>AI Visibility Score (0-100) by run</div>
-            <div className="mt-1">
-              Presence% = <code>(Highcharts mentions / responses) × 100</code>
-            </div>
-            <div className="mt-1">
-              Share of Voice% = <code>(Highcharts mentions / (Highcharts mentions + competitor mentions)) × 100</code>
-            </div>
-            <div className="mt-1">
-              Score = <code>0.7 × Presence% + 0.3 × Share of Voice%</code>
-            </div>
-            <div className="mt-1">
-              Dashed line = COMBVI
-            </div>
-            <div className="mt-1">
-              Formula: <code>COMBVI% = (rival mentions / (responses × rival competitors)) × 100</code>.
-            </div>
-            <div className="mt-1">Net Advantage = <code>AI Visibility - COMBVI</code></div>
+            <p className="font-semibold text-[11px] mb-2" style={{ color: '#2A3A2C' }}>AI Visibility · per run</p>
+            {([
+              ['Presence', 'mentions ÷ responses'],
+              ['Share of Voice', 'HC ÷ all mentions'],
+              ['Score', '0.7 × Presence + 0.3 × SoV'],
+            ] as [string, string][]).map(([label, val]) => (
+              <div key={label} className="flex items-baseline justify-between gap-3 mt-2">
+                <span>{label}</span>
+                <span className="text-right" style={{ color: '#4A6050' }}>{val}</span>
+              </div>
+            ))}
+            <div className="my-2" style={{ borderTop: '1px solid #EDE8DF' }} />
+            <p className="font-semibold text-[11px] mb-1.5" style={{ color: '#2A3A2C' }}>COMBVI (dashed)</p>
+            {([
+              ['Formula', 'avg rival mention rate'],
+              ['Net Advantage', 'AI Visibility − COMBVI'],
+            ] as [string, string][]).map(([label, val]) => (
+              <div key={label} className="flex items-baseline justify-between gap-3 mt-2">
+                <span>{label}</span>
+                <span className="text-right" style={{ color: '#4A6050' }}>{val}</span>
+              </div>
+            ))}
           </div>
         </div>
       </div>

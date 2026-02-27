@@ -951,25 +951,39 @@ function QueryCsvImporter({
     () => new Set(existingQueries.map((query) => normalizeQueryKey(query))),
     [existingQueries],
   )
+  const existingQueryTagLookup = useMemo(() => {
+    const lookup = new Map<string, string[]>()
+    for (const [query, tags] of Object.entries(existingQueryTags)) {
+      lookup.set(normalizeQueryKey(query), tags)
+    }
+    return lookup
+  }, [existingQueryTags])
   const normalizedImportTags = useMemo(
     () => normalizePromptTagList(importTags),
     [importTags],
   )
   const importTagTargetQueries = useMemo(
+    () => replaceQueries,
+    [replaceQueries],
+  )
+  const appendImportedExistingCount = useMemo(
     () =>
-      mode === 'append'
-        ? preview.parsedQueries.filter(
-            (query) => !existingQueryKeySet.has(normalizeQueryKey(query)),
-          )
-        : replaceQueries,
-    [existingQueryKeySet, mode, preview.parsedQueries, replaceQueries],
+      replaceQueries.reduce(
+        (count, query) => count + (existingQueryKeySet.has(normalizeQueryKey(query)) ? 1 : 0),
+        0,
+      ),
+    [existingQueryKeySet, replaceQueries],
   )
 
   const appendNewCount = Math.max(0, mergedAppendQueries.length - existingQueries.length)
   const hasImportText = rawText.trim().length > 0
   const canApply =
     mode === 'append'
-      ? preview.parsedQueries.length > 0 && appendNewCount > 0
+      ? preview.parsedQueries.length > 0 &&
+        (
+          appendNewCount > 0 ||
+          (normalizedImportTags.length > 0 && importTagTargetQueries.length > 0)
+        )
       : replaceQueries.length > 0
 
   async function handleFileInputChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -1235,7 +1249,7 @@ function QueryCsvImporter({
               {normalizedImportTags.length > 0 && (
                 <p className="text-xs mt-2" style={{ color: '#6C829A' }}>
                   {mode === 'append'
-                    ? `Will tag ${importTagTargetQueries.length} new prompt${importTagTargetQueries.length === 1 ? '' : 's'} on import.`
+                    ? `Will tag ${importTagTargetQueries.length} imported prompt${importTagTargetQueries.length === 1 ? '' : 's'} on append${appendImportedExistingCount > 0 ? ` (${appendImportedExistingCount} already tracked)` : ''}.`
                     : `Will tag ${importTagTargetQueries.length} imported prompt${importTagTargetQueries.length === 1 ? '' : 's'} on replace.`}
                 </p>
               )}
@@ -1259,7 +1273,13 @@ function QueryCsvImporter({
                     const previewTags =
                       normalizedImportTags.length > 0
                         ? normalizePromptTags(
-                            [...inferPromptTags(query), ...normalizedImportTags],
+                            [
+                              ...(
+                                existingQueryTagLookup.get(normalizeQueryKey(query))
+                                ?? inferPromptTags(query)
+                              ),
+                              ...normalizedImportTags,
+                            ],
                             query,
                           )
                         : []
@@ -1347,14 +1367,18 @@ function QueryCsvImporter({
                 {isApplying
                   ? 'Applying…'
                   : mode === 'append'
-                    ? `Apply import (+${appendNewCount})`
+                    ? appendNewCount > 0
+                      ? `Apply import (+${appendNewCount})`
+                      : normalizedImportTags.length > 0 && importTagTargetQueries.length > 0
+                        ? `Apply tags (${importTagTargetQueries.length})`
+                        : 'Apply import'
                     : `Replace with ${replaceQueries.length}`}
               </button>
             </div>
 
             <div className="text-xs" style={{ color: '#8C9D8E' }}>
               {mode === 'append'
-                ? 'Append keeps existing prompts and adds only new ones.'
+                ? 'Append keeps existing prompts and adds only new ones. Import tags apply to all imported prompts, including already tracked ones.'
                 : 'Replace discards current prompts and keeps only imported prompts.'}
             </div>
           </div>
