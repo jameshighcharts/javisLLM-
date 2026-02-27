@@ -302,8 +302,8 @@ function getTagStyle(tag: string, muted?: boolean) {
   return _TAG_FALLBACKS[h % _TAG_FALLBACKS.length]
 }
 
-function normalizePromptTags(tags: string[], query: string): string[] {
-  const normalized = [...new Set(
+function normalizePromptTagList(tags: string[]): string[] {
+  return [...new Set(
     tags
       .map((tag) => {
         const normalizedTag = tag.trim().toLowerCase()
@@ -311,6 +311,10 @@ function normalizePromptTags(tags: string[], query: string): string[] {
       })
       .filter(Boolean),
   )]
+}
+
+function normalizePromptTags(tags: string[], query: string): string[] {
+  const normalized = normalizePromptTagList(tags)
   return normalized.length > 0 ? normalized : inferPromptTags(query)
 }
 
@@ -352,6 +356,33 @@ function buildQueryTagsForQueries(
         query,
       ),
     ]),
+  )
+}
+
+function applyImportTagsToQueries(
+  nextQueries: string[],
+  baseQueryTags: Record<string, string[]>,
+  importedQueries: string[],
+  importTags: string[],
+): Record<string, string[]> {
+  const normalizedImportTags = normalizePromptTagList(importTags)
+  if (normalizedImportTags.length === 0 || importedQueries.length === 0) {
+    return baseQueryTags
+  }
+
+  const importedQueryKeys = new Set(importedQueries.map((query) => normalizeQueryKey(query)))
+
+  return Object.fromEntries(
+    nextQueries.map((query) => {
+      const baseTags = baseQueryTags[query] ?? inferPromptTags(query)
+      if (!importedQueryKeys.has(normalizeQueryKey(query))) {
+        return [query, baseTags]
+      }
+      return [
+        query,
+        normalizePromptTags([...baseTags, ...normalizedImportTags], query),
+      ]
+    }),
   )
 }
 
@@ -885,15 +916,18 @@ function parseQueryImportText(rawText: string, existingQueries: string[]): Query
 
 function QueryCsvImporter({
   existingQueries,
+  existingQueryTags,
   onApply,
 }: {
   existingQueries: string[]
-  onApply: (nextQueries: string[]) => Promise<void> | void
+  existingQueryTags: Record<string, string[]>
+  onApply: (nextQueries: string[], nextQueryTags: Record<string, string[]>) => Promise<void> | void
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [rawText, setRawText] = useState('')
   const [sourceLabel, setSourceLabel] = useState('')
   const [mode, setMode] = useState<'append' | 'replace'>('append')
+  const [importTags, setImportTags] = useState<string[]>([])
   const [isApplying, setIsApplying] = useState(false)
   const [status, setStatus] = useState<{ type: 'idle' | 'success' | 'error'; text: string }>({
     type: 'idle',
@@ -912,6 +946,23 @@ function QueryCsvImporter({
   const replaceQueries = useMemo(
     () => dedupeCaseInsensitive(preview.parsedQueries),
     [preview.parsedQueries],
+  )
+  const existingQueryKeySet = useMemo(
+    () => new Set(existingQueries.map((query) => normalizeQueryKey(query))),
+    [existingQueries],
+  )
+  const normalizedImportTags = useMemo(
+    () => normalizePromptTagList(importTags),
+    [importTags],
+  )
+  const importTagTargetQueries = useMemo(
+    () =>
+      mode === 'append'
+        ? preview.parsedQueries.filter(
+            (query) => !existingQueryKeySet.has(normalizeQueryKey(query)),
+          )
+        : replaceQueries,
+    [existingQueryKeySet, mode, preview.parsedQueries, replaceQueries],
   )
 
   const appendNewCount = Math.max(0, mergedAppendQueries.length - existingQueries.length)
@@ -938,6 +989,7 @@ function QueryCsvImporter({
   function clearImport() {
     setRawText('')
     setSourceLabel('')
+    setImportTags([])
     setStatus({ type: 'idle', text: '' })
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
@@ -948,19 +1000,30 @@ function QueryCsvImporter({
     if (!canApply) return
 
     const nextQueries = mode === 'append' ? mergedAppendQueries : replaceQueries
+    const baseNextQueryTags = buildQueryTagsForQueries(nextQueries, existingQueryTags)
+    const nextQueryTags = applyImportTagsToQueries(
+      nextQueries,
+      baseNextQueryTags,
+      importTagTargetQueries,
+      normalizedImportTags,
+    )
+    const importTagSummary =
+      normalizedImportTags.length > 0 && importTagTargetQueries.length > 0
+        ? ` Applied tag${normalizedImportTags.length === 1 ? '' : 's'} (${normalizedImportTags.join(', ')}) to ${importTagTargetQueries.length} prompt${importTagTargetQueries.length === 1 ? '' : 's'}.`
+        : ''
     setIsApplying(true)
     setStatus({ type: 'idle', text: '' })
     try {
-      await onApply(nextQueries)
+      await onApply(nextQueries, nextQueryTags)
       if (mode === 'append') {
         setStatus({
           type: 'success',
-          text: `Imported and saved. Added ${appendNewCount} prompt${appendNewCount === 1 ? '' : 's'}.`,
+          text: `Imported and saved. Added ${appendNewCount} prompt${appendNewCount === 1 ? '' : 's'}.${importTagSummary}`,
         })
       } else {
         setStatus({
           type: 'success',
-          text: `Imported and saved. Replaced with ${replaceQueries.length} prompt${replaceQueries.length === 1 ? '' : 's'}.`,
+          text: `Imported and saved. Replaced with ${replaceQueries.length} prompt${replaceQueries.length === 1 ? '' : 's'}.${importTagSummary}`,
         })
       }
     } catch (error) {
@@ -1151,6 +1214,33 @@ function QueryCsvImporter({
               </div>
             )}
 
+            <div
+              className="rounded-lg px-3 py-3"
+              style={{ background: '#F4F8FD', border: '1px solid #D5E1F1' }}
+            >
+              <div className="text-[11px] font-semibold uppercase tracking-[0.06em]" style={{ color: '#4C6785' }}>
+                Import tags
+              </div>
+              <p className="text-xs mt-1" style={{ color: '#6C829A' }}>
+                Optional. Apply custom tags to imported prompts before they are added.
+              </p>
+              <div className="mt-2">
+                <TagInput
+                  items={normalizedImportTags}
+                  onChange={(next) => setImportTags(normalizePromptTagList(next))}
+                  placeholder="e.g. custom batch tag"
+                  maxVisibleItems={6}
+                />
+              </div>
+              {normalizedImportTags.length > 0 && (
+                <p className="text-xs mt-2" style={{ color: '#6C829A' }}>
+                  {mode === 'append'
+                    ? `Will tag ${importTagTargetQueries.length} new prompt${importTagTargetQueries.length === 1 ? '' : 's'} on import.`
+                    : `Will tag ${importTagTargetQueries.length} imported prompt${importTagTargetQueries.length === 1 ? '' : 's'} on replace.`}
+                </p>
+              )}
+            </div>
+
             {preview.parsedQueries.length > 0 && (
               <div
                 className="rounded-lg p-2.5"
@@ -1165,15 +1255,44 @@ function QueryCsvImporter({
                   Import Preview
                 </div>
                 <div className="space-y-1.5">
-                  {preview.parsedQueries.slice(0, 30).map((query) => (
-                    <div
-                      key={query}
-                      className="text-xs rounded-md px-2 py-1"
-                      style={{ background: '#F8F5EE', color: '#3D5840' }}
-                    >
-                      {query}
-                    </div>
-                  ))}
+                  {preview.parsedQueries.slice(0, 30).map((query) => {
+                    const previewTags =
+                      normalizedImportTags.length > 0
+                        ? normalizePromptTags(
+                            [...inferPromptTags(query), ...normalizedImportTags],
+                            query,
+                          )
+                        : []
+                    return (
+                      <div
+                        key={query}
+                        className="text-xs rounded-md px-2 py-1"
+                        style={{ background: '#F8F5EE', color: '#3D5840' }}
+                      >
+                        <div>{query}</div>
+                        {previewTags.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {previewTags.slice(0, 4).map((tag) => {
+                              const style = getTagStyle(tag)
+                              return (
+                                <span
+                                  key={`${query}-${tag}`}
+                                  className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium"
+                                  style={{
+                                    background: style.bg,
+                                    color: style.color,
+                                    border: `1px solid ${style.border}`,
+                                  }}
+                                >
+                                  {tag}
+                                </span>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
                   {preview.parsedQueries.length > 30 && (
                     <div className="text-xs" style={{ color: '#8EA08F' }}>
                       +{preview.parsedQueries.length - 30} more prompts
@@ -2526,15 +2645,17 @@ export default function Prompts() {
     })
   }
 
-  async function handleQueryImportApply(nextQueries: string[]) {
+  async function handleQueryImportApply(
+    nextQueries: string[],
+    nextQueryTags: Record<string, string[]>,
+  ) {
     if (nextQueries.length === 0) {
       throw new Error('Import must include at least one prompt.')
     }
 
-    const nextQueryTags = buildQueryTagsForQueries(nextQueries, queryTags)
     const payload: BenchmarkConfig = {
       queries: nextQueries,
-      queryTags: nextQueryTags,
+      queryTags: normalizeQueryTagsMap(nextQueries, nextQueryTags),
       competitors,
       aliases: configQuery.data?.config.aliases ?? {},
     }
@@ -2824,6 +2945,7 @@ export default function Prompts() {
                 />
                 <QueryCsvImporter
                   existingQueries={queries}
+                  existingQueryTags={queryTags}
                   onApply={handleQueryImportApply}
                 />
               </div>
