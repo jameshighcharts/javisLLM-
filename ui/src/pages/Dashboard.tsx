@@ -1060,6 +1060,7 @@ function SnapshotTrendCard({
               <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#6B8470' }}>
                 COMBVI
               </span>
+              <span className="text-[9px]" style={{ color: '#9AAE9C' }}>all competitors avg</span>
               <div className="flex items-baseline gap-1.5">
                 <span className="text-2xl font-bold tracking-tight leading-none" style={{ color: combviColor }}>
                   {latestCombvi.toFixed(1)}
@@ -1146,53 +1147,39 @@ function StatCard({
   )
 }
 
-// ── Share of Voice Card ───────────────────────────────────────────────────────
+// ── Total Prompts Tracked Card ────────────────────────────────────────────────
 
-function SovCard({ sov, isLoading }: { sov: number; isLoading: boolean }) {
-  const pct = Math.min(Math.max(sov, 0), 100)
-  const r = 52
-  const sz = 132
-  const cx = sz / 2
-  const cy = sz / 2
-  const circumference = 2 * Math.PI * r
-  const filled = (pct / 100) * circumference
-
+function TotalPromptsCard({ count, isLoading }: { count: number; isLoading: boolean }) {
   return (
     <div
       className="rounded-xl border shadow-sm h-full flex flex-col overflow-hidden"
       style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
     >
-      <div className="px-4 pt-3">
+      <div className="px-4 pt-3 pb-0">
         <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6B8470' }}>
-          Share of Voice
+          Prompts Tracked
         </span>
       </div>
 
-      <div className="flex-1 flex flex-col items-center justify-center px-3 pb-4">
+      <div className="flex-1 flex flex-col items-center justify-center pb-4 pt-2 gap-1">
         {isLoading ? (
-          <Skeleton className="rounded-full" style={{ width: sz, height: sz }} />
+          <Skeleton className="h-12 w-16 rounded-lg" />
         ) : (
-          <div className="relative" style={{ width: sz, height: sz }}>
-            <svg width={sz} height={sz} viewBox={`0 0 ${sz} ${sz}`}>
-              <circle cx={cx} cy={cy} r={r} fill="none" stroke="#EDE8DF" strokeWidth="11" />
-              <circle
-                cx={cx} cy={cy} r={r}
-                fill="none"
-                stroke={HC_COLOR}
-                strokeWidth="11"
-                strokeLinecap="round"
-                strokeDasharray={`${filled} ${circumference}`}
-                transform={`rotate(-90 ${cx} ${cy})`}
-                style={{ transition: 'stroke-dasharray 0.6s cubic-bezier(0.34,1.56,0.64,1)' }}
-              />
-            </svg>
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-0.5">
-              <span className="text-2xl font-black leading-none tracking-tight" style={{ color: '#1C2B1E' }}>
-                {pct.toFixed(1)}%
-              </span>
-              <span className="text-[9px] font-medium uppercase tracking-wide" style={{ color: '#6B8470' }}>of mentions</span>
-            </div>
-          </div>
+          <>
+            <span
+              className="font-black tracking-tight leading-none"
+              style={{ fontSize: 52, color: '#1C2B1E' }}
+            >
+              {count}
+            </span>
+            <div className="w-8 h-px" style={{ background: '#DDD0BC' }} />
+            <span
+              className="text-[9px] font-semibold uppercase tracking-widest"
+              style={{ color: '#8FAE93' }}
+            >
+              active queries
+            </span>
+          </>
         )}
       </div>
     </div>
@@ -2415,7 +2402,7 @@ export default function Dashboard() {
             useDerivedAiVisibility={hasSegmentFilters}
           />
         </div>
-        <SovCard sov={hcSov} isLoading={isLoading} />
+        <TotalPromptsCard count={tracked.length} isLoading={isLoading} />
         <PromptHcAvgCard />
       </div>
 
