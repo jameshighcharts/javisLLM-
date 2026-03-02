@@ -1,10 +1,9 @@
 import { Suspense, lazy } from 'react'
 import type { ComponentType, ElementType } from 'react'
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
-import { AuthProvider } from './components/AuthProvider'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { AuthProvider, useAuth } from './components/AuthProvider'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import Layout from './components/Layout'
-import Landing from './pages/Landing'
 import Login from './pages/Login'
 import CitationLinks from './pages/CitationLinks'
 import Competitors from './pages/Competitors'
@@ -72,12 +71,26 @@ function LazyPageRoute({
   )
 }
 
+function RootRoute() {
+  const { session, isInitialized } = useAuth()
+
+  if (!isInitialized) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: '#F2EDE6' }}>
+        <div className="animate-pulse" style={{ color: '#8FBB93' }}>Loading...</div>
+      </div>
+    )
+  }
+
+  return <Navigate to={session ? '/dashboard' : '/login'} replace />
+}
+
 export default function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Landing />} />
+          <Route path="/" element={<RootRoute />} />
           <Route path="/login" element={<Login />} />
           <Route path="/*" element={
             <ProtectedRoute>

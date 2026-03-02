@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../components/AuthProvider'
 
@@ -7,11 +7,17 @@ export default function Login() {
     const [loading, setLoading] = useState(false)
     const [message, setMessage] = useState('')
     const [error, setError] = useState('')
-    const { signInWithOtp } = useAuth()
+    const { signInWithOtp, session } = useAuth()
     const navigate = useNavigate()
     const location = useLocation()
 
     const from = location.state?.from?.pathname || '/dashboard'
+
+    useEffect(() => {
+        if (session) {
+            navigate(from, { replace: true })
+        }
+    }, [session, from, navigate])
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault()
