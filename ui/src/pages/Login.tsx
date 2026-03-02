@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { useAuth } from '../components/AuthProvider'
+import { isAllowedMagicLinkEmail, useAuth } from '../components/AuthProvider'
 
 export default function Login() {
     const [email, setEmail] = useState('')
@@ -24,6 +24,12 @@ export default function Login() {
         setLoading(true)
         setMessage('')
         setError('')
+
+        if (!isAllowedMagicLinkEmail(email)) {
+            setError('Only @highsoft email addresses can receive a magic link.')
+            setLoading(false)
+            return
+        }
 
         const { error } = await signInWithOtp(email)
 
@@ -70,7 +76,7 @@ export default function Login() {
                             required
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
-                            placeholder="you@example.com"
+                            placeholder="you@highsoft.com"
                             className="w-full px-4 py-2.5 rounded-lg border text-sm outline-none transition-colors"
                             style={{
                                 borderColor: '#DDD0BC',
@@ -81,6 +87,9 @@ export default function Login() {
                             onBlur={(e) => (e.target.style.borderColor = '#DDD0BC')}
                         />
                     </div>
+                    <p className="text-xs" style={{ color: '#7A8E7C' }}>
+                        Magic links are only available for @highsoft email addresses.
+                    </p>
 
                     <button
                         type="submit"

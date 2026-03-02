@@ -12,6 +12,21 @@ type AuthContextType = {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
+function normalizeEmailDomain(email: string): string | null {
+  const normalized = email.trim().toLowerCase()
+  const parts = normalized.split('@')
+  if (parts.length !== 2) {
+    return null
+  }
+  const domain = parts[1].trim()
+  return domain || null
+}
+
+export function isAllowedMagicLinkEmail(email: string): boolean {
+  const domain = normalizeEmailDomain(email)
+  return domain === 'highsoft' || domain === 'highsoft.com'
+}
+
 export function useAuth() {
   const context = useContext(AuthContext)
   if (context === undefined) {
@@ -47,6 +62,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const signInWithOtp = async (email: string) => {
+    if (!isAllowedMagicLinkEmail(email)) {
+      return { error: new Error('Only @highsoft email addresses can receive a magic link.') }
+    }
     if (!supabase) return { error: new Error('Supabase not configured') }
     const { error } = await supabase.auth.signInWithOtp({
       email,
