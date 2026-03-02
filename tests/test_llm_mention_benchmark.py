@@ -151,6 +151,7 @@ class AggregationTests(unittest.TestCase):
 
 class CitationExtractionTests(unittest.TestCase):
     def test_extracts_from_annotations_and_content_lists(self):
+        text_block = "Highcharts has robust accessibility support."
         response_dict = {
             "output": [
                 {
@@ -158,20 +159,26 @@ class CitationExtractionTests(unittest.TestCase):
                     "content": [
                         {
                             "type": "output_text",
-                            "text": "Sample text.",
+                            "text": text_block,
                             "citations": [
                                 {
                                     "title": "Library docs",
                                     "url": "https://docs.example.com",
                                     "snippet": "Example snippet",
+                                    "start_index": 0,
+                                    "end_index": 10,
                                 }
                             ],
                             "annotations": [
                                 {
                                     "type": "url_citation",
-                                    "title": "News source",
-                                    "url": "https://news.example.com",
-                                    "text": "News snippet",
+                                    "url_citation": {
+                                        "title": "News source",
+                                        "url": "https://news.example.com",
+                                        "text": "News snippet",
+                                        "start_index": 12,
+                                        "end_index": 18,
+                                    },
                                 }
                             ],
                         }
@@ -181,13 +188,37 @@ class CitationExtractionTests(unittest.TestCase):
         }
 
         citations = bench.extract_citations(response_dict)
-        urls = {item["url"] for item in citations}
+        by_url = {item["url"]: item for item in citations}
         self.assertEqual(len(citations), 2)
-        self.assertIn("https://docs.example.com", urls)
-        self.assertIn("https://news.example.com", urls)
+        self.assertIn("https://docs.example.com", by_url)
+        self.assertIn("https://news.example.com", by_url)
+        self.assertEqual(by_url["https://docs.example.com"]["host"], "docs.example.com")
+        self.assertEqual(by_url["https://docs.example.com"]["start_index"], 0)
+        self.assertEqual(by_url["https://docs.example.com"]["end_index"], 10)
+        self.assertEqual(by_url["https://docs.example.com"]["anchor_text"], "Highcharts")
+        self.assertEqual(by_url["https://news.example.com"]["anchor_text"], "as rob")
+        self.assertEqual(by_url["https://docs.example.com"]["provider"], "openai")
 
     def test_extracts_empty_when_no_citations(self):
         self.assertEqual(bench.extract_citations({"output": []}), [])
+
+    def test_legacy_citation_objects_remain_supported(self):
+        citations = bench.extract_citations(
+            {
+                "citations": [
+                    {
+                        "title": "Legacy source",
+                        "url": "https://legacy.example.com/path",
+                        "snippet": "Legacy snippet",
+                    }
+                ]
+            }
+        )
+        self.assertEqual(len(citations), 1)
+        self.assertEqual(citations[0]["url"], "https://legacy.example.com/path")
+        self.assertEqual(citations[0]["host"], "legacy.example.com")
+        self.assertIsNone(citations[0]["start_index"])
+        self.assertIsNone(citations[0]["end_index"])
 
 
 class ProviderRoutingTests(unittest.TestCase):

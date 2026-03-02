@@ -1,7 +1,11 @@
 import { Suspense, lazy } from 'react'
 import type { ComponentType, ElementType } from 'react'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { AuthProvider } from './components/AuthProvider'
+import { ProtectedRoute } from './components/ProtectedRoute'
 import Layout from './components/Layout'
+import Landing from './pages/Landing'
+import Login from './pages/Login'
 import CitationLinks from './pages/CitationLinks'
 import Competitors from './pages/Competitors'
 import CompetitorBlogs from './pages/CompetitorBlogs'
@@ -10,6 +14,7 @@ import Logics from './pages/Logics'
 import PromptDrilldown from './pages/PromptDrilldown'
 import PromptDrilldownHub from './pages/PromptDrilldownHub'
 import Prompts from './pages/Prompts'
+import PromptResearch from './pages/PromptResearch'
 import Runs from './pages/Runs'
 import UnderTheHood from './pages/UnderTheHood'
 
@@ -69,29 +74,36 @@ function LazyPageRoute({
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Layout>
+    <AuthProvider>
+      <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/okr" element={<Navigate to="/okr/kr-2-1" replace />} />
-          <Route path="/okr/kr-2-1" element={<LazyPageRoute Page={OKR} label="KR 2.1" />} />
-          <Route path="/okr/kr-2-3" element={<LazyPageRoute Page={KR23} label="KR 2.3" />} />
-          <Route path="/runs" element={<Runs />} />
-          <Route path="/gantt" element={<LazyPageRoute Page={Gantt} label="Gantt" />} />
-          <Route path="/prompts" element={<Prompts />} />
-          <Route path="/prompt-drilldown" element={<PromptDrilldownHub />} />
-          <Route path="/prompts/drilldown" element={<PromptDrilldown />} />
-          <Route path="/competitors" element={<Competitors />} />
-          <Route path="/competitor-blogs" element={<CompetitorBlogs />} />
-          <Route path="/citation-links" element={<CitationLinks />} />
-          <Route path="/logics" element={<Logics />} />
-          <Route path="/under-the-hood" element={<UnderTheHood />} />
-          <Route path="/diagnostics" element={<Navigate to="/logics" replace />} />
-          <Route path="/tests" element={<Navigate to="/logics" replace />} />
-          <Route path="/config" element={<Navigate to="/prompts" replace />} />
+          <Route path="/" element={<Landing />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/*" element={
+            <ProtectedRoute>
+              <Layout>
+                <Routes>
+                  <Route path="/dashboard" element={<Dashboard />} />
+                  <Route path="/okr/kr-2-1" element={<LazyPageRoute Page={OKR} label="KR 2.1" />} />
+                  <Route path="/okr/kr-2-3" element={<LazyPageRoute Page={KR23} label="KR 2.3" />} />
+                  <Route path="/runs" element={<Runs />} />
+                  <Route path="/gantt" element={<LazyPageRoute Page={Gantt} label="Gantt" />} />
+                  <Route path="/prompts" element={<Prompts />} />
+                  <Route path="/prompt-research" element={<PromptResearch />} />
+                  <Route path="/query-lab" element={<Prompts queryLabOnly />} />
+                  <Route path="/prompt-drilldown" element={<PromptDrilldownHub />} />
+                  <Route path="/prompts/drilldown" element={<PromptDrilldown />} />
+                  <Route path="/competitors" element={<Competitors />} />
+                  <Route path="/competitor-blogs" element={<CompetitorBlogs />} />
+                  <Route path="/citation-links" element={<CitationLinks />} />
+                  <Route path="/logics" element={<Logics />} />
+                  <Route path="/under-the-hood" element={<UnderTheHood />} />
+                </Routes>
+              </Layout>
+            </ProtectedRoute>
+          } />
         </Routes>
-      </Layout>
-    </BrowserRouter>
+      </BrowserRouter>
+    </AuthProvider>
   )
 }

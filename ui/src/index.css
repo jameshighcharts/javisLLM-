@@ -67,3 +67,40 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #C4B09A;
 }
+
+/* Landing Page Hero Animations */
+@keyframes marqueeLeft {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.marquee-row {
+  display: flex;
+  gap: 1.5rem;
+  width: max-content;
+  animation: marqueeLeft 30s linear infinite;
+  z-index: 10;
+  position: absolute;
+}
+
+.marquee-row.top { top: 35%; }
+.marquee-row.bottom { top: 55%; }
+
+.chip {
+  padding: 0.5rem 1.5rem;
+  border-radius: 9999px;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+.chip.light {
+  background-color: #F3F4F6;
+  color: #374151;
+  border: 1px solid #E5E7EB;
+}
+
+.chip.dark {
+  background-color: #1A2F23;
+  color: #FFFFFF;
+}

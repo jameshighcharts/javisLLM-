@@ -40,6 +40,10 @@ function isQueueRun(run: BenchmarkWorkflowRun | BenchmarkQueueRun): run is Bench
   return typeof (run as BenchmarkQueueRun).id === 'string' && !isWorkflowRun(run)
 }
 
+function isActiveQueueRun(run: BenchmarkWorkflowRun | BenchmarkQueueRun): run is BenchmarkQueueRun {
+  return isQueueRun(run) && run.status !== 'completed' && run.status !== 'failed'
+}
+
 function isWorkflowRunsResponse(value: unknown): value is { workflow: string; runs: BenchmarkWorkflowRun[] } {
   return Boolean(value && typeof value === 'object' && 'workflow' in value)
 }
@@ -159,6 +163,8 @@ export default function Runs() {
   const [webSearch, setWebSearch] = useState(true)
   const [runMonth, setRunMonth] = useState('')
   const [promptLimit, setPromptLimit] = useState('')
+  const [promptFilter, setPromptFilter] = useState<'all' | 'newest' | 'tag'>('all')
+  const [cohortTag, setCohortTag] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const normalizedTriggerToken = triggerToken.trim()
   const hasManagedRunAccess = normalizedTriggerToken.length > 0
@@ -206,6 +212,52 @@ export default function Runs() {
     retry: false,
   })
   const totalPromptCount = configQuery.data?.config.queries.length ?? null
+  const tagsByQuery = configQuery.data?.config.queryTags ?? {}
+  const knownPromptTags = useMemo(() => {
+    const seen = new Set<string>()
+    for (const tags of Object.values(tagsByQuery)) {
+      for (const rawTag of tags ?? []) {
+        const normalized = String(rawTag || '').trim().toLowerCase()
+        if (!normalized) continue
+        seen.add(normalized)
+      }
+    }
+    return [...seen].sort((left, right) => left.localeCompare(right))
+  }, [tagsByQuery])
+  const normalizedCohortTag = useMemo(() => cohortTag.trim().toLowerCase(), [cohortTag])
+  const tagMatchedPromptCount = useMemo(() => {
+    if (!normalizedCohortTag) {
+      return null
+    }
+    const configQueries = configQuery.data?.config.queries ?? []
+    if (configQueries.length > 0) {
+      let matched = 0
+      for (const query of configQueries) {
+        const tags = tagsByQuery[query] ?? []
+        const hasMatch = (tags ?? []).some(
+          (tag) => String(tag || '').trim().toLowerCase() === normalizedCohortTag,
+        )
+        if (hasMatch) {
+          matched += 1
+        }
+      }
+      return matched
+    }
+
+    if (Object.keys(tagsByQuery).length > 0) {
+      let matched = 0
+      for (const tags of Object.values(tagsByQuery)) {
+        const hasMatch = (tags ?? []).some(
+          (tag) => String(tag || '').trim().toLowerCase() === normalizedCohortTag,
+        )
+        if (hasMatch) {
+          matched += 1
+        }
+      }
+      return matched
+    }
+    return null
+  }, [normalizedCohortTag, configQuery.data?.config.queries, tagsByQuery])
   const normalizedPromptLimit = useMemo(() => {
     const raw = promptLimit.trim()
     if (!raw) return undefined
@@ -218,6 +270,36 @@ export default function Runs() {
     return parsed
   }, [promptLimit, totalPromptCount])
   const promptScopeLabel = useMemo(() => {
+    if (promptFilter === 'tag') {
+      if (!normalizedCohortTag) {
+        if (knownPromptTags.length > 0) {
+          return `Select a tag filter. ${knownPromptTags.length} tags available.`
+        }
+        return 'Select a tag filter to run only matching prompts.'
+      }
+      if (typeof tagMatchedPromptCount === 'number') {
+        if (normalizedPromptLimit) {
+          const effectiveCount = Math.min(tagMatchedPromptCount, normalizedPromptLimit)
+          return `Tag "${normalizedCohortTag}" matches ${tagMatchedPromptCount} prompts. Will run ${effectiveCount}.`
+        }
+        return `Tag "${normalizedCohortTag}" matches ${tagMatchedPromptCount} prompts.`
+      }
+      return `Will run prompts tagged "${normalizedCohortTag}".`
+    }
+
+    if (promptFilter === 'newest') {
+      if (typeof totalPromptCount === 'number') {
+        if (normalizedPromptLimit) {
+          return `Will run newest ${normalizedPromptLimit} of ${totalPromptCount} prompts.`
+        }
+        return `Will run newest prompts across all ${totalPromptCount} active prompts.`
+      }
+      if (normalizedPromptLimit) {
+        return `Will run newest ${normalizedPromptLimit} prompts.`
+      }
+      return 'Will run newest prompts.'
+    }
+
     if (typeof totalPromptCount === 'number') {
       if (normalizedPromptLimit) {
         return `Will run first ${normalizedPromptLimit} of ${totalPromptCount} prompts.`
@@ -228,7 +310,14 @@ export default function Runs() {
       return `Will run first ${normalizedPromptLimit} prompts.`
     }
     return 'Will run all prompts.'
-  }, [normalizedPromptLimit, totalPromptCount])
+  }, [
+    promptFilter,
+    normalizedCohortTag,
+    tagMatchedPromptCount,
+    normalizedPromptLimit,
+    totalPromptCount,
+    knownPromptTags.length,
+  ])
 
   const triggerMutation = useMutation({
     mutationFn: () =>
@@ -242,6 +331,8 @@ export default function Runs() {
           ourTerms,
           runMonth: runMonth || undefined,
           promptLimit: normalizedPromptLimit,
+          promptOrder: promptFilter === 'newest' ? 'newest' : 'default',
+          cohortTag: promptFilter === 'tag' ? normalizedCohortTag || undefined : undefined,
         },
         normalizedTriggerToken || undefined,
       ),
@@ -261,13 +352,30 @@ export default function Runs() {
     () => Boolean(runsQuery.data && !isWorkflowRunsResponse(runsQuery.data)),
     [runsQuery.data],
   )
-  const hasActiveQueueRun = useMemo(
+  const activeQueueRun = useMemo(
     () =>
-      (runsQuery.data?.runs ?? []).some(
-        (run) => isQueueRun(run) && run.status !== 'completed' && run.status !== 'failed',
-      ),
+      (runsQuery.data?.runs ?? []).find((run): run is BenchmarkQueueRun =>
+        isActiveQueueRun(run),
+      ) ?? null,
     [runsQuery.data?.runs],
   )
+  const hasActiveQueueRun = Boolean(activeQueueRun)
+
+  const stopMutation = useMutation({
+    mutationFn: (runId: string) =>
+      api.stopBenchmark(
+        {
+          runId,
+        },
+        normalizedTriggerToken || undefined,
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['benchmark-runs'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      queryClient.invalidateQueries({ queryKey: ['run-costs'] })
+      queryClient.invalidateQueries({ queryKey: ['under-the-hood'] })
+    },
+  })
 
   useEffect(() => {
     if (!hasManagedRunAccess || !hasActiveQueueRun) {
@@ -283,9 +391,16 @@ export default function Runs() {
 
   const canRun =
     !triggerMutation.isPending &&
+    !stopMutation.isPending &&
     hasManagedRunAccess &&
     effectiveModels.length > 0 &&
-    Boolean(ourTerms.trim())
+    Boolean(ourTerms.trim()) &&
+    (promptFilter !== 'tag' || Boolean(normalizedCohortTag))
+  const canStopActiveRun =
+    queueContractEnabled &&
+    hasManagedRunAccess &&
+    Boolean(activeQueueRun) &&
+    !stopMutation.isPending
 
   const runsErrorMessage = useMemo(() => {
     if (!runsQuery.isError) return ''
@@ -308,8 +423,40 @@ export default function Runs() {
     if (message.includes('Unexpected inputs provided') && message.includes('prompt_limit')) {
       return 'Prompt-limit workflow support is not deployed yet. Pull latest main and retry.'
     }
+    if (
+      message.includes('prompt_order') ||
+      message.includes('p_prompt_order') ||
+      (message.includes('enqueue_benchmark_run') && message.includes('function'))
+    ) {
+      return 'Prompt filter order is not deployed in Supabase yet. Apply latest migrations and retry.'
+    }
     return message
   }, [triggerMutation.isError, triggerMutation.error])
+  const stopErrorMessage = useMemo(() => {
+    if (!stopMutation.isError) return ''
+    const message = (stopMutation.error as Error).message || 'Unable to stop run.'
+    if (message === 'No active queue runs found.') {
+      return 'No active queue run found to stop.'
+    }
+    return message
+  }, [stopMutation.isError, stopMutation.error])
+
+  function handleStopActiveRun() {
+    if (!activeQueueRun || stopMutation.isPending) {
+      return
+    }
+    const label =
+      activeQueueRun.runMonth
+        ? `${activeQueueRun.runKind === 'cohort' ? 'Cohort' : 'Full'} ${activeQueueRun.runMonth}`
+        : shortRunId(activeQueueRun.id)
+    const confirmed = window.confirm(
+      `Stop ${label}? This will cancel queued/pending jobs for the run.`,
+    )
+    if (!confirmed) {
+      return
+    }
+    stopMutation.mutate(activeQueueRun.id)
+  }
 
   const inputStyle = {
     border: '1px solid #DDD0BC',
@@ -443,6 +590,23 @@ export default function Runs() {
               >
                 Refresh Runs
               </button>
+
+              {queueContractEnabled && (
+                <button
+                  type="button"
+                  onClick={handleStopActiveRun}
+                  disabled={!canStopActiveRun}
+                  className="w-full sm:w-auto px-4 py-2.5 sm:py-2 rounded-lg text-sm font-medium"
+                  style={{
+                    border: '1px solid #FCA5A5',
+                    color: canStopActiveRun ? '#991B1B' : '#D4A8A8',
+                    background: '#FFFFFF',
+                    cursor: canStopActiveRun ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  {stopMutation.isPending ? 'Stopping…' : 'Stop Run'}
+                </button>
+              )}
 
               <WebSearchToggle checked={webSearch} onChange={setWebSearch} />
 
@@ -652,6 +816,46 @@ export default function Runs() {
                       style={inputStyle}
                       placeholder={typeof totalPromptCount === 'number' ? `All (${totalPromptCount})` : 'All'}
                     />
+                    <div className="pt-1 space-y-2">
+                      <span className="text-xs font-medium" style={{ color: '#7A8E7C' }}>Filter</span>
+                      <select
+                        value={promptFilter}
+                        onChange={(event) =>
+                          setPromptFilter(event.target.value as 'all' | 'newest' | 'tag')
+                        }
+                        className="w-full px-3 py-2 rounded-lg text-sm"
+                        style={inputStyle}
+                      >
+                        <option value="all">All prompts</option>
+                        <option value="newest">Newest prompts</option>
+                        <option value="tag">Filter by tag</option>
+                      </select>
+                      {promptFilter === 'tag' && (
+                        <>
+                          <input
+                            value={cohortTag}
+                            onChange={(event) => setCohortTag(event.target.value)}
+                            className="w-full px-3 py-2 rounded-lg text-sm"
+                            style={inputStyle}
+                            placeholder="cohort:seo-v1"
+                            list="run-cohort-tags"
+                          />
+                          <datalist id="run-cohort-tags">
+                            {knownPromptTags.map((tag) => (
+                              <option key={tag} value={tag} />
+                            ))}
+                          </datalist>
+                          <span className="text-xs" style={{ color: '#9AAE9C' }}>
+                            Runs only prompts matching the selected tag.
+                          </span>
+                        </>
+                      )}
+                      {promptFilter === 'newest' && (
+                        <span className="text-xs" style={{ color: '#9AAE9C' }}>
+                          Newest runs use most recently created active prompts.
+                        </span>
+                      )}
+                    </div>
                     <span className="text-xs" style={{ color: '#9AAE9C' }}>
                       {promptScopeLabel}
                     </span>
@@ -675,6 +879,22 @@ export default function Runs() {
                 style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b' }}
               >
                 {triggerErrorMessage}
+              </div>
+            )}
+            {stopMutation.isSuccess && (
+              <div
+                className="rounded-lg px-3 py-2 text-sm"
+                style={{ background: '#ecfdf3', border: '1px solid #bbf7d0', color: '#166534' }}
+              >
+                {stopMutation.data.message}
+              </div>
+            )}
+            {stopMutation.isError && (
+              <div
+                className="rounded-lg px-3 py-2 text-sm"
+                style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b' }}
+              >
+                {stopErrorMessage}
               </div>
             )}
             {!hasManagedRunAccess && (
@@ -715,7 +935,9 @@ export default function Runs() {
                   >
                     {isWorkflowRun(activeRun)
                       ? `Run #${activeRun.runNumber} is in progress.`
-                      : `Run ${activeRun.models ?? shortRunId(activeRun.id)} is in progress${
+                      : `Run ${activeRun.models ?? shortRunId(activeRun.id)} (${activeRun.runKind ?? 'full'}${
+                          activeRun.cohortTag ? `:${activeRun.cohortTag}` : ''
+                        }) is in progress${
                           activeRun.progress
                             ? ` (${Math.round(activeRun.progress.completionPct)}% complete)`
                             : ''
@@ -832,7 +1054,9 @@ export default function Runs() {
                           {isWorkflowRun(run)
                             ? run.title
                             : run.runMonth
-                              ? `Run month ${run.runMonth}`
+                              ? `${run.runKind === 'cohort' ? 'Cohort' : 'Full'} · ${run.runMonth}${
+                                  run.cohortTag ? ` · ${run.cohortTag}` : ''
+                                }`
                               : shortRunId(run.id)}
                         </div>
                       </td>
@@ -955,7 +1179,9 @@ export default function Runs() {
                         {shortRunId(run.runId)}
                       </div>
                       <div className="text-xs" style={{ color: '#9AAE9C' }}>
-                        {run.runMonth ?? 'No month'}
+                        {(run.runKind === 'cohort' ? 'Cohort' : 'Full') +
+                          (run.runMonth ? ` · ${run.runMonth}` : ' · No month') +
+                          (run.cohortTag ? ` · ${run.cohortTag}` : '')}
                       </div>
                     </td>
                     <td className="px-5 py-3.5 text-sm" style={{ color: '#536654' }}>

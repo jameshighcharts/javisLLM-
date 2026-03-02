@@ -4,7 +4,8 @@
     "data visualization library",
     "React graph visualization library",
     "accessibility charting library",
-    "best charting library only give 1 answer"
+    "best charting library only give 1 answer",
+    "best javascript charting library for React"
   ],
   "queryTags": {
     "javascript charting libraries": [
@@ -21,6 +22,10 @@
     ],
     "best charting library only give 1 answer": [
       "general"
+    ],
+    "best javascript charting library for React": [
+      "react",
+      "javascript"
     ]
   },
   "competitors": [

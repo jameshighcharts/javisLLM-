@@ -4,11 +4,14 @@ import HighchartsReact from 'highcharts-react-official'
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
+import CitationRichOutput from '../components/CitationRichOutput'
+import CitationSourceLeaderboard from '../components/CitationSourceLeaderboard'
 import type {
   PromptDrilldownCompetitor,
   PromptDrilldownResponseItem,
   PromptDrilldownRunPoint,
 } from '../types'
+import { aggregateCitationSources } from '../utils/citationSources'
 import {
   calculateTokenCostUsd,
   formatUsd,
@@ -613,6 +616,13 @@ function ResponseExplorer({
             response.responseText,
             response.mentions.join(' '),
             response.citations.join(' '),
+            ...(response.citationRefs ?? []).flatMap((ref) => [
+              ref.title,
+              ref.host,
+              ref.url,
+              ref.snippet ?? '',
+              ref.anchorText ?? '',
+            ]),
             response.error ?? '',
             response.model,
             modelOwner,
@@ -846,10 +856,27 @@ function ResponseExplorer({
               )}
 
               <div
-                className="mt-3 rounded-lg px-3 py-3 text-sm whitespace-pre-wrap"
-                style={{ background: '#FDFCF8', border: '1px solid #F2EDE6', color: '#2A3A2C', lineHeight: 1.5 }}
+                className="mt-3"
               >
-                {output || 'No output text recorded.'}
+                {isExpanded ? (
+                  <CitationRichOutput
+                    text={response.responseText}
+                    citationRefs={response.citationRefs}
+                    citations={response.citations}
+                  />
+                ) : (
+                  <div
+                    className="rounded-lg px-3 py-3 text-sm whitespace-pre-wrap"
+                    style={{
+                      background: '#FDFCF8',
+                      border: '1px solid #F2EDE6',
+                      color: '#2A3A2C',
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {output || 'No output text recorded.'}
+                  </div>
+                )}
               </div>
 
               {response.responseText.length > 420 && (
@@ -894,42 +921,6 @@ function ResponseExplorer({
                 </div>
               </div>
 
-              {response.citations.length > 0 && (
-                <div className="mt-3 space-y-2">
-                  <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#9AAE9C' }}>
-                    Citations
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {response.citations.slice(0, 6).map((citation, index) => {
-                      const isLink = /^https?:\/\//i.test(citation)
-                      if (isLink) {
-                        return (
-                          <a
-                            key={`${response.id}-citation-${index}`}
-                            href={citation}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
-                            style={{ background: '#F2EDE6', color: '#3D5840', border: '1px solid #DDD0BC' }}
-                          >
-                            source {index + 1}
-                          </a>
-                        )
-                      }
-
-                      return (
-                        <span
-                          key={`${response.id}-citation-${index}`}
-                          className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
-                          style={{ background: '#F2EDE6', color: '#3D5840', border: '1px solid #DDD0BC' }}
-                        >
-                          {truncate(citation, 64)}
-                        </span>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
             </div>
           )
         })}
@@ -1058,6 +1049,18 @@ export default function PromptDrilldown() {
       avgCostPerResponseUsd: pricedResponseCount > 0 ? totalCostUsd / pricedResponseCount : 0,
     }
   }, [data])
+
+  const sourceStats = useMemo(
+    () =>
+      aggregateCitationSources(
+        (data?.responses ?? []).map((response) => ({
+          responseId: response.id,
+          citationRefs: response.citationRefs ?? [],
+          citations: response.citations ?? [],
+        })),
+      ),
+    [data?.responses],
+  )
 
   if (!query) {
     return (
@@ -1397,6 +1400,23 @@ export default function PromptDrilldown() {
           )}
         </div>
       </div>
+
+      {loading ? (
+        <div
+          className="rounded-xl border shadow-sm overflow-hidden"
+          style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
+        >
+          <div className="h-[220px] rounded-lg animate-pulse m-4" style={{ background: '#E5DDD0' }} />
+        </div>
+      ) : (
+        <CitationSourceLeaderboard
+          items={sourceStats}
+          title="Most Cited Sources"
+          subtitle="Aggregated across all stored responses for this prompt"
+          emptyText="No citations are stored for this prompt yet."
+          limit={12}
+        />
+      )}
 
       <div
         className="rounded-xl border shadow-sm"

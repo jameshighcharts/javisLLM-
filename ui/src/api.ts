@@ -1,9 +1,16 @@
 import { createClient } from '@supabase/supabase-js'
 import type {
   BenchmarkRunsResponse,
+  BenchmarkStopResponse,
   BenchmarkRunCostsResponse,
   BenchmarkTriggerResponse,
   BenchmarkConfig,
+  CitationRef,
+  CitationLinksResponse,
+  ContentGapItem,
+  ContentGapStatus,
+  PromptResearchCohort,
+  PromptResearchProgress,
   CompetitorBlogsResponse,
   ConfigResponse,
   DiagnosticsCheck,
@@ -22,6 +29,7 @@ import type {
   TimeSeriesResponse,
 } from './types'
 import { calculateTokenCostUsd, getResolvedModelPricing } from './utils/modelPricing'
+import { aggregateCitationSources } from './utils/citationSources'
 
 const BASE = '/api'
 const SUPABASE_PAGE_SIZE = 1000
@@ -33,14 +41,14 @@ const SUPABASE_ANON_KEY =
   (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ||
   (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined)
 
-const supabase =
+export const supabase =
   SUPABASE_URL && SUPABASE_ANON_KEY
     ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-        auth: {
-          persistSession: true,
-          autoRefreshToken: true,
-        },
-      })
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+      },
+    })
     : null
 
 type PromptQueryRow = {
@@ -67,6 +75,8 @@ type BenchmarkRunRow = {
   id: string
   run_month: string | null
   model: string | null
+  run_kind?: 'full' | 'cohort' | null
+  cohort_tag?: string | null
   web_search_enabled: boolean | null
   started_at: string | null
   ended_at: string | null
@@ -88,6 +98,8 @@ type BenchmarkResponseRow = {
   completion_tokens?: number | null
   total_tokens?: number | null
 }
+
+const COMPETITOR_CITATION_DOMAINS_SETTING_KEY = 'competitor_citation_domains'
 
 type RunCostResponseRow = {
   id: number
@@ -124,6 +136,8 @@ type MvRunSummaryRow = {
   run_id: string
   run_month: string | null
   model: string | null
+  run_kind?: 'full' | 'cohort' | null
+  cohort_tag?: string | null
   models?: string[] | string | null
   models_csv?: string | null
   model_owners?: string[] | string | null
@@ -404,55 +418,399 @@ function pickTimestamp(...values: Array<string | null | undefined>): string | nu
   return null
 }
 
-function normalizeCitations(citations: unknown): string[] {
-  const normalizeEntry = (entry: unknown): string | null => {
-    if (typeof entry === 'string') {
-      const trimmed = entry.trim()
-      return trimmed || null
+function normalizeCitationProvider(
+  value: unknown,
+  fallback: CitationRef['provider'] = 'openai',
+): CitationRef['provider'] {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase()
+  if (!normalized) return fallback
+  if (normalized.includes('anthropic') || normalized.includes('claude')) return 'anthropic'
+  if (normalized.includes('google') || normalized.includes('gemini')) return 'google'
+  if (normalized.includes('openai') || normalized.includes('chatgpt') || normalized.includes('gpt')) {
+    return 'openai'
+  }
+  return fallback
+}
+
+function normalizeCitationHost(url: string): string {
+  const trimmed = url.trim()
+  if (!trimmed) return ''
+  const fromUrl = (value: string): string => value.toLowerCase().replace(/^www\./, '')
+  try {
+    return fromUrl(new URL(trimmed).hostname)
+  } catch {
+    const host = trimmed
+      .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+      .split('/')[0]
+      .split('?')[0]
+      .split('#')[0]
+      .split('@')
+      .at(-1)
+      ?.split(':')[0]
+      ?.trim()
+    return host ? fromUrl(host) : ''
+  }
+}
+
+function normalizeCitationBound(value: unknown): number | null {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return null
+  const rounded = Math.round(parsed)
+  return rounded >= 0 ? rounded : null
+}
+
+function buildCitationRef(
+  candidate: unknown,
+  fallbackProvider: CitationRef['provider'],
+  sourceText = '',
+): Omit<CitationRef, 'id'> | null {
+  if (!candidate || typeof candidate !== 'object') return null
+  const entry = candidate as {
+    url?: unknown
+    uri?: unknown
+    href?: unknown
+    source?: unknown
+    link?: unknown
+    title?: unknown
+    snippet?: unknown
+    text?: unknown
+    excerpt?: unknown
+    start_index?: unknown
+    startIndex?: unknown
+    end_index?: unknown
+    endIndex?: unknown
+    anchorText?: unknown
+    anchor_text?: unknown
+    provider?: unknown
+  }
+  const urlValue = [entry.url, entry.uri, entry.href, entry.source, entry.link].find(
+    (value) => typeof value === 'string' && value.trim(),
+  )
+  if (typeof urlValue !== 'string') return null
+
+  const url = urlValue.trim()
+  const host = normalizeCitationHost(url)
+  const title =
+    typeof entry.title === 'string' && entry.title.trim() ? entry.title.trim() : host || url
+  const snippetValue = [entry.snippet, entry.text, entry.excerpt].find(
+    (value) => typeof value === 'string' && value.trim(),
+  )
+  const snippet = typeof snippetValue === 'string' ? snippetValue.trim() : undefined
+  const startIndex = normalizeCitationBound(entry.start_index ?? entry.startIndex)
+  const endIndex = normalizeCitationBound(entry.end_index ?? entry.endIndex)
+  let anchorText: string | null =
+    typeof entry.anchorText === 'string' && entry.anchorText.trim()
+      ? entry.anchorText.trim()
+      : typeof entry.anchor_text === 'string' && entry.anchor_text.trim()
+        ? entry.anchor_text.trim()
+        : null
+  if (
+    !anchorText &&
+    sourceText &&
+    startIndex !== null &&
+    endIndex !== null &&
+    endIndex > startIndex &&
+    endIndex <= sourceText.length
+  ) {
+    const sliced = sourceText.slice(startIndex, endIndex).trim()
+    if (sliced) {
+      anchorText = sliced
     }
-    if (typeof entry === 'object' && entry !== null) {
-      const candidate = entry as {
-        url?: unknown
-        href?: unknown
-        source?: unknown
-      }
-      for (const value of [candidate.url, candidate.href, candidate.source]) {
-        if (typeof value === 'string' && value.trim()) {
-          return value.trim()
-        }
-      }
-    }
-    return null
   }
 
-  if (Array.isArray(citations)) {
-    return citations
-      .map((entry) => normalizeEntry(entry))
-      .filter(Boolean)
-      .map((entry) => entry as string)
+  return {
+    url,
+    title,
+    host,
+    snippet,
+    startIndex,
+    endIndex,
+    anchorText,
+    provider: normalizeCitationProvider(entry.provider, fallbackProvider),
   }
+}
 
-  if (typeof citations === 'string') {
-    const trimmed = citations.trim()
-    if (!trimmed) return []
+function normalizeCitationRefs(
+  rawCitations: unknown,
+  fallbackProvider: CitationRef['provider'] = 'openai',
+): CitationRef[] {
+  const refs: CitationRef[] = []
+  const seen = new Set<string>()
+  let nextId = 1
 
-    if (trimmed.startsWith('[')) {
+  const parseStringValue = (value: string): unknown => {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
       try {
-        const parsed = JSON.parse(trimmed) as unknown
-        if (Array.isArray(parsed)) {
-          return parsed
-            .map((entry) => normalizeEntry(entry))
-            .filter(Boolean)
-            .map((entry) => entry as string)
-        }
+        return JSON.parse(trimmed) as unknown
       } catch {
-        return [trimmed]
+        return { url: trimmed }
       }
     }
-    return [trimmed]
+    return { url: trimmed }
   }
 
-  return []
+  const append = (candidate: unknown, sourceText = '') => {
+    if (typeof candidate === 'string') {
+      const parsed = parseStringValue(candidate)
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          append(item, sourceText)
+        }
+        return
+      }
+      candidate = parsed
+    }
+    if (Array.isArray(candidate)) {
+      for (const item of candidate) {
+        append(item, sourceText)
+      }
+      return
+    }
+    const normalized = buildCitationRef(candidate, fallbackProvider, sourceText)
+    if (!normalized) return
+    const dedupeKey = [
+      normalized.url,
+      normalized.startIndex ?? '',
+      normalized.endIndex ?? '',
+      normalized.title.toLowerCase(),
+      normalized.provider,
+    ].join('|')
+    if (seen.has(dedupeKey)) return
+    seen.add(dedupeKey)
+    refs.push({ id: `c${nextId++}`, ...normalized })
+  }
+
+  const walk = (value: unknown) => {
+    if (value === null || value === undefined) return
+    if (Array.isArray(value)) {
+      for (const item of value) append(item)
+      return
+    }
+    if (typeof value === 'string') {
+      const parsed = parseStringValue(value)
+      walk(parsed)
+      return
+    }
+    if (typeof value !== 'object') {
+      return
+    }
+    const payload = value as Record<string, unknown>
+
+    if (Array.isArray(payload.citationRefs)) {
+      for (const ref of payload.citationRefs) append(ref)
+    }
+    for (const key of ['citations', 'sources', 'references'] as const) {
+      const topLevel = payload[key]
+      if (Array.isArray(topLevel)) {
+        for (const candidate of topLevel) append(candidate)
+      }
+    }
+
+    const outputItems = Array.isArray(payload.output) ? payload.output : []
+    for (const outputItem of outputItems) {
+      if (!outputItem || typeof outputItem !== 'object') continue
+      const contentItems = Array.isArray((outputItem as { content?: unknown }).content)
+        ? ((outputItem as { content: unknown[] }).content ?? [])
+        : []
+      for (const content of contentItems) {
+        if (!content || typeof content !== 'object') continue
+        const sourceText =
+          typeof (content as { text?: unknown }).text === 'string'
+            ? ((content as { text: string }).text ?? '')
+            : ''
+        const contentCitations = (content as { citations?: unknown }).citations
+        if (Array.isArray(contentCitations)) {
+          for (const candidate of contentCitations) append(candidate, sourceText)
+        }
+        const annotations = (content as { annotations?: unknown }).annotations
+        if (!Array.isArray(annotations)) continue
+        for (const annotation of annotations) {
+          append(annotation, sourceText)
+          const nested = (annotation as { url_citation?: unknown }).url_citation
+          append(nested, sourceText)
+        }
+      }
+    }
+
+    const contentItems = Array.isArray(payload.content) ? payload.content : []
+    for (const content of contentItems) {
+      if (!content || typeof content !== 'object') continue
+      const sourceText =
+        typeof (content as { text?: unknown }).text === 'string'
+          ? ((content as { text: string }).text ?? '')
+          : ''
+      const contentCitations = (content as { citations?: unknown }).citations
+      if (Array.isArray(contentCitations)) {
+        for (const candidate of contentCitations) append(candidate, sourceText)
+      }
+    }
+
+    const candidates = Array.isArray(payload.candidates) ? payload.candidates : []
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== 'object') continue
+      const grounding = (candidate as { groundingMetadata?: unknown }).groundingMetadata
+      if (!grounding || typeof grounding !== 'object') continue
+      const chunks = Array.isArray((grounding as { groundingChunks?: unknown }).groundingChunks)
+        ? ((grounding as { groundingChunks: unknown[] }).groundingChunks ?? [])
+        : []
+      for (const chunk of chunks) {
+        if (!chunk || typeof chunk !== 'object') continue
+        append(chunk)
+        const webChunk = (chunk as { web?: unknown }).web
+        append(webChunk)
+      }
+      const citationSources = Array.isArray(
+        (grounding as { citationMetadata?: { citationSources?: unknown } }).citationMetadata
+          ?.citationSources,
+      )
+        ? (((grounding as { citationMetadata?: { citationSources?: unknown[] } }).citationMetadata
+          ?.citationSources as unknown[]) ?? [])
+        : []
+      for (const source of citationSources) append(source)
+    }
+
+    append(payload)
+  }
+
+  walk(rawCitations)
+
+  refs.sort((left, right) => {
+    const leftEnd =
+      left.endIndex === null || left.endIndex === undefined ? Number.POSITIVE_INFINITY : left.endIndex
+    const rightEnd =
+      right.endIndex === null || right.endIndex === undefined ? Number.POSITIVE_INFINITY : right.endIndex
+    if (leftEnd !== rightEnd) return leftEnd - rightEnd
+    return left.url.localeCompare(right.url)
+  })
+
+  return refs.map((ref, index) => ({
+    ...ref,
+    id: `c${index + 1}`,
+  }))
+}
+
+function normalizeCitations(
+  rawCitations: unknown,
+  fallbackProvider: CitationRef['provider'] = 'openai',
+): string[] {
+  const refs = normalizeCitationRefs(rawCitations, fallbackProvider)
+  const seen = new Set<string>()
+  const urls: string[] = []
+  for (const ref of refs) {
+    const url = String(ref.url ?? '').trim()
+    if (!url || seen.has(url)) continue
+    seen.add(url)
+    urls.push(url)
+  }
+  return urls
+}
+
+function normalizeDomainCandidate(value: unknown): string | null {
+  const host = normalizeCitationHost(String(value ?? ''))
+  return host || null
+}
+
+function normalizeCompetitorCitationDomains(raw: unknown): Record<string, string[]> {
+  if (!raw || typeof raw !== 'object') {
+    return {}
+  }
+  const input = raw as Record<string, unknown>
+  const output: Record<string, string[]> = {}
+  for (const [key, value] of Object.entries(input)) {
+    const slug = String(key).trim().toLowerCase()
+    if (!slug) continue
+    const candidates = Array.isArray(value) ? value : [value]
+    const normalized = [
+      ...new Set(
+        candidates
+          .map((candidate) => normalizeDomainCandidate(candidate))
+          .filter((candidate): candidate is string => Boolean(candidate)),
+      ),
+    ]
+    if (normalized.length > 0) {
+      output[slug] = normalized
+    }
+  }
+  return output
+}
+
+function defaultCompetitorCitationDomains(): Record<string, string[]> {
+  return { highcharts: ['highcharts.com'] }
+}
+
+function mergeCompetitorCitationDomains(
+  rawDomains: unknown,
+  fallback: Record<string, string[]> = defaultCompetitorCitationDomains(),
+): Record<string, string[]> {
+  const normalized = normalizeCompetitorCitationDomains(rawDomains)
+  const merged: Record<string, string[]> = { ...fallback }
+  for (const [slug, domains] of Object.entries(normalized)) {
+    merged[slug] = domains
+  }
+  return merged
+}
+
+function normalizePromptLabRunPayload(payload: PromptLabRunResponse): PromptLabRunResponse {
+  const normalizeResult = (result: PromptLabRunResponse['results'][number]) => {
+    const provider = normalizeCitationProvider(result.provider, 'openai')
+    const citationRefs = normalizeCitationRefs(
+      result.citationRefs && result.citationRefs.length > 0 ? result.citationRefs : result.citations,
+      provider,
+    )
+    const citations = normalizeCitations(citationRefs, provider)
+    return {
+      ...result,
+      effectiveQuery: result.effectiveQuery || payload.query,
+      citationRefs,
+      citations: citations.length > 0 ? citations : normalizeCitations(result.citations, provider),
+    }
+  }
+
+  const normalizedResults = Array.isArray(payload.results) ? payload.results.map(normalizeResult) : []
+  const primaryProvider = normalizeCitationProvider(payload.provider, 'openai')
+  const primaryRefs = normalizeCitationRefs(
+    payload.citationRefs && payload.citationRefs.length > 0 ? payload.citationRefs : payload.citations,
+    primaryProvider,
+  )
+  const primaryCitations = normalizeCitations(primaryRefs, primaryProvider)
+
+  return {
+    ...payload,
+    results: normalizedResults,
+    effectiveQuery: payload.effectiveQuery || payload.query,
+    citationRefs: primaryRefs,
+    citations:
+      primaryCitations.length > 0
+        ? primaryCitations
+        : normalizeCitations(payload.citations, primaryProvider),
+  }
+}
+
+function normalizePromptDrilldownPayload(
+  payload: PromptDrilldownResponse,
+): PromptDrilldownResponse {
+  return {
+    ...payload,
+    responses: (payload.responses ?? []).map((response) => {
+      const provider = normalizeCitationProvider(response.provider, 'openai')
+      const citationRefs = normalizeCitationRefs(
+        response.citationRefs && response.citationRefs.length > 0
+          ? response.citationRefs
+          : response.citations,
+        provider,
+      )
+      const citations = normalizeCitations(citationRefs, provider)
+      return {
+        ...response,
+        citationRefs,
+        citations: citations.length > 0 ? citations : normalizeCitations(response.citations, provider),
+      }
+    }),
+  }
 }
 
 function slugifyEntity(value: string): string {
@@ -1089,6 +1447,9 @@ async function fetchSupabaseConfigRows(): Promise<{
 }
 
 async function fetchConfigFromSupabase(): Promise<ConfigResponse> {
+  if (!supabase) {
+    throw new Error('Supabase is not configured.')
+  }
   const { promptRows, competitorRows } = await fetchSupabaseConfigRows()
 
   const queries = promptRows.map((row) => row.query_text)
@@ -1101,6 +1462,31 @@ async function fetchConfigFromSupabase(): Promise<ConfigResponse> {
   for (const row of competitorRows) {
     const aliasValues = (row.competitor_aliases ?? []).map((aliasRow) => aliasRow.alias)
     aliases[row.name] = uniqueNonEmpty([row.name, ...aliasValues])
+  }
+
+  let competitorCitationDomains = defaultCompetitorCitationDomains()
+  const appSettingsResult = await supabase
+    .from('app_settings')
+    .select('value_json')
+    .eq('key', COMPETITOR_CITATION_DOMAINS_SETTING_KEY)
+    .limit(1)
+  if (appSettingsResult.error) {
+    if (!isMissingRelation(appSettingsResult.error) && !isMissingColumn(appSettingsResult.error)) {
+      throw asError(
+        appSettingsResult.error,
+        `Failed to read app_settings.${COMPETITOR_CITATION_DOMAINS_SETTING_KEY}`,
+      )
+    }
+  } else {
+    const row = ((appSettingsResult.data ?? [])[0] ?? null) as {
+      value_json?: unknown
+    } | null
+    const valueJson = row?.value_json
+    const bySlug =
+      valueJson && typeof valueJson === 'object' && !Array.isArray(valueJson)
+        ? (valueJson as { by_competitor_slug?: unknown }).by_competitor_slug
+        : null
+    competitorCitationDomains = mergeCompetitorCitationDomains(bySlug)
   }
 
   const updatedAt = [
@@ -1117,9 +1503,10 @@ async function fetchConfigFromSupabase(): Promise<ConfigResponse> {
       queryTags,
       competitors,
       aliases,
+      competitorCitationDomains,
     },
     meta: {
-      path: 'supabase://public.prompt_queries+public.competitors+public.competitor_aliases',
+      path: 'supabase://public.prompt_queries+public.competitors+public.competitor_aliases+public.app_settings',
       updatedAt: updatedAt ?? new Date().toISOString(),
       queries: queries.length,
       competitors: competitors.length,
@@ -1347,6 +1734,35 @@ async function updateConfigInSupabase(config: BenchmarkConfig): Promise<ConfigRe
     }
   }
 
+  if (
+    Object.prototype.hasOwnProperty.call(config, 'competitorCitationDomains') &&
+    config.competitorCitationDomains !== undefined
+  ) {
+    const normalizedDomains = normalizeCompetitorCitationDomains(
+      config.competitorCitationDomains,
+    )
+    const upsertResult = await supabase.from('app_settings').upsert(
+      {
+        key: COMPETITOR_CITATION_DOMAINS_SETTING_KEY,
+        value_json: {
+          version: 1,
+          by_competitor_slug: normalizedDomains,
+        },
+      },
+      { onConflict: 'key' },
+    )
+    if (
+      upsertResult.error &&
+      !isMissingRelation(upsertResult.error) &&
+      !isMissingColumn(upsertResult.error)
+    ) {
+      throw asError(
+        upsertResult.error,
+        `Unable to save app_settings.${COMPETITOR_CITATION_DOMAINS_SETTING_KEY}`,
+      )
+    }
+  }
+
   return fetchConfigFromSupabase()
 }
 
@@ -1514,7 +1930,7 @@ async function fetchDashboardFromSupabase(
 
   const latestRunResult = await supabase
     .from('benchmark_runs')
-    .select('id,run_month,model,web_search_enabled,started_at,ended_at,overall_score,created_at')
+    .select('id,run_month,model,run_kind,cohort_tag,web_search_enabled,started_at,ended_at,overall_score,created_at')
     .order('created_at', { ascending: false })
     .limit(1)
 
@@ -1567,8 +1983,8 @@ async function fetchDashboardFromSupabase(
   const responses =
     selectedProviderSet.size > 0
       ? responseRows.filter((response) =>
-          responseMatchesProviderFilter(response, selectedProviderSet),
-        )
+        responseMatchesProviderFilter(response, selectedProviderSet),
+      )
       : responseRows
   const responseIds = responses.map((row) => row.id)
 
@@ -1721,17 +2137,17 @@ async function fetchDashboardFromSupabase(
     const highchartsRank =
       latestRunResponseCount > 0 && highchartsRateEntry
         ? (() => {
-            const sortedRates = competitorRatesAll
-              .slice()
-              .sort((left, right) => {
-                if (right.ratePct !== left.ratePct) {
-                  return right.ratePct - left.ratePct
-                }
-                return left.entity.localeCompare(right.entity)
-              })
-            const index = sortedRates.findIndex((entry) => entry.isHighcharts)
-            return index >= 0 ? index + 1 : null
-          })()
+          const sortedRates = competitorRatesAll
+            .slice()
+            .sort((left, right) => {
+              if (right.ratePct !== left.ratePct) {
+                return right.ratePct - left.ratePct
+              }
+              return left.entity.localeCompare(right.entity)
+            })
+          const index = sortedRates.findIndex((entry) => entry.isHighcharts)
+          return index >= 0 ? index + 1 : null
+        })()
         : null
 
     const viabilityCount = competitorRates.reduce((sum, entry) => sum + entry.mentions, 0)
@@ -1772,8 +2188,8 @@ async function fetchDashboardFromSupabase(
       estimatedAvgCostPerResponseUsd:
         promptCostTotals.pricedResponses > 0
           ? Number(
-              (promptCostTotals.totalCostUsd / promptCostTotals.pricedResponses).toFixed(6),
-            )
+            (promptCostTotals.totalCostUsd / promptCostTotals.pricedResponses).toFixed(6),
+          )
           : 0,
       competitorRates: competitorRatesAll.map((entry) => ({
         entity: entry.entity,
@@ -1903,7 +2319,7 @@ async function fetchUnderTheHoodFromSupabase(
   const runResult = await fetchAllSupabasePages<BenchmarkRunRow>((from, to) => {
     let query = supabase
       .from('benchmark_runs')
-      .select('id,run_month,model,web_search_enabled,started_at,ended_at,overall_score,created_at')
+      .select('id,run_month,model,run_kind,cohort_tag,web_search_enabled,started_at,ended_at,overall_score,created_at')
       .order('created_at', { ascending: false })
       .range(from, to)
 
@@ -2086,7 +2502,7 @@ async function fetchRunCostsFromSupabase(limit = 30): Promise<BenchmarkRunCostsR
   const clampedLimit = Math.max(1, Math.min(200, Math.round(limit)))
   const runResult = await supabase
     .from('benchmark_runs')
-    .select('id,run_month,created_at,started_at,ended_at,web_search_enabled')
+    .select('id,run_month,run_kind,cohort_tag,created_at,started_at,ended_at,web_search_enabled')
     .order('created_at', { ascending: false })
     .limit(clampedLimit)
 
@@ -2113,6 +2529,8 @@ async function fetchRunCostsFromSupabase(limit = 30): Promise<BenchmarkRunCostsR
   const runRows = (runResult.data ?? []) as Array<{
     id: string
     run_month: string | null
+    run_kind?: 'full' | 'cohort' | null
+    cohort_tag?: string | null
     created_at: string | null
     started_at: string | null
     ended_at: string | null
@@ -2235,6 +2653,8 @@ async function fetchRunCostsFromSupabase(limit = 30): Promise<BenchmarkRunCostsR
     return {
       runId: run.id,
       runMonth: run.run_month,
+      runKind: run.run_kind ?? 'full',
+      cohortTag: run.cohort_tag ?? null,
       createdAt: run.created_at,
       startedAt: run.started_at,
       endedAt: run.ended_at,
@@ -2546,9 +2966,9 @@ async function fetchTimeseriesFromSupabase(
       // is active we must use the derived value from filtered mentions.
       const storedAiVisibility =
         selectedTagSet.size === 0 &&
-        selectedProviderSet.size === 0 &&
-        typeof run.overall_score === 'number' &&
-        Number.isFinite(run.overall_score)
+          selectedProviderSet.size === 0 &&
+          typeof run.overall_score === 'number' &&
+          Number.isFinite(run.overall_score)
           ? run.overall_score
           : null
 
@@ -3236,13 +3656,13 @@ async function fetchPromptDrilldownFromSupabase(
   const topCompetitor =
     totalResponses > 0
       ? rivalStats
-          .slice()
-          .sort((left, right) => right.mentionRatePct - left.mentionRatePct)
-          .map((entry) => ({
-            entity: entry.entity,
-            ratePct: Number(entry.mentionRatePct.toFixed(2)),
-          }))
-          .at(0) ?? null
+        .slice()
+        .sort((left, right) => right.mentionRatePct - left.mentionRatePct)
+        .map((entry) => ({
+          entity: entry.entity,
+          ratePct: Number(entry.mentionRatePct.toFixed(2)),
+        }))
+        .at(0) ?? null
       : null
 
   const highchartsRatePct =
@@ -3350,6 +3770,12 @@ async function fetchPromptDrilldownFromSupabase(
       .map((id) => competitorById.get(id)?.name)
       .filter((name): name is string => Boolean(name))
       .sort((left, right) => left.localeCompare(right))
+    const citationProvider = normalizeCitationProvider(
+      response.provider ?? response.model_owner ?? response.model,
+      'openai',
+    )
+    const citationRefs = normalizeCitationRefs(response.citations, citationProvider)
+    const citations = normalizeCitations(citationRefs, citationProvider)
 
     return {
       id: response.id,
@@ -3369,10 +3795,14 @@ async function fetchPromptDrilldownFromSupabase(
       totalTokens: Math.max(
         0,
         Math.round(Number(response.total_tokens ?? 0)) ||
-          Math.round(Number(response.prompt_tokens ?? 0) + Number(response.completion_tokens ?? 0)),
+        Math.round(Number(response.prompt_tokens ?? 0) + Number(response.completion_tokens ?? 0)),
       ),
       responseText: response.response_text ?? '',
-      citations: normalizeCitations(response.citations),
+      citationRefs,
+      citations:
+        citations.length > 0
+          ? citations
+          : normalizeCitations(response.citations, citationProvider),
       mentions,
     }
   })
@@ -3449,7 +3879,7 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
   const recentRunsResult = await supabase
     .from('mv_run_summary')
     .select(
-      'run_id,run_month,model,models,models_csv,model_owners,model_owners_csv,model_owner_map,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,query_count,competitor_count,input_tokens,output_tokens,total_tokens,total_duration_ms,avg_duration_ms',
+      'run_id,run_month,model,run_kind,cohort_tag,models,models_csv,model_owners,model_owners_csv,model_owner_map,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,query_count,competitor_count,input_tokens,output_tokens,total_tokens,total_duration_ms,avg_duration_ms',
     )
     .order('created_at', { ascending: false })
     .limit(DASHBOARD_RECENT_RUN_SCAN_LIMIT)
@@ -3612,17 +4042,17 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
     const highchartsRank =
       latestRunResponseCount > 0 && highchartsRateEntry
         ? (() => {
-            const sortedRates = competitorRatesAll
-              .slice()
-              .sort((left, right) => {
-                if (right.ratePct !== left.ratePct) {
-                  return right.ratePct - left.ratePct
-                }
-                return left.entity.localeCompare(right.entity)
-              })
-            const index = sortedRates.findIndex((entry) => entry.isHighcharts)
-            return index >= 0 ? index + 1 : null
-          })()
+          const sortedRates = competitorRatesAll
+            .slice()
+            .sort((left, right) => {
+              if (right.ratePct !== left.ratePct) {
+                return right.ratePct - left.ratePct
+              }
+              return left.entity.localeCompare(right.entity)
+            })
+          const index = sortedRates.findIndex((entry) => entry.isHighcharts)
+          return index >= 0 ? index + 1 : null
+        })()
         : null
 
     const viabilityCount = competitorRates.reduce((sum, entry) => sum + entry.mentions, 0)
@@ -3688,17 +4118,17 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
     modelSummary.tokenTotals.totalTokens > 0
       ? modelSummary.tokenTotals
       : {
-          inputTokens: Math.max(0, Math.round(toFiniteNumber(latestRun.input_tokens))),
-          outputTokens: Math.max(0, Math.round(toFiniteNumber(latestRun.output_tokens))),
-          totalTokens: Math.max(0, Math.round(toFiniteNumber(latestRun.total_tokens))),
-        }
+        inputTokens: Math.max(0, Math.round(toFiniteNumber(latestRun.input_tokens))),
+        outputTokens: Math.max(0, Math.round(toFiniteNumber(latestRun.output_tokens))),
+        totalTokens: Math.max(0, Math.round(toFiniteNumber(latestRun.total_tokens))),
+      }
   const summaryDurationTotals =
     modelSummary.durationTotals.totalDurationMs > 0
       ? modelSummary.durationTotals
       : {
-          totalDurationMs: Math.max(0, Math.round(toFiniteNumber(latestRun.total_duration_ms))),
-          avgDurationMs: roundTo(toFiniteNumber(latestRun.avg_duration_ms), 2),
-        }
+        totalDurationMs: Math.max(0, Math.round(toFiniteNumber(latestRun.total_duration_ms))),
+        avgDurationMs: roundTo(toFiniteNumber(latestRun.avg_duration_ms), 2),
+      }
 
   const kpi: KpiRow = {
     metric_name: 'AI Visibility Overall',
@@ -3767,7 +4197,7 @@ async function fetchUnderTheHoodFromSupabaseViews(
     let query = supabase
       .from('mv_run_summary')
       .select(
-        'run_id,run_month,model,models,models_csv,model_owners,model_owners_csv,model_owner_map,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,query_count,competitor_count,input_tokens,output_tokens,total_tokens,total_duration_ms,avg_duration_ms',
+        'run_id,run_month,model,run_kind,cohort_tag,models,models_csv,model_owners,model_owners_csv,model_owner_map,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,query_count,competitor_count,input_tokens,output_tokens,total_tokens,total_duration_ms,avg_duration_ms',
       )
       .order('created_at', { ascending: false })
       .range(from, to)
@@ -3887,8 +4317,8 @@ async function fetchUnderTheHoodFromSupabaseViews(
         modelSummary.modelOwners.length > 0
           ? modelSummary.modelOwners
           : [...new Set(Object.values(aggregatedModelOwnerMap))].sort((a, b) =>
-              a.localeCompare(b),
-            ),
+            a.localeCompare(b),
+          ),
       modelOwnerMap: aggregatedModelOwnerMap,
       modelOwnerStats: modelSummary.modelOwnerStats,
       modelStats: modelSummary.modelStats,
@@ -3896,20 +4326,20 @@ async function fetchUnderTheHoodFromSupabaseViews(
         modelSummary.tokenTotals.totalTokens > 0
           ? modelSummary.tokenTotals
           : {
-              inputTokens: totalsFromRuns.inputTokens,
-              outputTokens: totalsFromRuns.outputTokens,
-              totalTokens: totalsFromRuns.totalTokens,
-            },
+            inputTokens: totalsFromRuns.inputTokens,
+            outputTokens: totalsFromRuns.outputTokens,
+            totalTokens: totalsFromRuns.totalTokens,
+          },
       durationTotals:
         modelSummary.durationTotals.totalDurationMs > 0
           ? modelSummary.durationTotals
           : {
-              totalDurationMs: totalsFromRuns.totalDurationMs,
-              avgDurationMs:
-                totalsFromRuns.responses > 0
-                  ? roundTo(totalsFromRuns.totalDurationMs / totalsFromRuns.responses, 2)
-                  : 0,
-            },
+            totalDurationMs: totalsFromRuns.totalDurationMs,
+            avgDurationMs:
+              totalsFromRuns.responses > 0
+                ? roundTo(totalsFromRuns.totalDurationMs / totalsFromRuns.responses, 2)
+                : 0,
+          },
       runMonth: latestRun.run_month,
       webSearchEnabled,
       windowStartUtc: runTimestamps[0] ?? null,
@@ -3929,7 +4359,7 @@ async function fetchRunCostsFromSupabaseViews(
   const runResult = await supabase
     .from('mv_run_summary')
     .select(
-      'run_id,run_month,model,models,models_csv,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,input_tokens,output_tokens,total_tokens',
+      'run_id,run_month,model,run_kind,cohort_tag,models,models_csv,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,input_tokens,output_tokens,total_tokens',
     )
     .order('created_at', { ascending: false })
     .limit(clampedLimit)
@@ -3988,8 +4418,8 @@ async function fetchRunCostsFromSupabaseViews(
       resolveRunModels(run).length > 0
         ? resolveRunModels(run)
         : [...new Set(rowsForRun.map((row) => row.model).filter(Boolean))].sort((a, b) =>
-            a.localeCompare(b),
-          )
+          a.localeCompare(b),
+        )
 
     let estimatedInputCostUsd = 0
     let estimatedOutputCostUsd = 0
@@ -4020,6 +4450,8 @@ async function fetchRunCostsFromSupabaseViews(
     return {
       runId: run.run_id,
       runMonth: run.run_month,
+      runKind: run.run_kind ?? 'full',
+      cohortTag: run.cohort_tag ?? null,
       createdAt: run.created_at,
       startedAt: run.started_at,
       endedAt: run.ended_at,
@@ -4140,7 +4572,7 @@ async function fetchTimeseriesFromSupabaseViews(
 
   const runResult = await supabase
     .from('mv_run_summary')
-    .select('run_id,run_month,created_at,overall_score')
+    .select('run_id,run_month,run_kind,cohort_tag,created_at,overall_score')
     .order('created_at', { ascending: true })
     .limit(500)
 
@@ -4204,7 +4636,7 @@ async function fetchTimeseriesFromSupabaseViews(
     bucket.mentionsByCompetitor.set(
       row.competitor_id,
       (bucket.mentionsByCompetitor.get(row.competitor_id) ?? 0) +
-        Math.max(0, Math.round(toFiniteNumber(row.mentions_count))),
+      Math.max(0, Math.round(toFiniteNumber(row.mentions_count))),
     )
     runBuckets.set(row.run_id, bucket)
   }
@@ -4635,6 +5067,182 @@ async function diagnosticsViaApi(): Promise<DiagnosticsResponse> {
   }
 }
 
+function mapGapItem(row: Record<string, unknown>): ContentGapItem {
+  const evidenceCitations = Array.isArray(row.evidence_citations)
+    ? row.evidence_citations
+    : []
+  const briefChecklist = Array.isArray(row.brief_checklist)
+    ? row.brief_checklist.map((item) => String(item ?? '').trim()).filter(Boolean)
+    : []
+  const briefCitations = Array.isArray(row.brief_citations)
+    ? row.brief_citations.reduce<ContentGapItem['briefCitations']>((acc, item) => {
+      if (!item || typeof item !== 'object') return acc
+      const asRecord = item as Record<string, unknown>
+      const url = String(asRecord.url ?? asRecord.link ?? asRecord.href ?? '').trim()
+      if (!url) return acc
+      const title = String(asRecord.title ?? '').trim()
+      const note = String(asRecord.note ?? '').trim()
+      const citation: ContentGapItem['briefCitations'][number] = { url }
+      if (title) citation.title = title
+      if (note) citation.note = note
+      acc.push(citation)
+      return acc
+    }, [])
+    : []
+
+  const status = String(row.status ?? 'backlog').trim() as ContentGapStatus
+
+  return {
+    id: String(row.id ?? ''),
+    topicKey: String(row.topic_key ?? ''),
+    topicLabel: String(row.topic_label ?? ''),
+    promptQueryId: row.prompt_query_id ? String(row.prompt_query_id) : null,
+    cohortTag: row.cohort_tag ? String(row.cohort_tag) : null,
+    mentionDeficitScore: toFiniteNumber(row.mention_deficit_score),
+    competitorCoverageScore: toFiniteNumber(row.competitor_coverage_score),
+    compositeScore: toFiniteNumber(row.composite_score),
+    evidenceCount: Math.max(0, Math.round(toFiniteNumber(row.evidence_count))),
+    evidenceCitations: evidenceCitations as ContentGapItem['evidenceCitations'],
+    status,
+    linkedPageUrl: row.linked_page_url ? String(row.linked_page_url) : null,
+    briefMarkdown: row.brief_markdown ? String(row.brief_markdown) : null,
+    briefChecklist,
+    briefCitations,
+    briefModel: row.brief_model ? String(row.brief_model) : null,
+    briefGeneratedAt: row.brief_generated_at ? String(row.brief_generated_at) : null,
+    createdAt: String(row.created_at ?? ''),
+    updatedAt: String(row.updated_at ?? ''),
+  }
+}
+
+function mapPromptResearchCohort(row: Record<string, unknown>): PromptResearchCohort {
+  return {
+    id: String(row.id ?? ''),
+    tag: String(row.tag ?? ''),
+    displayName: String(row.display_name ?? row.displayName ?? ''),
+    baselineRunId: String(row.baseline_run_id ?? row.baselineRunId ?? ''),
+    baselineLockedAt: String(row.baseline_locked_at ?? row.baselineLockedAt ?? ''),
+    targetPp: toFiniteNumber(row.target_pp ?? row.targetPp, 5),
+    targetWeeks: Math.max(1, Math.round(toFiniteNumber(row.target_weeks ?? row.targetWeeks, 8))),
+    isActive: Boolean(row.is_active ?? row.isActive ?? true),
+    createdAt: String(row.created_at ?? row.createdAt ?? ''),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? ''),
+  }
+}
+
+type CitationLinksResponseRow = {
+  id: number
+  run_id: string
+  model: string
+  provider?: string | null
+  model_owner?: string | null
+  web_search_enabled: boolean
+  citations: unknown
+}
+
+async function fetchCitationLinksFromSupabase(options: {
+  runId?: string
+  providers?: string[]
+} = {}): Promise<CitationLinksResponse> {
+  if (!supabase) {
+    throw new Error('Supabase is not configured.')
+  }
+
+  const runsResult = await supabase
+    .from('benchmark_runs')
+    .select('id,run_month,web_search_enabled,created_at')
+    .order('created_at', { ascending: false })
+    .limit(20)
+
+  if (runsResult.error) {
+    throw asError(runsResult.error, 'Failed to load benchmark_runs for citation links')
+  }
+
+  const runsRaw = (runsResult.data ?? []) as Array<{
+    id: string
+    run_month: string | null
+    web_search_enabled: boolean | null
+    created_at: string | null
+  }>
+
+  const availableRuns = runsRaw.map((r) => ({
+    id: r.id,
+    runMonth: r.run_month,
+    createdAt: r.created_at,
+    webSearchEnabled: r.web_search_enabled,
+  }))
+
+  const targetRunId = options.runId ?? availableRuns[0]?.id ?? null
+
+  if (!targetRunId) {
+    return {
+      generatedAt: new Date().toISOString(),
+      runId: null,
+      runMonth: null,
+      availableRuns,
+      totalResponses: 0,
+      responsesWithCitations: 0,
+      totalCitations: 0,
+      uniqueSources: 0,
+      sources: [],
+    }
+  }
+
+  const targetRun = availableRuns.find((r) => r.id === targetRunId) ?? null
+
+  const responseRows: CitationLinksResponseRow[] = []
+  let offset = 0
+  while (true) {
+    const result = await supabase
+      .from('benchmark_responses')
+      .select('id,run_id,model,provider,model_owner,web_search_enabled,citations')
+      .eq('run_id', targetRunId)
+      .range(offset, offset + SUPABASE_PAGE_SIZE - 1)
+
+    if (result.error) {
+      if (isMissingRelation(result.error)) break
+      throw asError(result.error, 'Failed to load benchmark_responses for citation links')
+    }
+
+    const page = (result.data ?? []) as CitationLinksResponseRow[]
+    if (page.length === 0) break
+    responseRows.push(...page)
+    offset += page.length
+    if (page.length < SUPABASE_PAGE_SIZE) break
+  }
+
+  const selectedProviderSet = new Set(normalizeSelectedProviders(options.providers ?? []))
+  const filteredRows =
+    selectedProviderSet.size > 0
+      ? responseRows.filter((row) => responseMatchesProviderFilter(row, selectedProviderSet))
+      : responseRows
+
+  const parsed = filteredRows.map((row) => {
+    const provider = normalizeCitationProvider(
+      String(row.provider || row.model_owner || row.model || ''),
+      'openai',
+    )
+    const citationRefs = normalizeCitationRefs(row.citations, provider)
+    return { responseId: String(row.id), citationRefs }
+  })
+
+  const sources = aggregateCitationSources(parsed)
+  const responsesWithCitations = parsed.filter((p) => p.citationRefs.length > 0).length
+  const totalCitations = sources.reduce((sum, s) => sum + s.citationCount, 0)
+
+  return {
+    generatedAt: new Date().toISOString(),
+    runId: targetRunId,
+    runMonth: targetRun?.runMonth ?? null,
+    availableRuns,
+    totalResponses: filteredRows.length,
+    responsesWithCitations,
+    totalCitations,
+    uniqueSources: sources.length,
+    sources,
+  }
+}
+
 export const api = {
   async health() {
     if (hasSupabaseConfig()) {
@@ -4703,10 +5311,25 @@ export const api = {
       ourTerms: string
       runMonth?: string
       promptLimit?: number
+      promptOrder?: 'default' | 'newest'
+      cohortTag?: string
     },
     triggerToken?: string,
   ) {
     return json<BenchmarkTriggerResponse>('/benchmark/trigger', {
+      method: 'POST',
+      headers: withOptionalTriggerToken(triggerToken),
+      body: JSON.stringify(data),
+    })
+  },
+
+  async stopBenchmark(
+    data: {
+      runId?: string
+    },
+    triggerToken?: string,
+  ) {
+    return json<BenchmarkStopResponse>('/benchmark/stop', {
       method: 'POST',
       headers: withOptionalTriggerToken(triggerToken),
       body: JSON.stringify(data),
@@ -4720,22 +5343,28 @@ export const api = {
       models?: string[]
       selectAllModels?: boolean
       webSearch?: boolean
+      searchContext?: {
+        enabled?: boolean
+        location?: string
+        language?: string
+      }
     },
     triggerToken?: string,
   ): Promise<PromptLabRunResponse> {
-    return json<PromptLabRunResponse>('/prompt-lab/run', {
+    const payload = await json<PromptLabRunResponse>('/prompt-lab/run', {
       method: 'POST',
       headers: withOptionalTriggerToken(triggerToken),
       body: JSON.stringify(data),
     })
+    return normalizePromptLabRunPayload(payload)
   },
 
   async dashboard(optionsOrContext?: DashboardOptions | unknown) {
     const options =
       optionsOrContext &&
-      typeof optionsOrContext === 'object' &&
-      !Array.isArray(optionsOrContext) &&
-      !('queryKey' in optionsOrContext)
+        typeof optionsOrContext === 'object' &&
+        !Array.isArray(optionsOrContext) &&
+        !('queryKey' in optionsOrContext)
         ? (optionsOrContext as DashboardOptions)
         : {}
     const normalizedProviders = normalizeSelectedProviders(options.providers)
@@ -4877,6 +5506,147 @@ export const api = {
     }
   },
 
+  async researchCompetitorRun(
+    data: { model?: string; maxItemsPerCompetitor?: number } = {},
+    triggerToken?: string,
+  ): Promise<{
+    ok: boolean
+    runId: string
+    competitorsProcessed: number
+    itemsUpserted: number
+    model: string
+    maxItemsPerCompetitor: number
+  }> {
+    return json('/research/competitors/run', {
+      method: 'POST',
+      headers: withOptionalTriggerToken(triggerToken),
+      body: JSON.stringify(data),
+    })
+  },
+
+  async researchSitemapSync(
+    data: { maxUrls?: number } = {},
+    triggerToken?: string,
+  ): Promise<{
+    ok: boolean
+    runId: string
+    sitemapRoots: number
+    sitemapsVisited: number
+    pagesDiscovered: number
+    pagesUpserted: number
+    sitemapFetchErrors: number
+    pageErrors: number
+    maxUrls: number
+  }> {
+    return json('/research/sitemap/sync', {
+      method: 'POST',
+      headers: withOptionalTriggerToken(triggerToken),
+      body: JSON.stringify(data),
+    })
+  },
+
+  async researchGapsRefresh(triggerToken?: string): Promise<{
+    ok: boolean
+    runId: string
+    promptsConsidered: number
+    actionableGapCount: number
+    gapsUpserted: number
+    evidencePoolSize: number
+  }> {
+    return json('/research/gaps/refresh', {
+      method: 'POST',
+      headers: withOptionalTriggerToken(triggerToken),
+      body: JSON.stringify({}),
+    })
+  },
+
+  async researchGenerateBrief(
+    data: { gapId: string; model?: string },
+    triggerToken?: string,
+  ): Promise<{
+    ok: boolean
+    runId: string
+    gap: Record<string, unknown>
+    gapId: string
+    sectionCount: number
+    checklistCount: number
+    citationCount: number
+    model: string
+  }> {
+    return json('/research/briefs/generate', {
+      method: 'POST',
+      headers: withOptionalTriggerToken(triggerToken),
+      body: JSON.stringify(data),
+    })
+  },
+
+  async researchUpdateGapStatus(
+    id: string,
+    data: { status: ContentGapStatus; linkedPageUrl?: string },
+    triggerToken?: string,
+  ): Promise<ContentGapItem> {
+    const payload = await json<{ ok: boolean; gap: Record<string, unknown> }>(
+      `/research/gaps/${encodeURIComponent(id)}/status`,
+      {
+        method: 'PATCH',
+        headers: withOptionalTriggerToken(triggerToken),
+        body: JSON.stringify(data),
+      },
+    )
+    return mapGapItem(payload.gap)
+  },
+
+  async researchGaps(options: {
+    status?: ContentGapStatus
+    tag?: string
+    limit?: number
+  } = {}): Promise<ContentGapItem[]> {
+    const params = new URLSearchParams()
+    if (options.status) params.set('status', options.status)
+    if (options.tag) params.set('tag', options.tag)
+    if (typeof options.limit === 'number') params.set('limit', String(options.limit))
+    const suffix = params.size > 0 ? `?${params.toString()}` : ''
+    const payload = await json<{ ok: boolean; gaps: Array<Record<string, unknown>> }>(
+      `/research/gaps${suffix}`,
+    )
+    return (payload.gaps ?? []).map(mapGapItem)
+  },
+
+  async createPromptResearchCohort(
+    data: {
+      tag: string
+      displayName?: string
+      baselineRunId?: string
+      targetPp?: number
+      targetWeeks?: number
+    },
+    triggerToken?: string,
+  ): Promise<PromptResearchCohort> {
+    const payload = await json<{ ok: boolean; cohort: Record<string, unknown> }>(
+      '/research/prompt-cohorts',
+      {
+        method: 'POST',
+        headers: withOptionalTriggerToken(triggerToken),
+        body: JSON.stringify(data),
+      },
+    )
+    return mapPromptResearchCohort(payload.cohort)
+  },
+
+  async promptResearchCohorts(): Promise<PromptResearchCohort[]> {
+    const payload = await json<{ ok: boolean; cohorts: Array<Record<string, unknown>> }>(
+      '/research/prompt-cohorts',
+    )
+    return (payload.cohorts ?? []).map(mapPromptResearchCohort)
+  },
+
+  async promptResearchProgress(id: string): Promise<PromptResearchProgress> {
+    const payload = await json<PromptResearchProgress>(
+      `/research/prompt-cohorts/${encodeURIComponent(id)}/progress`,
+    )
+    return payload
+  },
+
   async promptDrilldown(query: string): Promise<PromptDrilldownResponse> {
     const trimmedQuery = query.trim()
     if (!trimmedQuery) {
@@ -4885,11 +5655,14 @@ export const api = {
 
     if (hasSupabaseConfig()) {
       try {
-        return await fetchPromptDrilldownFromSupabase(trimmedQuery)
+        return normalizePromptDrilldownPayload(await fetchPromptDrilldownFromSupabase(trimmedQuery))
       } catch (primaryError) {
         try {
           const encoded = encodeURIComponent(trimmedQuery)
-          return await json<PromptDrilldownResponse>(`/prompts/drilldown?query=${encoded}`)
+          const payload = await json<PromptDrilldownResponse>(
+            `/prompts/drilldown?query=${encoded}`,
+          )
+          return normalizePromptDrilldownPayload(payload)
         } catch {
           throw asError(primaryError, 'Supabase prompt drilldown query failed')
         }
@@ -4897,7 +5670,9 @@ export const api = {
     }
 
     const encoded = encodeURIComponent(trimmedQuery)
-    return json<PromptDrilldownResponse>(`/prompts/drilldown?query=${encoded}`)
+    return normalizePromptDrilldownPayload(
+      await json<PromptDrilldownResponse>(`/prompts/drilldown?query=${encoded}`),
+    )
   },
 
   async updateConfig(data: BenchmarkConfig) {
@@ -4920,5 +5695,19 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(data),
     })
+  },
+
+  async createBillingPortalSession(email: string, returnUrl?: string): Promise<{ url: string }> {
+    return json<{ url: string }>('/billing/create-portal-session', {
+      method: 'POST',
+      body: JSON.stringify({ email, returnUrl }),
+    })
+  },
+
+  async citationLinks(options: { runId?: string; providers?: string[] } = {}): Promise<CitationLinksResponse> {
+    if (hasSupabaseConfig()) {
+      return fetchCitationLinksFromSupabase(options)
+    }
+    throw new Error('Citation links require a Supabase connection.')
   },
 }

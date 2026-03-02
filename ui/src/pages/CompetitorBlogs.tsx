@@ -1,9 +1,9 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import Highcharts from 'highcharts'
 import HighchartsReact from 'highcharts-react-official'
 import { useMemo, useState } from 'react'
 import { api } from '../api'
-import type { CompetitorBlogPost } from '../types'
+import type { CompetitorBlogPost, ContentGapStatus } from '../types'
 
 // One muted accent per competitor
 const ACCENTS = [
@@ -16,6 +16,19 @@ const ACCENTS = [
   '#7A3A4A',
   '#3A6A6A',
 ]
+
+const TRIGGER_TOKEN_STORAGE_KEY = 'benchmark_trigger_token'
+
+function canUseSessionStorage(): boolean {
+  return typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined'
+}
+
+function readStoredTriggerToken(): string {
+  if (!canUseSessionStorage()) {
+    return ''
+  }
+  return window.sessionStorage.getItem(TRIGGER_TOKEN_STORAGE_KEY)?.trim() ?? ''
+}
 
 // ── Data utilities ─────────────────────────────────────────────────────────
 
@@ -387,12 +400,70 @@ function LoadingSkeleton() {
 // ── Page ───────────────────────────────────────────────────────────────────
 
 export default function CompetitorBlogs() {
+  const queryClient = useQueryClient()
   const [selectedTypes, setSelectedTypes] = useState<string[]>([])
+  const [gapStatusFilter, setGapStatusFilter] = useState<'all' | ContentGapStatus>('all')
+  const [actionNotice, setActionNotice] = useState('')
+  const triggerToken = readStoredTriggerToken()
+  const hasWriteToken = Boolean(triggerToken)
 
   const blogsQuery = useQuery({
     queryKey: ['competitor-blogs'],
     queryFn: () => api.competitorBlogs(600),
     staleTime: 120_000,
+  })
+  const gapsQuery = useQuery({
+    queryKey: ['research-gaps', gapStatusFilter],
+    queryFn: () =>
+      api.researchGaps({
+        status: gapStatusFilter === 'all' ? undefined : gapStatusFilter,
+        limit: 120,
+      }),
+    staleTime: 30_000,
+    retry: false,
+  })
+
+  const competitorRunMutation = useMutation({
+    mutationFn: () => api.researchCompetitorRun({}, triggerToken || undefined),
+    onSuccess: async (result) => {
+      setActionNotice(`Competitor research completed (${result.itemsUpserted} items).`)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['competitor-blogs'] }),
+        queryClient.invalidateQueries({ queryKey: ['research-gaps'] }),
+      ])
+    },
+  })
+  const sitemapSyncMutation = useMutation({
+    mutationFn: () => api.researchSitemapSync({}, triggerToken || undefined),
+    onSuccess: async (result) => {
+      setActionNotice(`Sitemap sync completed (${result.pagesUpserted} pages upserted).`)
+      await queryClient.invalidateQueries({ queryKey: ['research-gaps'] })
+    },
+  })
+  const gapRefreshMutation = useMutation({
+    mutationFn: () => api.researchGapsRefresh(triggerToken || undefined),
+    onSuccess: async (result) => {
+      setActionNotice(`Gap refresh completed (${result.actionableGapCount} actionable gaps).`)
+      await queryClient.invalidateQueries({ queryKey: ['research-gaps'] })
+    },
+  })
+  const gapStatusMutation = useMutation({
+    mutationFn: (payload: { id: string; status: ContentGapStatus; linkedPageUrl?: string }) =>
+      api.researchUpdateGapStatus(
+        payload.id,
+        { status: payload.status, linkedPageUrl: payload.linkedPageUrl },
+        triggerToken || undefined,
+      ),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['research-gaps'] })
+    },
+  })
+  const briefMutation = useMutation({
+    mutationFn: (gapId: string) => api.researchGenerateBrief({ gapId }, triggerToken || undefined),
+    onSuccess: async () => {
+      setActionNotice('Brief generated successfully.')
+      await queryClient.invalidateQueries({ queryKey: ['research-gaps'] })
+    },
   })
 
   const data = blogsQuery.data
@@ -439,6 +510,15 @@ export default function CompetitorBlogs() {
     }
     return [...unique].sort().slice(-8)
   }, [normalizedPosts])
+
+  const gapRows = gapsQuery.data ?? []
+  const gapStatusOptions: ContentGapStatus[] = [
+    'backlog',
+    'in_progress',
+    'published',
+    'verify',
+    'closed',
+  ]
 
   const toggleType = (type: string) =>
     setSelectedTypes((curr) =>
@@ -521,6 +601,239 @@ export default function CompetitorBlogs() {
             ))}
           </div>
         </div>
+      </section>
+
+      <section
+        className="rounded-xl border px-4 py-3 space-y-3"
+        style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={!hasWriteToken || competitorRunMutation.isPending}
+            onClick={() => competitorRunMutation.mutate()}
+            className="px-3 py-2 rounded-lg text-xs font-semibold"
+            style={{
+              background:
+                hasWriteToken && !competitorRunMutation.isPending ? '#2A6032' : '#E8E0D2',
+              color:
+                hasWriteToken && !competitorRunMutation.isPending ? '#FFFFFF' : '#9AAE9C',
+              border: `1px solid ${
+                hasWriteToken && !competitorRunMutation.isPending ? '#1E4A26' : '#DDD0BC'
+              }`,
+              cursor:
+                hasWriteToken && !competitorRunMutation.isPending ? 'pointer' : 'not-allowed',
+            }}
+          >
+            {competitorRunMutation.isPending ? 'Running…' : 'Run Competitor Research'}
+          </button>
+          <button
+            type="button"
+            disabled={!hasWriteToken || sitemapSyncMutation.isPending}
+            onClick={() => sitemapSyncMutation.mutate()}
+            className="px-3 py-2 rounded-lg text-xs font-semibold"
+            style={{
+              background:
+                hasWriteToken && !sitemapSyncMutation.isPending ? '#355B86' : '#E8E0D2',
+              color:
+                hasWriteToken && !sitemapSyncMutation.isPending ? '#FFFFFF' : '#9AAE9C',
+              border: `1px solid ${
+                hasWriteToken && !sitemapSyncMutation.isPending ? '#25405E' : '#DDD0BC'
+              }`,
+              cursor:
+                hasWriteToken && !sitemapSyncMutation.isPending ? 'pointer' : 'not-allowed',
+            }}
+          >
+            {sitemapSyncMutation.isPending ? 'Syncing…' : 'Sync Sitemap'}
+          </button>
+          <button
+            type="button"
+            disabled={!hasWriteToken || gapRefreshMutation.isPending}
+            onClick={() => gapRefreshMutation.mutate()}
+            className="px-3 py-2 rounded-lg text-xs font-semibold"
+            style={{
+              background:
+                hasWriteToken && !gapRefreshMutation.isPending ? '#7A5C3A' : '#E8E0D2',
+              color:
+                hasWriteToken && !gapRefreshMutation.isPending ? '#FFFFFF' : '#9AAE9C',
+              border: `1px solid ${
+                hasWriteToken && !gapRefreshMutation.isPending ? '#65492D' : '#DDD0BC'
+              }`,
+              cursor:
+                hasWriteToken && !gapRefreshMutation.isPending ? 'pointer' : 'not-allowed',
+            }}
+          >
+            {gapRefreshMutation.isPending ? 'Refreshing…' : 'Refresh Gaps'}
+          </button>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-[10px] uppercase tracking-[0.14em] font-semibold" style={{ color: '#8A9C8C' }}>
+              Gap status
+            </span>
+            <select
+              value={gapStatusFilter}
+              onChange={(event) => setGapStatusFilter(event.target.value as 'all' | ContentGapStatus)}
+              className="rounded-md px-2 py-1 text-xs"
+              style={{ border: '1px solid #DDD0BC', background: '#FFFFFF', color: '#3D5C40' }}
+            >
+              <option value="all">all</option>
+              {gapStatusOptions.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        {!hasWriteToken && (
+          <p className="text-xs" style={{ color: '#9AAE9C' }}>
+            Mutation actions use the trigger token stored on the Runs page.
+          </p>
+        )}
+        {(competitorRunMutation.error || sitemapSyncMutation.error || gapRefreshMutation.error || briefMutation.error || gapStatusMutation.error) && (
+          <p className="text-xs" style={{ color: '#B91C1C' }}>
+            {[
+              competitorRunMutation.error,
+              sitemapSyncMutation.error,
+              gapRefreshMutation.error,
+              briefMutation.error,
+              gapStatusMutation.error,
+            ]
+              .map((value) => (value instanceof Error ? value.message : ''))
+              .find(Boolean) || 'Research action failed.'}
+          </p>
+        )}
+        {actionNotice && (
+          <p className="text-xs" style={{ color: '#2A5C2E' }}>
+            {actionNotice}
+          </p>
+        )}
+      </section>
+
+      <section
+        className="rounded-xl border overflow-hidden"
+        style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
+      >
+        <div
+          className="px-4 py-3 text-[11px] uppercase tracking-[0.12em] font-semibold"
+          style={{ color: '#8A9C8C', borderBottom: '1px solid #F2EDE6' }}
+        >
+          Topic Gaps
+        </div>
+        {gapsQuery.isLoading ? (
+          <div className="p-4 space-y-2">
+            {Array.from({ length: 3 }).map((_, index) => (
+              <div key={index} className="h-8 rounded animate-pulse" style={{ background: '#F2EDE6' }} />
+            ))}
+          </div>
+        ) : gapsQuery.isError ? (
+          <div className="p-4 text-sm" style={{ color: '#B91C1C' }}>
+            {(gapsQuery.error as Error).message}
+          </div>
+        ) : gapRows.length === 0 ? (
+          <div className="p-4 text-sm" style={{ color: '#7A8E7C' }}>
+            No gap items yet. Run “Refresh Gaps” to populate this queue.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[980px]">
+              <thead>
+                <tr style={{ borderBottom: '1px solid #F2EDE6' }}>
+                  <th className="px-4 py-2 text-left text-xs font-medium" style={{ color: '#7A8E7C' }}>Topic</th>
+                  <th className="px-4 py-2 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Deficit</th>
+                  <th className="px-4 py-2 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Coverage</th>
+                  <th className="px-4 py-2 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Composite</th>
+                  <th className="px-4 py-2 text-right text-xs font-medium" style={{ color: '#7A8E7C' }}>Evidence</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium" style={{ color: '#7A8E7C' }}>Status</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium" style={{ color: '#7A8E7C' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {gapRows.map((gap, index) => {
+                  const statusPending =
+                    gapStatusMutation.isPending && gapStatusMutation.variables?.id === gap.id
+                  const briefPending =
+                    briefMutation.isPending && briefMutation.variables === gap.id
+                  return (
+                    <tr
+                      key={gap.id}
+                      style={{
+                        borderBottom: index < gapRows.length - 1 ? '1px solid #F2EDE6' : 'none',
+                      }}
+                    >
+                      <td className="px-4 py-2.5">
+                        <div className="text-sm font-medium" style={{ color: '#1E2E20' }}>
+                          {gap.topicLabel}
+                        </div>
+                        <div className="text-xs" style={{ color: '#8A9C8C' }}>
+                          {gap.cohortTag || 'no cohort tag'}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-sm tabular-nums" style={{ color: '#2A3A2C' }}>
+                        {(gap.mentionDeficitScore * 100).toFixed(1)}%
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-sm tabular-nums" style={{ color: '#2A3A2C' }}>
+                        {(gap.competitorCoverageScore * 100).toFixed(1)}%
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-sm font-semibold tabular-nums" style={{ color: '#2A5C2E' }}>
+                        {(gap.compositeScore * 100).toFixed(1)}%
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-sm tabular-nums" style={{ color: '#2A3A2C' }}>
+                        {gap.evidenceCount}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <select
+                          disabled={!hasWriteToken || statusPending}
+                          value={gap.status}
+                          onChange={(event) =>
+                            gapStatusMutation.mutate({
+                              id: gap.id,
+                              status: event.target.value as ContentGapStatus,
+                              linkedPageUrl: gap.linkedPageUrl || undefined,
+                            })
+                          }
+                          className="rounded-md px-2 py-1 text-xs"
+                          style={{ border: '1px solid #DDD0BC', background: '#FFFFFF', color: '#3D5C40' }}
+                        >
+                          {gapStatusOptions.map((status) => (
+                            <option key={status} value={status}>
+                              {status}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={!hasWriteToken || briefPending}
+                            onClick={() => briefMutation.mutate(gap.id)}
+                            className="px-2.5 py-1 rounded text-xs font-semibold"
+                            style={{
+                              border: '1px solid #C8DDC9',
+                              background:
+                                hasWriteToken && !briefPending ? '#EEF5EF' : '#EEEAE3',
+                              color:
+                                hasWriteToken && !briefPending ? '#2C5D30' : '#AAB7AC',
+                              cursor:
+                                hasWriteToken && !briefPending ? 'pointer' : 'not-allowed',
+                            }}
+                          >
+                            {briefPending ? 'Generating…' : gap.briefMarkdown ? 'Regenerate Brief' : 'Generate Brief'}
+                          </button>
+                          {gap.briefMarkdown && (
+                            <span className="text-xs" style={{ color: '#6B8470' }}>
+                              brief ready
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       {/* ── Theme filter strip ──────────────────────────────────────────── */}

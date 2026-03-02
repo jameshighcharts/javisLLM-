@@ -601,22 +601,89 @@ def extract_response_text(response_obj: Any, response_dict: Dict[str, Any]) -> s
     return "\n".join(texts).strip()
 
 
-def extract_citations(response_dict: Dict[str, Any]) -> List[Dict[str, str]]:
-    citations: List[Dict[str, str]] = []
-    seen = set()
+def normalize_citation_host(url: str) -> str:
+    value = str(url or "").strip()
+    if not value:
+        return ""
+    try:
+        parsed = urllib.parse.urlparse(value)
+        host = parsed.hostname or ""
+        return host.lower().removeprefix("www.")
+    except Exception:  # noqa: BLE001
+        return ""
 
-    def append(raw: Dict[str, Any]) -> None:
-        url = raw.get("url") or raw.get("uri")
+
+def normalize_citation_bound(value: Any) -> int | None:
+    try:
+        parsed = int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def infer_citation_provider(response_dict: Dict[str, Any]) -> str:
+    model = str(response_dict.get("model", "")).lower()
+    if model.startswith("claude") or model.startswith("anthropic/"):
+        return "anthropic"
+    if model.startswith("gemini") or model.startswith("google/"):
+        return "google"
+    if isinstance(response_dict.get("candidates"), list):
+        return "google"
+    if response_dict.get("type") == "message" and isinstance(response_dict.get("content"), list):
+        return "anthropic"
+    return "openai"
+
+
+def extract_citations(response_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
+    citations: List[Dict[str, Any]] = []
+    seen = set()
+    provider = infer_citation_provider(response_dict)
+
+    def append(raw: Dict[str, Any], source_text: str = "") -> None:
+        url = (
+            raw.get("url")
+            or raw.get("uri")
+            or raw.get("href")
+            or raw.get("source")
+            or raw.get("link")
+        )
         if not isinstance(url, str) or not url.strip():
             return
         title = raw.get("title") or raw.get("source") or ""
         snippet = raw.get("snippet") or raw.get("text") or ""
+        start_index = normalize_citation_bound(
+            raw.get("start_index", raw.get("startIndex"))
+        )
+        end_index = normalize_citation_bound(raw.get("end_index", raw.get("endIndex")))
+        host = normalize_citation_host(url)
+        anchor_text = raw.get("anchor_text", raw.get("anchorText"))
+        if not isinstance(anchor_text, str):
+            anchor_text = ""
+        if (
+            not anchor_text
+            and source_text
+            and start_index is not None
+            and end_index is not None
+            and end_index > start_index
+            and end_index <= len(source_text)
+        ):
+            anchor_text = source_text[start_index:end_index].strip()
         entry = {
             "title": str(title).strip(),
             "url": url.strip(),
             "snippet": str(snippet).strip(),
+            "host": host,
+            "start_index": start_index,
+            "end_index": end_index,
+            "anchor_text": anchor_text.strip() if isinstance(anchor_text, str) else "",
+            "provider": str(raw.get("provider") or provider).strip().lower() or provider,
         }
-        dedupe_key = (entry["url"], entry["title"], entry["snippet"])
+        dedupe_key = (
+            entry["url"],
+            entry["title"],
+            entry.get("start_index"),
+            entry.get("end_index"),
+        )
         if dedupe_key in seen:
             return
         seen.add(dedupe_key)
@@ -644,7 +711,7 @@ def extract_citations(response_dict: Dict[str, Any]) -> List[Dict[str, str]]:
                 if isinstance(content_citations, list):
                     for candidate in content_citations:
                         if isinstance(candidate, dict):
-                            append(candidate)
+                            append(candidate, source_text=str(content.get("text") or ""))
                 annotations = content.get("annotations")
                 if not isinstance(annotations, list):
                     continue
@@ -652,10 +719,10 @@ def extract_citations(response_dict: Dict[str, Any]) -> List[Dict[str, str]]:
                     if not isinstance(annotation, dict):
                         continue
                     if "citation" in str(annotation.get("type", "")).lower():
-                        append(annotation)
+                        append(annotation, source_text=str(content.get("text") or ""))
                     nested = annotation.get("url_citation")
                     if isinstance(nested, dict):
-                        append(nested)
+                        append(nested, source_text=str(content.get("text") or ""))
 
     content_items = response_dict.get("content", [])
     if isinstance(content_items, list):
@@ -666,7 +733,7 @@ def extract_citations(response_dict: Dict[str, Any]) -> List[Dict[str, str]]:
             if isinstance(content_citations, list):
                 for candidate in content_citations:
                     if isinstance(candidate, dict):
-                        append(candidate)
+                        append(candidate, source_text=str(content.get("text") or ""))
 
     candidates = response_dict.get("candidates", [])
     if isinstance(candidates, list):
@@ -693,6 +760,14 @@ def extract_citations(response_dict: Dict[str, Any]) -> List[Dict[str, str]]:
                         if isinstance(source, dict):
                             append(source)
 
+    citations.sort(
+        key=lambda item: (
+            item.get("end_index")
+            if isinstance(item.get("end_index"), int)
+            else sys.maxsize,
+            str(item.get("url", "")),
+        )
+    )
     return citations
 
 
@@ -760,7 +835,7 @@ def generate_with_optional_retry(
     query: str,
     temperature: float,
     web_search: bool,
-) -> tuple[str, List[Dict[str, str]], Dict[str, int]]:
+) -> tuple[str, List[Dict[str, Any]], Dict[str, int]]:
     user_prompt = USER_PROMPT_TEMPLATE.format(query=query)
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
@@ -1018,7 +1093,7 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
                 run_iteration = (model_index * args.runs) + model_run_idx
                 timestamp = datetime.now(timezone.utc).isoformat()
                 response_text = ""
-                citations: List[Dict[str, str]] = []
+                citations: List[Dict[str, Any]] = []
                 token_usage = {
                     "prompt_tokens": 0,
                     "completion_tokens": 0,

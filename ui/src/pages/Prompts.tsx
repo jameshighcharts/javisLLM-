@@ -2,12 +2,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api'
+import CitationRichOutput from '../components/CitationRichOutput'
+import CitationSourceLeaderboard from '../components/CitationSourceLeaderboard'
 import { BENCHMARK_MODEL_OPTIONS, BENCHMARK_MODEL_VALUES, dedupeModels } from '../modelOptions'
+import { aggregateCitationSources } from '../utils/citationSources'
 import { formatUsd } from '../utils/modelPricing'
 import type {
   BenchmarkConfig,
   BenchmarkQueueRun,
   BenchmarkWorkflowRun,
+  CitationRef,
   DashboardResponse,
   PromptLabRunResult,
   PromptStatus,
@@ -951,13 +955,6 @@ function QueryCsvImporter({
     () => new Set(existingQueries.map((query) => normalizeQueryKey(query))),
     [existingQueries],
   )
-  const existingQueryTagLookup = useMemo(() => {
-    const lookup = new Map<string, string[]>()
-    for (const [query, tags] of Object.entries(existingQueryTags)) {
-      lookup.set(normalizeQueryKey(query), tags)
-    }
-    return lookup
-  }, [existingQueryTags])
   const normalizedImportTags = useMemo(
     () => normalizePromptTagList(importTags),
     [importTags],
@@ -1080,7 +1077,7 @@ function QueryCsvImporter({
 
   return (
     <div
-      className="mt-4 rounded-xl"
+      className="rounded-xl"
       style={{
         background: '#F9F6F0',
         border: '1px solid #E6DCCB',
@@ -1159,14 +1156,14 @@ function QueryCsvImporter({
             setSourceLabel('')
             setStatus({ type: 'idle', text: '' })
           }}
-          rows={4}
+          rows={7}
           placeholder={'Paste CSV here (one query per row)\nquery\nbest charting library for react\njavascript graphing tool'}
           className="w-full rounded-lg p-3 text-sm outline-none resize-y"
           style={{
             border: '1px solid #D8CCB8',
             background: '#FFFFFF',
             color: '#2A3A2C',
-            minHeight: 96,
+            minHeight: 170,
           }}
         />
 
@@ -1268,49 +1265,23 @@ function QueryCsvImporter({
                 <div className="text-[11px] font-semibold uppercase tracking-[0.06em] mb-2" style={{ color: '#90A292' }}>
                   Import Preview
                 </div>
-                <div className="space-y-1.5">
+                <div className="flex flex-wrap gap-2">
                   {preview.parsedQueries.slice(0, 30).map((query) => {
-                    const previewTags =
-                      normalizedImportTags.length > 0
-                        ? normalizePromptTags(
-                            [
-                              ...(
-                                existingQueryTagLookup.get(normalizeQueryKey(query))
-                                ?? inferPromptTags(query)
-                              ),
-                              ...normalizedImportTags,
-                            ],
-                            query,
-                          )
-                        : []
                     return (
-                      <div
+                      <span
                         key={query}
-                        className="text-xs rounded-md px-2 py-1"
-                        style={{ background: '#F8F5EE', color: '#3D5840' }}
+                        className="inline-flex items-center rounded-full text-xs font-medium"
+                        style={{
+                          background: '#F2EDE6',
+                          color: '#3D5840',
+                          border: '1px solid #DDD0BC',
+                          padding: '5px 11px',
+                          maxWidth: '100%',
+                        }}
+                        title={query}
                       >
-                        <div>{query}</div>
-                        {previewTags.length > 0 && (
-                          <div className="mt-1 flex flex-wrap gap-1">
-                            {previewTags.slice(0, 4).map((tag) => {
-                              const style = getTagStyle(tag)
-                              return (
-                                <span
-                                  key={`${query}-${tag}`}
-                                  className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium"
-                                  style={{
-                                    background: style.bg,
-                                    color: style.color,
-                                    border: `1px solid ${style.border}`,
-                                  }}
-                                >
-                                  {tag}
-                                </span>
-                              )
-                            })}
-                          </div>
-                        )}
-                      </div>
+                        <span className="truncate">{query}</span>
+                      </span>
                     )
                   })}
                   {preview.parsedQueries.length > 30 && (
@@ -1413,6 +1384,12 @@ interface LabMention {
 interface QueryLabResultView {
   result: PromptLabRunResult
   mentions: LabMention[]
+  ownedMetrics: {
+    ownedSourceCount: number
+    firstOwnedRank: number | null
+    ownedSharePct: number
+    totalSources: number
+  }
 }
 
 const LAB_SUGGESTIONS = [
@@ -1434,6 +1411,106 @@ function dedupeCaseInsensitive(values: string[]): string[] {
     out.push(trimmed)
   }
   return out
+}
+
+function normalizeCitationHost(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  try {
+    return new URL(trimmed).hostname.toLowerCase().replace(/^www\./, '')
+  } catch {
+    return trimmed
+      .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+      .split('/')[0]
+      .split('?')[0]
+      .split('#')[0]
+      .split('@')
+      .at(-1)
+      ?.split(':')[0]
+      ?.toLowerCase()
+      .replace(/^www\./, '')
+      .trim() || ''
+  }
+}
+
+function normalizeOwnedDomain(value: string): string {
+  return normalizeCitationHost(value)
+}
+
+function hostMatchesOwnedDomain(host: string, domain: string): boolean {
+  const normalizedHost = normalizeCitationHost(host)
+  const normalizedDomain = normalizeOwnedDomain(domain)
+  if (!normalizedHost || !normalizedDomain) return false
+  return normalizedHost === normalizedDomain || normalizedHost.endsWith(`.${normalizedDomain}`)
+}
+
+function normalizeOrderedCitationSources(result: PromptLabRunResult): Array<{ url: string; host: string }> {
+  const refs: CitationRef[] = Array.isArray(result.citationRefs) ? result.citationRefs : []
+  const seen = new Set<string>()
+  const ordered = refs
+    .filter((ref) => typeof ref.url === 'string' && ref.url.trim().length > 0)
+    .slice()
+    .sort((left, right) => {
+      const leftEnd =
+        typeof left.endIndex === 'number' && Number.isFinite(left.endIndex)
+          ? left.endIndex
+          : Number.POSITIVE_INFINITY
+      const rightEnd =
+        typeof right.endIndex === 'number' && Number.isFinite(right.endIndex)
+          ? right.endIndex
+          : Number.POSITIVE_INFINITY
+      if (leftEnd !== rightEnd) return leftEnd - rightEnd
+      return left.url.localeCompare(right.url)
+    })
+    .map((ref) => ({ url: ref.url.trim(), host: ref.host || normalizeCitationHost(ref.url) }))
+    .filter((ref) => {
+      if (!ref.url || seen.has(ref.url)) return false
+      seen.add(ref.url)
+      return true
+    })
+  if (ordered.length > 0) return ordered
+
+  return (result.citations ?? [])
+    .map((url) => String(url ?? '').trim())
+    .filter(Boolean)
+    .filter((url) => {
+      if (seen.has(url)) return false
+      seen.add(url)
+      return true
+    })
+    .map((url) => ({ url, host: normalizeCitationHost(url) }))
+}
+
+function computeOwnedCitationMetrics(
+  result: PromptLabRunResult,
+  ownedDomains: string[],
+): {
+  ownedSourceCount: number
+  firstOwnedRank: number | null
+  ownedSharePct: number
+  totalSources: number
+} {
+  const sources = normalizeOrderedCitationSources(result)
+  if (sources.length === 0 || ownedDomains.length === 0) {
+    return {
+      ownedSourceCount: 0,
+      firstOwnedRank: null,
+      ownedSharePct: 0,
+      totalSources: sources.length,
+    }
+  }
+  const ownedIndexes = sources
+    .map((source, index) =>
+      ownedDomains.some((domain) => hostMatchesOwnedDomain(source.host, domain)) ? index : -1,
+    )
+    .filter((index) => index >= 0)
+  const ownedSourceCount = ownedIndexes.length
+  return {
+    ownedSourceCount,
+    firstOwnedRank: ownedIndexes.length > 0 ? ownedIndexes[0] + 1 : null,
+    ownedSharePct: sources.length > 0 ? (ownedSourceCount / sources.length) * 100 : 0,
+    totalSources: sources.length,
+  }
 }
 
 function isOpenAiModelId(model: string): boolean {
@@ -1539,6 +1616,7 @@ function normalizeQueryLabErrorMessage(error: unknown): string {
 function QueryLab({
   trackedEntities,
   aliasesByEntity,
+  competitorCitationDomains,
   onQueryRun,
   competitors,
   onCompetitorsChange,
@@ -1546,6 +1624,7 @@ function QueryLab({
 }: {
   trackedEntities: string[]
   aliasesByEntity: Record<string, string[]>
+  competitorCitationDomains?: Record<string, string[]>
   onQueryRun?: (query: string) => Promise<void> | void
   competitors: string[]
   onCompetitorsChange: (v: string[]) => void
@@ -1558,6 +1637,9 @@ function QueryLab({
   const [allowMultipleModels, setAllowMultipleModels] = useState(true)
   const [selectedModels, setSelectedModels] = useState<string[]>([BENCHMARK_MODEL_VALUES[0]])
   const [webSearch, setWebSearch] = useState(true)
+  const [searchContextEnabled, setSearchContextEnabled] = useState(false)
+  const [searchContextLocation, setSearchContextLocation] = useState('United States')
+  const [searchContextLanguage, setSearchContextLanguage] = useState('en')
   const [elapsedMs, setElapsedMs] = useState(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -1573,6 +1655,18 @@ function QueryLab({
     () => effectiveModels.some((model) => isOpenAiModelId(model)),
     [effectiveModels],
   )
+  const ownedDomains = useMemo(() => {
+    const normalizedConfig = Object.fromEntries(
+      Object.entries(competitorCitationDomains ?? {}).map(([slug, domains]) => [
+        slug.trim().toLowerCase(),
+        dedupeCaseInsensitive((domains ?? []).map((domain) => normalizeOwnedDomain(String(domain)))).filter(
+          Boolean,
+        ),
+      ]),
+    )
+    const configured = normalizedConfig.highcharts ?? []
+    return configured.length > 0 ? configured : ['highcharts.com']
+  }, [competitorCitationDomains])
 
   const canRun =
     queryText.trim().length > 0 &&
@@ -1598,6 +1692,12 @@ function QueryLab({
     }
   }, [allowMultipleModels])
 
+  useEffect(() => {
+    if (!hasOpenAiModel) {
+      setSearchContextEnabled(false)
+    }
+  }, [hasOpenAiModel])
+
   async function handleRun() {
     if (!canRun) return
     const normalizedQuery = queryText.trim()
@@ -1612,6 +1712,11 @@ function QueryLab({
         model: effectiveModels[0],
         models: effectiveModels,
         webSearch: hasOpenAiModel ? webSearch : false,
+        searchContext: {
+          enabled: hasOpenAiModel ? searchContextEnabled : false,
+          location: searchContextLocation.trim() || 'United States',
+          language: searchContextLanguage.trim() || 'en',
+        },
       })
       if (response.summary.successCount > 0 && onQueryRun) {
         await onQueryRun(normalizedQuery)
@@ -1626,6 +1731,8 @@ function QueryLab({
                 provider: response.provider ?? 'openai',
                 modelOwner: response.modelOwner ?? 'Unknown',
                 webSearchEnabled: response.webSearchEnabled,
+                effectiveQuery: response.effectiveQuery ?? normalizedQuery,
+                citationRefs: response.citationRefs ?? [],
                 responseText: response.responseText,
                 citations: response.citations,
                 durationMs: response.durationMs,
@@ -1648,6 +1755,7 @@ function QueryLab({
           mentions: text
             ? detectMentions(text, trackedEntities, aliasLookup)
             : [],
+          ownedMetrics: computeOwnedCitationMetrics(item, ownedDomains),
         }
       })
 
@@ -1694,6 +1802,18 @@ function QueryLab({
 
     return base
   }, [resultViews])
+
+  const sourceStats = useMemo(
+    () =>
+      aggregateCitationSources(
+        resultViews.map((view, index) => ({
+          responseId: `${view.result.model}:${index + 1}`,
+          citationRefs: view.result.citationRefs ?? [],
+          citations: view.result.citations,
+        })),
+      ),
+    [resultViews],
+  )
 
   return (
     <div
@@ -1927,6 +2047,71 @@ function QueryLab({
                   </>
                 )}
               </button>
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                flexWrap: 'wrap',
+                padding: '8px 9px',
+                borderRadius: 10,
+                border: '1px solid #E4DDD0',
+                background: '#FCFAF5',
+              }}
+            >
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  cursor: hasOpenAiModel ? 'pointer' : 'not-allowed',
+                  opacity: hasOpenAiModel ? 1 : 0.6,
+                }}
+              >
+                <Toggle
+                  active={searchContextEnabled}
+                  onChange={setSearchContextEnabled}
+                  disabled={!hasOpenAiModel}
+                />
+                <span style={{ fontSize: 11, color: '#7A8E7C', fontWeight: 600 }}>
+                  Search context
+                </span>
+              </label>
+              <input
+                value={searchContextLocation}
+                onChange={(event) => setSearchContextLocation(event.target.value)}
+                disabled={!hasOpenAiModel || !searchContextEnabled}
+                placeholder="Location"
+                style={{
+                  minWidth: 150,
+                  borderRadius: 8,
+                  border: '1px solid #DDD0BC',
+                  background: !hasOpenAiModel || !searchContextEnabled ? '#F2EDE6' : '#FFFFFF',
+                  color: '#2A3A2C',
+                  fontSize: 11,
+                  padding: '6px 8px',
+                }}
+              />
+              <input
+                value={searchContextLanguage}
+                onChange={(event) => setSearchContextLanguage(event.target.value)}
+                disabled={!hasOpenAiModel || !searchContextEnabled}
+                placeholder="Language"
+                style={{
+                  width: 80,
+                  borderRadius: 8,
+                  border: '1px solid #DDD0BC',
+                  background: !hasOpenAiModel || !searchContextEnabled ? '#F2EDE6' : '#FFFFFF',
+                  color: '#2A3A2C',
+                  fontSize: 11,
+                  padding: '6px 8px',
+                }}
+              />
+              <span style={{ fontSize: 10, color: '#9AAE9C' }}>
+                OpenAI only
+              </span>
             </div>
 
             <div className="query-lab-model-grid">
@@ -2175,8 +2360,15 @@ function QueryLab({
                   padding: 12,
                 }}
               >
+                <CitationSourceLeaderboard
+                  items={sourceStats}
+                  limit={8}
+                  title="Most Cited Sources"
+                  subtitle="All cited sources across this run (including non-owned domains)"
+                  emptyText="No sources were cited by the returned model outputs."
+                />
                 {resultViews.map((view) => {
-                  const { result, mentions } = view
+                  const { result, mentions, ownedMetrics } = view
                   const hasError = Boolean(result.error) || !result.ok
                   const maxMentionCount = Math.max(
                     1,
@@ -2267,6 +2459,18 @@ function QueryLab({
                         </span>
                       </div>
 
+                      {result.effectiveQuery && result.effectiveQuery !== queryText.trim() && (
+                        <div
+                          style={{
+                            padding: '0 12px 10px',
+                            fontSize: 10,
+                            color: '#7A8E7C',
+                          }}
+                        >
+                          Effective query: {result.effectiveQuery}
+                        </div>
+                      )}
+
                       <div style={{ padding: '10px 12px', display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                         <span style={{ fontSize: 11, color: '#607860', fontWeight: 600 }}>
                           Duration: {(Math.max(0, result.durationMs) / 1000).toFixed(2)}s
@@ -2280,6 +2484,16 @@ function QueryLab({
                         <span style={{ fontSize: 11, color: '#607860', fontWeight: 600 }}>
                           Total: {Math.max(0, result.tokens.totalTokens).toLocaleString()}
                         </span>
+                        <span style={{ fontSize: 11, color: '#607860', fontWeight: 600 }}>
+                          Owned sources: {ownedMetrics.ownedSourceCount}/{ownedMetrics.totalSources}
+                        </span>
+                        <span style={{ fontSize: 11, color: '#607860', fontWeight: 600 }}>
+                          First owned rank:{' '}
+                          {ownedMetrics.firstOwnedRank ? `#${ownedMetrics.firstOwnedRank}` : '—'}
+                        </span>
+                        <span style={{ fontSize: 11, color: '#607860', fontWeight: 600 }}>
+                          Owned share: {ownedMetrics.ownedSharePct.toFixed(1)}%
+                        </span>
                       </div>
 
                       {hasError ? (
@@ -2291,22 +2505,13 @@ function QueryLab({
                           <div
                             style={{
                               padding: '0 12px 12px',
-                              fontSize: 12,
-                              lineHeight: 1.6,
-                              color: '#2A3A2C',
                             }}
                           >
-                            {result.responseText
-                              .split('\n\n')
-                              .filter((paragraph) => paragraph.trim().length > 0)
-                              .map((paragraph, index, allParagraphs) => (
-                                <p
-                                  key={`${result.model}-para-${index}`}
-                                  style={{ marginBottom: index < allParagraphs.length - 1 ? 8 : 0 }}
-                                >
-                                  {paragraph}
-                                </p>
-                              ))}
+                            <CitationRichOutput
+                              text={result.responseText}
+                              citationRefs={result.citationRefs ?? []}
+                              citations={result.citations}
+                            />
                           </div>
 
                           {mentions.length > 0 && (
@@ -2431,7 +2636,7 @@ function QueryLab({
 
 // ── Prompts Page ──────────────────────────────────────────────────────────────
 
-export default function Prompts() {
+export default function Prompts({ queryLabOnly = false }: { queryLabOnly?: boolean }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
 
@@ -2637,6 +2842,7 @@ export default function Prompts() {
         queryTags: nextQueryTags,
         competitors: baseCompetitors,
         aliases: latestConfig.aliases,
+        competitorCitationDomains: latestConfig.competitorCitationDomains,
         pausedQueries: latestConfig.pausedQueries,
       })
 
@@ -2682,6 +2888,7 @@ export default function Prompts() {
       queryTags: normalizeQueryTagsMap(nextQueries, nextQueryTags),
       competitors,
       aliases: configQuery.data?.config.aliases ?? {},
+      competitorCitationDomains: configQuery.data?.config.competitorCitationDomains,
     }
 
     try {
@@ -2711,6 +2918,7 @@ export default function Prompts() {
     queryTags: normalizeQueryTagsMap(queries, queryTags),
     competitors,
     aliases: configQuery.data?.config.aliases ?? {},
+    competitorCitationDomains: configQuery.data?.config.competitorCitationDomains,
   }
 
   function sleep(ms: number) {
@@ -2862,29 +3070,51 @@ export default function Prompts() {
     )
   }
 
+  if (queryLabOnly) {
+    return (
+      <div className="max-w-[1360px]">
+        <QueryLab
+          trackedEntities={competitors}
+          aliasesByEntity={configQuery.data?.config.aliases ?? {}}
+          competitorCitationDomains={configQuery.data?.config.competitorCitationDomains}
+          onQueryRun={handleQueryLabRun}
+          competitors={competitors}
+          onCompetitorsChange={(v) => mark(() => setCompetitors(v))}
+          hasHighcharts={hasHighcharts}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="max-w-[1360px] space-y-5">
-      <div className="flex justify-end">
-        <Link
-          to="/under-the-hood"
-          className="inline-flex items-center gap-1 text-xs font-medium"
-          style={{ color: '#6B8470' }}
-        >
-          View Under the Hood Stats
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-            <path d="M3 9L9 3M9 3H4.5M9 3V7.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </Link>
-      </div>
-      {/* ── Query Lab ──────────────────────────────────────────────────────── */}
-      <QueryLab
-        trackedEntities={competitors}
-        aliasesByEntity={configQuery.data?.config.aliases ?? {}}
-        onQueryRun={handleQueryLabRun}
-        competitors={competitors}
-        onCompetitorsChange={(v) => mark(() => setCompetitors(v))}
-        hasHighcharts={hasHighcharts}
-      />
+      <section
+        className="rounded-xl border p-4 space-y-3"
+        style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>
+              Prompt Research Workspace
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: '#7A8E7C' }}>
+              Cohorts and optimization Kanban now live on a dedicated page.
+            </p>
+          </div>
+          <Link
+            to="/prompt-research"
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold"
+            style={{
+              background: '#EEF5EF',
+              color: '#2A5C2E',
+              border: '1px solid #C8DEC9',
+            }}
+          >
+            Open Prompt Research
+            <span aria-hidden>↗</span>
+          </Link>
+        </div>
+      </section>
 
       {/* ── Section divider (collapsible toggle) ───────────────────────────── */}
       <div className="flex items-center gap-3">
@@ -2925,10 +3155,101 @@ export default function Prompts() {
         <div className="flex-1 h-px" style={{ background: '#DDD0BC' }} />
       </div>
 
+      {/* ── Quick import (always visible) ─────────────────────────────────── */}
+      <div
+        className="rounded-xl border shadow-sm"
+        style={{ background: '#FFFFFF', borderColor: '#DDD0BC', minHeight: 500 }}
+      >
+        <div className="flex items-center justify-between p-5 pb-0">
+          <div>
+            <div className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>
+              Import Queries
+            </div>
+            <div className="text-xs mt-0.5" style={{ color: '#7A8E7C' }}>
+              Import prompt CSV + apply tags before saving into your query list
+            </div>
+          </div>
+          <span
+            className="text-xs font-semibold tabular-nums px-2.5 py-1 rounded-full"
+            style={{ background: '#EEF5EF', color: '#5E8A62', border: '1px solid #C8DDC9' }}
+          >
+            {queries.length}
+          </span>
+        </div>
+        <div className="p-5 pt-4">
+          <QueryCsvImporter
+            existingQueries={queries}
+            existingQueryTags={queryTags}
+            onApply={handleQueryImportApply}
+          />
+        </div>
+      </div>
+
+      {/* ── Prompt tags (always visible) ──────────────────────────────────── */}
+      <div
+        className="rounded-xl border shadow-sm"
+        style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
+      >
+        <div className="flex items-center justify-between p-5 pb-0">
+          <div>
+            <div className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>
+              Prompt Tags
+            </div>
+            <div className="text-xs mt-0.5" style={{ color: '#7A8E7C' }}>
+              Tags assigned to each query for filtering
+            </div>
+          </div>
+          <span
+            className="text-xs font-semibold tabular-nums px-2.5 py-1 rounded-full"
+            style={{ background: '#F0EEFB', color: '#7B54D0', border: '1px solid #D4C7F5' }}
+          >
+            {queries.length}
+          </span>
+        </div>
+        <div className="p-5 pt-4">
+          {configQuery.isLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 5 }).map((_, idx) => (
+                <div
+                  key={idx}
+                  className="h-10 rounded animate-pulse"
+                  style={{ background: '#F2EDE6' }}
+                />
+              ))}
+            </div>
+          ) : queries.length > 0 ? (
+            <div
+              className="rounded-lg overflow-hidden"
+              style={{ border: '1px solid #F2EDE6' }}
+            >
+              {queries.map((query) => (
+                <QueryTagRow
+                  key={query}
+                  query={query}
+                  tags={queryTags[query] ?? inferPromptTags(query)}
+                  onChange={(nextTags) =>
+                    mark(() =>
+                      setQueryTags((prev) => ({
+                        ...prev,
+                        [query]: normalizePromptTags(nextTags, query),
+                      }))
+                    )
+                  }
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm" style={{ color: '#9AAE9C' }}>
+              Add queries to assign tags.
+            </p>
+          )}
+        </div>
+      </div>
+
       {/* ── Config editors ─────────────────────────────────────────────────── */}
       {manageExpanded && (configQuery.isLoading ? (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          {[0, 1].map((i) => (
+        <div className="grid grid-cols-1 gap-4">
+          {[0].map((i) => (
             <div key={i} className="rounded-xl border p-6" style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}>
               <div className="h-4 w-28 rounded animate-pulse mb-5" style={{ background: '#D4BB96' }} />
               <div className="h-24 rounded animate-pulse" style={{ background: '#F2EDE6' }} />
@@ -2937,8 +3258,8 @@ export default function Prompts() {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            {/* Left card: Queries + Competitors */}
+          <div className="grid grid-cols-1 gap-4">
+            {/* Query management */}
             <div
               className="rounded-xl border shadow-sm"
               style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
@@ -2967,64 +3288,8 @@ export default function Prompts() {
                   placeholder="e.g. javascript charting libraries"
                   maxVisibleItems={11}
                 />
-                <QueryCsvImporter
-                  existingQueries={queries}
-                  existingQueryTags={queryTags}
-                  onApply={handleQueryImportApply}
-                />
               </div>
 
-            </div>
-
-            {/* Right card: Prompt Tags */}
-            <div
-              className="rounded-xl border shadow-sm"
-              style={{ background: '#FFFFFF', borderColor: '#DDD0BC' }}
-            >
-              <div className="flex items-center justify-between p-5 pb-0">
-                <div>
-                  <div className="text-sm font-semibold tracking-tight" style={{ color: '#2A3A2C' }}>
-                    Prompt Tags
-                  </div>
-                  <div className="text-xs mt-0.5" style={{ color: '#7A8E7C' }}>
-                    Tags assigned to each query for filtering
-                  </div>
-                </div>
-                <span
-                  className="text-xs font-semibold tabular-nums px-2.5 py-1 rounded-full"
-                  style={{ background: '#F0EEFB', color: '#7B54D0', border: '1px solid #D4C7F5' }}
-                >
-                  {queries.length}
-                </span>
-              </div>
-              <div className="p-5 pt-4">
-                {queries.length > 0 ? (
-                  <div
-                    className="rounded-lg overflow-hidden"
-                    style={{ border: '1px solid #F2EDE6' }}
-                  >
-                    {queries.map((query) => (
-                      <QueryTagRow
-                        key={query}
-                        query={query}
-                        tags={queryTags[query] ?? inferPromptTags(query)}
-                        onChange={(nextTags) =>
-                          mark(() =>
-                            setQueryTags((prev) => ({
-                              ...prev,
-                              [query]: normalizePromptTags(nextTags, query),
-                            }))
-                          )
-                        }
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm" style={{ color: '#9AAE9C' }}>
-                    Add queries to assign tags.
-                  </p>
-                )}
-              </div>
             </div>
           </div>
 

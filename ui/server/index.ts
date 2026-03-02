@@ -2,6 +2,7 @@ import cors from "cors";
 import { parse } from "csv-parse/sync";
 import express from "express";
 import { existsSync, promises as fs, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
@@ -23,6 +24,8 @@ type MvRunSummaryRow = {
   run_id: string;
   run_month: string | null;
   model: string | null;
+  run_kind?: "full" | "cohort" | null;
+  cohort_tag?: string | null;
   models?: string[] | string | null;
   models_csv?: string | null;
   model_owners?: string[] | string | null;
@@ -141,16 +144,16 @@ const SUPABASE_URL = String(
 ).trim();
 const SUPABASE_KEY = String(
   process.env.SUPABASE_SERVICE_ROLE_KEY ??
-    process.env.SUPABASE_ANON_KEY ??
-    process.env.VITE_SUPABASE_ANON_KEY ??
-    process.env.VITE_SUPABASE_PUBLISHABLE_KEY ??
-    "",
+  process.env.SUPABASE_ANON_KEY ??
+  process.env.VITE_SUPABASE_ANON_KEY ??
+  process.env.VITE_SUPABASE_PUBLISHABLE_KEY ??
+  "",
 ).trim();
 const supabase =
   SUPABASE_URL && SUPABASE_KEY
     ? createClient(SUPABASE_URL, SUPABASE_KEY, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      })
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
     : null;
 
 const dashboardFiles = {
@@ -198,6 +201,8 @@ const PROMPT_LAB_SYSTEM_PROMPT =
   "You are a helpful assistant. Answer with concise bullets and include direct library names.";
 const PROMPT_LAB_USER_PROMPT_TEMPLATE =
   "Query: {query}\nList relevant libraries/tools with a short rationale for each in bullet points.";
+const PROMPT_LAB_DEFAULT_SEARCH_CONTEXT_LOCATION = "United States";
+const PROMPT_LAB_DEFAULT_SEARCH_CONTEXT_LANGUAGE = "en";
 const OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses";
 const ANTHROPIC_MESSAGES_API_URL = "https://api.anthropic.com/v1/messages";
 const GEMINI_GENERATE_CONTENT_API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -209,7 +214,26 @@ const promptLabRunSchema = z.object({
   models: z.union([z.array(z.string().min(1).max(100)).max(32), z.string().max(2000)]).optional(),
   selectAllModels: z.boolean().optional(),
   webSearch: z.boolean().optional(),
+  searchContext: z
+    .object({
+      enabled: z.boolean().optional(),
+      location: z.string().min(1).max(120).optional(),
+      language: z.string().min(1).max(24).optional(),
+    })
+    .optional(),
 });
+
+type PromptLabCitationRef = {
+  id: string;
+  url: string;
+  title: string;
+  host: string;
+  snippet?: string;
+  startIndex?: number | null;
+  endIndex?: number | null;
+  anchorText?: string | null;
+  provider: PromptLabProvider;
+};
 
 type HttpError = Error & {
   statusCode?: number;
@@ -229,12 +253,26 @@ const allowedCorsOrigins =
   configuredCorsOrigins.length > 0
     ? configuredCorsOrigins
     : [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:4173",
-        "http://127.0.0.1:4173",
-      ];
+      "http://localhost:5173",
+      "http://127.0.0.1:5173",
+      "http://localhost:4173",
+      "http://127.0.0.1:4173",
+    ];
 const writeToken = String(process.env.UI_API_WRITE_TOKEN ?? "").trim();
+const cjsRequire = createRequire(import.meta.url);
+const benchmarkTriggerHandler = cjsRequire("../../api/benchmark/trigger.js");
+const benchmarkRunsHandler = cjsRequire("../../api/benchmark/runs.js");
+const benchmarkStopHandler = cjsRequire("../../api/benchmark/stop.js");
+const researchCompetitorRunHandler = cjsRequire("../../api/research/competitors/run.js");
+const researchSitemapSyncHandler = cjsRequire("../../api/research/sitemap/sync.js");
+const researchGapRefreshHandler = cjsRequire("../../api/research/gaps/refresh.js");
+const researchGapListHandler = cjsRequire("../../api/research/gaps.js");
+const researchGapStatusHandler = cjsRequire("../../api/research/gaps/[id]/status.js");
+const researchBriefGenerateHandler = cjsRequire("../../api/research/briefs/generate.js");
+const researchPromptCohortsHandler = cjsRequire("../../api/research/prompt-cohorts.js");
+const researchPromptCohortProgressHandler = cjsRequire(
+  "../../api/research/prompt-cohorts/[id]/progress.js",
+);
 
 app.use(
   cors({
@@ -306,6 +344,38 @@ function requireWriteAccess(
   }
 
   next();
+}
+
+function ensureServerlessTriggerToken(req: express.Request) {
+  let configured = String(process.env.BENCHMARK_TRIGGER_TOKEN ?? "").trim();
+  if (!configured) {
+    const fallback = getRequestToken(req) || writeToken || "local-dev-trigger-token";
+    configured = fallback.trim();
+    process.env.BENCHMARK_TRIGGER_TOKEN = configured;
+  }
+
+  const existingAuth = req.headers.authorization ?? req.headers.Authorization;
+  if (typeof existingAuth !== "string" || !existingAuth.trim()) {
+    req.headers.authorization = `Bearer ${configured}`;
+  }
+}
+
+function invokeServerlessHandler(
+  handler: (req: express.Request, res: express.Response) => Promise<void> | void,
+  options: {
+    requireTriggerToken?: boolean;
+    paramIdToQuery?: boolean;
+  } = {},
+) {
+  return async (req: express.Request, res: express.Response) => {
+    if (options.paramIdToQuery && req.params.id) {
+      (req.query as Record<string, unknown>).id = req.params.id;
+    }
+    if (options.requireTriggerToken) {
+      ensureServerlessTriggerToken(req);
+    }
+    await handler(req, res);
+  };
 }
 
 function sendApiError(
@@ -496,43 +566,43 @@ const MODEL_PRICING_FAMILY_RULES: Array<{
   test: (normalizedModel: string) => boolean;
   pricing: ModelPricing;
 }> = [
-  {
-    test: (model) => model === "gpt-5.2" || model.startsWith("gpt-5.2-"),
-    pricing: MODEL_PRICING_BY_MODEL["gpt-5.2"],
-  },
-  {
-    test: (model) => model === "gpt-4o",
-    pricing: MODEL_PRICING_BY_MODEL["gpt-4o"],
-  },
-  {
-    test: (model) => model === "gpt-4o-mini" || model.startsWith("gpt-4o-mini-"),
-    pricing: MODEL_PRICING_BY_MODEL["gpt-4o-mini"],
-  },
-  {
-    test: (model) => model === "claude-sonnet-4-5" || model.startsWith("claude-sonnet-4-5-"),
-    pricing: MODEL_PRICING_BY_MODEL["claude-sonnet-4-5-20250929"],
-  },
-  {
-    test: (model) => model === "claude-sonnet-4" || model.startsWith("claude-sonnet-4-"),
-    pricing: MODEL_PRICING_BY_MODEL["claude-sonnet-4-5-20250929"],
-  },
-  {
-    test: (model) => model.startsWith("claude-opus-4-5"),
-    pricing: MODEL_PRICING_BY_MODEL["claude-opus-4-1-20250805"],
-  },
-  {
-    test: (model) => model === "claude-opus-4-1" || model.startsWith("claude-opus-4-1-"),
-    pricing: MODEL_PRICING_BY_MODEL["claude-opus-4-1-20250805"],
-  },
-  {
-    test: (model) => model === "claude-opus-4" || model.startsWith("claude-opus-4-"),
-    pricing: MODEL_PRICING_BY_MODEL["claude-opus-4-20250514"],
-  },
-  {
-    test: (model) => model === "gemini-2.5-flash" || model.startsWith("gemini-2.5-flash-"),
-    pricing: MODEL_PRICING_BY_MODEL["gemini-2.5-flash"],
-  },
-];
+    {
+      test: (model) => model === "gpt-5.2" || model.startsWith("gpt-5.2-"),
+      pricing: MODEL_PRICING_BY_MODEL["gpt-5.2"],
+    },
+    {
+      test: (model) => model === "gpt-4o",
+      pricing: MODEL_PRICING_BY_MODEL["gpt-4o"],
+    },
+    {
+      test: (model) => model === "gpt-4o-mini" || model.startsWith("gpt-4o-mini-"),
+      pricing: MODEL_PRICING_BY_MODEL["gpt-4o-mini"],
+    },
+    {
+      test: (model) => model === "claude-sonnet-4-5" || model.startsWith("claude-sonnet-4-5-"),
+      pricing: MODEL_PRICING_BY_MODEL["claude-sonnet-4-5-20250929"],
+    },
+    {
+      test: (model) => model === "claude-sonnet-4" || model.startsWith("claude-sonnet-4-"),
+      pricing: MODEL_PRICING_BY_MODEL["claude-sonnet-4-5-20250929"],
+    },
+    {
+      test: (model) => model.startsWith("claude-opus-4-5"),
+      pricing: MODEL_PRICING_BY_MODEL["claude-opus-4-1-20250805"],
+    },
+    {
+      test: (model) => model === "claude-opus-4-1" || model.startsWith("claude-opus-4-1-"),
+      pricing: MODEL_PRICING_BY_MODEL["claude-opus-4-1-20250805"],
+    },
+    {
+      test: (model) => model === "claude-opus-4" || model.startsWith("claude-opus-4-"),
+      pricing: MODEL_PRICING_BY_MODEL["claude-opus-4-20250514"],
+    },
+    {
+      test: (model) => model === "gemini-2.5-flash" || model.startsWith("gemini-2.5-flash-"),
+      pricing: MODEL_PRICING_BY_MODEL["gemini-2.5-flash"],
+    },
+  ];
 
 function safeTokenInt(value: unknown): number {
   const parsed = Number(value ?? 0);
@@ -754,6 +824,43 @@ function inferPromptLabProvider(modelInput: string): PromptLabProvider {
   return "openai";
 }
 
+function resolvePromptLabSearchContext(rawValue: unknown): {
+  enabled: boolean;
+  location: string;
+  language: string;
+} {
+  const value = rawValue && typeof rawValue === "object" ? (rawValue as Record<string, unknown>) : {};
+  const enabled = Boolean(value.enabled);
+  const location =
+    typeof value.location === "string" && value.location.trim()
+      ? value.location.trim()
+      : PROMPT_LAB_DEFAULT_SEARCH_CONTEXT_LOCATION;
+  const language =
+    typeof value.language === "string" && value.language.trim()
+      ? value.language.trim()
+      : PROMPT_LAB_DEFAULT_SEARCH_CONTEXT_LANGUAGE;
+  return {
+    enabled,
+    location,
+    language,
+  };
+}
+
+function buildPromptLabEffectiveQuery(
+  query: string,
+  provider: PromptLabProvider,
+  searchContext: {
+    enabled: boolean;
+    location: string;
+    language: string;
+  },
+): string {
+  if (provider !== "openai" || !searchContext.enabled) {
+    return query;
+  }
+  return `${query} (The user's location is ${searchContext.location}. Be sure to reply in ${searchContext.language} language)`;
+}
+
 function resolvePromptLabApiKey(provider: PromptLabProvider): string {
   const keyName =
     provider === "anthropic"
@@ -843,30 +950,116 @@ function extractPromptLabResponseText(responsePayload: Record<string, unknown>):
   return texts.join("\n").trim();
 }
 
-function extractPromptLabCitations(responsePayload: Record<string, unknown>): string[] {
-  const citations: string[] = [];
-  const seen = new Set<string>();
+function normalizePromptLabCitationHost(url: string): string {
+  if (!url.trim()) return "";
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
 
-  const appendCitation = (candidate: unknown) => {
-    if (!candidate || typeof candidate !== "object") {
-      return;
+function normalizePromptLabCitationBound(value: unknown): number | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  const rounded = Math.round(parsed);
+  return rounded >= 0 ? rounded : null;
+}
+
+function buildPromptLabCitationRef(
+  candidate: unknown,
+  provider: PromptLabProvider,
+  sourceText: string,
+): Omit<PromptLabCitationRef, "id"> | null {
+  if (!candidate || typeof candidate !== "object") {
+    return null;
+  }
+  const entry = candidate as {
+    url?: unknown;
+    uri?: unknown;
+    href?: unknown;
+    source?: unknown;
+    title?: unknown;
+    snippet?: unknown;
+    text?: unknown;
+    excerpt?: unknown;
+    start_index?: unknown;
+    startIndex?: unknown;
+    end_index?: unknown;
+    endIndex?: unknown;
+  };
+  const urlValue = [entry.url, entry.uri, entry.href, entry.source].find(
+    (value) => typeof value === "string" && value.trim(),
+  );
+  if (typeof urlValue !== "string") {
+    return null;
+  }
+  const url = urlValue.trim();
+  const host = normalizePromptLabCitationHost(url);
+  const title =
+    typeof entry.title === "string" && entry.title.trim() ? entry.title.trim() : host || url;
+  const snippetValue = [entry.snippet, entry.text, entry.excerpt].find(
+    (value) => typeof value === "string" && value.trim(),
+  );
+  const snippet = typeof snippetValue === "string" ? snippetValue.trim() : undefined;
+  const startIndex = normalizePromptLabCitationBound(entry.start_index ?? entry.startIndex);
+  const endIndex = normalizePromptLabCitationBound(entry.end_index ?? entry.endIndex);
+  let anchorText: string | null = null;
+  if (
+    sourceText &&
+    startIndex !== null &&
+    endIndex !== null &&
+    endIndex > startIndex &&
+    endIndex <= sourceText.length
+  ) {
+    const sliced = sourceText.slice(startIndex, endIndex).trim();
+    if (sliced) {
+      anchorText = sliced;
     }
-    const entry = candidate as { url?: unknown; uri?: unknown; href?: unknown; source?: unknown };
-    const urlValue = [entry.url, entry.uri, entry.href, entry.source].find(
-      (value) => typeof value === "string" && value.trim(),
-    );
-    if (typeof urlValue !== "string") return;
-    const normalized = urlValue.trim();
-    if (seen.has(normalized)) return;
-    seen.add(normalized);
-    citations.push(normalized);
+  }
+
+  return {
+    url,
+    title,
+    host,
+    snippet,
+    startIndex,
+    endIndex,
+    anchorText,
+    provider,
+  };
+}
+
+function extractPromptLabCitationRefs(
+  responsePayload: Record<string, unknown>,
+  provider: PromptLabProvider,
+): PromptLabCitationRef[] {
+  const refs: PromptLabCitationRef[] = [];
+  const seen = new Set<string>();
+  let nextId = 1;
+
+  const appendRef = (candidate: unknown, sourceText = "") => {
+    const normalized = buildPromptLabCitationRef(candidate, provider, sourceText);
+    if (!normalized) return;
+    const dedupeKey = [
+      normalized.url,
+      normalized.startIndex ?? "",
+      normalized.endIndex ?? "",
+      normalized.title.toLowerCase(),
+    ].join("|");
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    refs.push({
+      id: `c${nextId++}`,
+      ...normalized,
+    });
   };
 
   for (const key of ["citations", "sources", "references"] as const) {
     const topLevelValue = responsePayload[key];
     if (Array.isArray(topLevelValue)) {
       for (const item of topLevelValue) {
-        appendCitation(item);
+        appendRef(item);
       }
     }
   }
@@ -879,21 +1072,23 @@ function extractPromptLabCitations(responsePayload: Record<string, unknown>): st
       : [];
     for (const content of contentItems) {
       if (!content || typeof content !== "object") continue;
+      const sourceText = typeof (content as { text?: unknown }).text === "string"
+        ? ((content as { text: string }).text ?? "")
+        : "";
 
       const contentCitations = (content as { citations?: unknown }).citations;
       if (Array.isArray(contentCitations)) {
         for (const citation of contentCitations) {
-          appendCitation(citation);
+          appendRef(citation, sourceText);
         }
       }
 
       const annotations = (content as { annotations?: unknown }).annotations;
       if (!Array.isArray(annotations)) continue;
       for (const annotation of annotations) {
-        if (!annotation || typeof annotation !== "object") continue;
-        appendCitation(annotation);
+        appendRef(annotation, sourceText);
         const nested = (annotation as { url_citation?: unknown }).url_citation;
-        appendCitation(nested);
+        appendRef(nested, sourceText);
       }
     }
   }
@@ -901,10 +1096,13 @@ function extractPromptLabCitations(responsePayload: Record<string, unknown>): st
   const contentItems = Array.isArray(responsePayload.content) ? responsePayload.content : [];
   for (const content of contentItems) {
     if (!content || typeof content !== "object") continue;
+    const sourceText = typeof (content as { text?: unknown }).text === "string"
+      ? ((content as { text: string }).text ?? "")
+      : "";
     const contentCitations = (content as { citations?: unknown }).citations;
     if (Array.isArray(contentCitations)) {
       for (const citation of contentCitations) {
-        appendCitation(citation);
+        appendRef(citation, sourceText);
       }
     }
   }
@@ -920,9 +1118,9 @@ function extractPromptLabCitations(responsePayload: Record<string, unknown>): st
       : [];
     for (const chunk of chunks) {
       if (!chunk || typeof chunk !== "object") continue;
-      appendCitation(chunk);
+      appendRef(chunk);
       const web = (chunk as { web?: unknown }).web;
-      appendCitation(web);
+      appendRef(web);
     }
 
     const citationSources = Array.isArray(
@@ -930,13 +1128,39 @@ function extractPromptLabCitations(responsePayload: Record<string, unknown>): st
         ?.citationSources,
     )
       ? ((grounding as { citationMetadata?: { citationSources?: unknown[] } }).citationMetadata
-          ?.citationSources as unknown[])
+        ?.citationSources as unknown[])
       : [];
     for (const source of citationSources) {
-      appendCitation(source);
+      appendRef(source);
     }
   }
 
+  refs.sort((left, right) => {
+    const leftEnd = left.endIndex === null || left.endIndex === undefined
+      ? Number.POSITIVE_INFINITY
+      : left.endIndex;
+    const rightEnd = right.endIndex === null || right.endIndex === undefined
+      ? Number.POSITIVE_INFINITY
+      : right.endIndex;
+    if (leftEnd !== rightEnd) return leftEnd - rightEnd;
+    return left.url.localeCompare(right.url);
+  });
+
+  return refs.map((ref, index) => ({
+    ...ref,
+    id: `c${index + 1}`,
+  }));
+}
+
+function extractPromptLabCitations(citationRefs: PromptLabCitationRef[]): string[] {
+  const citations: string[] = [];
+  const seen = new Set<string>();
+  for (const ref of citationRefs) {
+    const normalized = String(ref.url || "").trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    citations.push(normalized);
+  }
   return citations;
 }
 
@@ -987,12 +1211,14 @@ function extractPromptLabTokenUsage(responsePayload: Record<string, unknown>): {
 }
 
 async function runOpenAiPromptLabQuery(
-  query: string,
+  effectiveQuery: string,
   model: string,
   webSearch: boolean,
 ): Promise<{
   responseText: string;
+  citationRefs: PromptLabCitationRef[];
   citations: string[];
+  effectiveQuery: string;
   tokens: { inputTokens: number; outputTokens: number; totalTokens: number };
 }> {
   const apiKey = resolvePromptLabApiKey("openai");
@@ -1004,7 +1230,7 @@ async function runOpenAiPromptLabQuery(
       { role: "system", content: PROMPT_LAB_SYSTEM_PROMPT },
       {
         role: "user",
-        content: PROMPT_LAB_USER_PROMPT_TEMPLATE.replace("{query}", query),
+        content: PROMPT_LAB_USER_PROMPT_TEMPLATE.replace("{query}", effectiveQuery),
       },
     ],
   };
@@ -1034,8 +1260,8 @@ async function runOpenAiPromptLabQuery(
   if (!upstreamResponse.ok) {
     const upstreamMessage =
       typeof payload === "object" &&
-      payload !== null &&
-      typeof (payload as { error?: { message?: unknown } }).error?.message === "string"
+        payload !== null &&
+        typeof (payload as { error?: { message?: unknown } }).error?.message === "string"
         ? (payload as { error: { message: string } }).error.message
         : `OpenAI request failed (${upstreamResponse.status}).`;
     const error = new Error(upstreamMessage) as Error & { statusCode?: number };
@@ -1045,20 +1271,25 @@ async function runOpenAiPromptLabQuery(
 
   const responsePayload =
     payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const citationRefs = extractPromptLabCitationRefs(responsePayload, "openai");
 
   return {
     responseText: extractPromptLabResponseText(responsePayload),
-    citations: extractPromptLabCitations(responsePayload),
+    citationRefs,
+    citations: extractPromptLabCitations(citationRefs),
+    effectiveQuery,
     tokens: extractPromptLabTokenUsage(responsePayload),
   };
 }
 
 async function runAnthropicPromptLabQuery(
-  query: string,
+  effectiveQuery: string,
   model: string,
 ): Promise<{
   responseText: string;
+  citationRefs: PromptLabCitationRef[];
   citations: string[];
+  effectiveQuery: string;
   tokens: { inputTokens: number; outputTokens: number; totalTokens: number };
 }> {
   const apiKey = resolvePromptLabApiKey("anthropic");
@@ -1071,7 +1302,7 @@ async function runAnthropicPromptLabQuery(
     messages: [
       {
         role: "user",
-        content: PROMPT_LAB_USER_PROMPT_TEMPLATE.replace("{query}", query),
+        content: PROMPT_LAB_USER_PROMPT_TEMPLATE.replace("{query}", effectiveQuery),
       },
     ],
   };
@@ -1099,8 +1330,8 @@ async function runAnthropicPromptLabQuery(
   if (!upstreamResponse.ok) {
     const upstreamMessage =
       typeof payload === "object" &&
-      payload !== null &&
-      typeof (payload as { error?: { message?: unknown } }).error?.message === "string"
+        payload !== null &&
+        typeof (payload as { error?: { message?: unknown } }).error?.message === "string"
         ? (payload as { error: { message: string } }).error.message
         : `Anthropic request failed (${upstreamResponse.status}).`;
     const error = new Error(upstreamMessage) as Error & { statusCode?: number };
@@ -1110,20 +1341,25 @@ async function runAnthropicPromptLabQuery(
 
   const responsePayload =
     payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const citationRefs = extractPromptLabCitationRefs(responsePayload, "anthropic");
 
   return {
     responseText: extractPromptLabResponseText(responsePayload),
-    citations: extractPromptLabCitations(responsePayload),
+    citationRefs,
+    citations: extractPromptLabCitations(citationRefs),
+    effectiveQuery,
     tokens: extractPromptLabTokenUsage(responsePayload),
   };
 }
 
 async function runGeminiPromptLabQuery(
-  query: string,
+  effectiveQuery: string,
   model: string,
 ): Promise<{
   responseText: string;
+  citationRefs: PromptLabCitationRef[];
   citations: string[];
+  effectiveQuery: string;
   tokens: { inputTokens: number; outputTokens: number; totalTokens: number };
 }> {
   const apiKey = resolvePromptLabApiKey("google");
@@ -1137,7 +1373,7 @@ async function runGeminiPromptLabQuery(
     contents: [
       {
         role: "user",
-        parts: [{ text: PROMPT_LAB_USER_PROMPT_TEMPLATE.replace("{query}", query) }],
+        parts: [{ text: PROMPT_LAB_USER_PROMPT_TEMPLATE.replace("{query}", effectiveQuery) }],
       },
     ],
     generationConfig: { temperature: 0.7 },
@@ -1164,8 +1400,8 @@ async function runGeminiPromptLabQuery(
   if (!upstreamResponse.ok) {
     const upstreamMessage =
       typeof payload === "object" &&
-      payload !== null &&
-      typeof (payload as { error?: { message?: unknown } }).error?.message === "string"
+        payload !== null &&
+        typeof (payload as { error?: { message?: unknown } }).error?.message === "string"
         ? (payload as { error: { message: string } }).error.message
         : `Gemini request failed (${upstreamResponse.status}).`;
     const error = new Error(upstreamMessage) as Error & { statusCode?: number };
@@ -1175,10 +1411,13 @@ async function runGeminiPromptLabQuery(
 
   const responsePayload =
     payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const citationRefs = extractPromptLabCitationRefs(responsePayload, "google");
 
   return {
     responseText: extractPromptLabResponseText(responsePayload),
-    citations: extractPromptLabCitations(responsePayload),
+    citationRefs,
+    citations: extractPromptLabCitations(citationRefs),
+    effectiveQuery,
     tokens: extractPromptLabTokenUsage(responsePayload),
   };
 }
@@ -1187,25 +1426,38 @@ async function runPromptLabQuery(
   query: string,
   model: string,
   webSearch: boolean,
+  searchContext: {
+    enabled: boolean;
+    location: string;
+    language: string;
+  },
 ): Promise<{
   responseText: string;
+  citationRefs: PromptLabCitationRef[];
   citations: string[];
+  effectiveQuery: string;
   tokens: { inputTokens: number; outputTokens: number; totalTokens: number };
 }> {
   const provider = inferPromptLabProvider(model);
+  const effectiveQuery = buildPromptLabEffectiveQuery(query, provider, searchContext);
   if (provider === "anthropic") {
-    return runAnthropicPromptLabQuery(query, model);
+    return runAnthropicPromptLabQuery(effectiveQuery, model);
   }
   if (provider === "google") {
-    return runGeminiPromptLabQuery(query, model);
+    return runGeminiPromptLabQuery(effectiveQuery, model);
   }
-  return runOpenAiPromptLabQuery(query, model, webSearch);
+  return runOpenAiPromptLabQuery(effectiveQuery, model, webSearch);
 }
 
 async function runPromptLabQueryForModel(
   query: string,
   model: string,
   requestedWebSearch: boolean,
+  searchContext: {
+    enabled: boolean;
+    location: string;
+    language: string;
+  },
 ): Promise<{
   ok: boolean;
   model: string;
@@ -1213,6 +1465,8 @@ async function runPromptLabQueryForModel(
   modelOwner: string;
   webSearchEnabled: boolean;
   responseText: string;
+  effectiveQuery: string;
+  citationRefs: PromptLabCitationRef[];
   citations: string[];
   tokens: { inputTokens: number; outputTokens: number; totalTokens: number };
   durationMs: number;
@@ -1221,10 +1475,11 @@ async function runPromptLabQueryForModel(
   const provider = inferPromptLabProvider(model);
   const modelOwner = resolvePromptLabModelOwner(provider);
   const webSearchEnabled = provider === "openai" ? requestedWebSearch : false;
+  const effectiveQuery = buildPromptLabEffectiveQuery(query, provider, searchContext);
   const startedAt = Date.now();
 
   try {
-    const result = await runPromptLabQuery(query, model, webSearchEnabled);
+    const result = await runPromptLabQuery(query, model, webSearchEnabled, searchContext);
     return {
       ok: true,
       model,
@@ -1232,6 +1487,8 @@ async function runPromptLabQueryForModel(
       modelOwner,
       webSearchEnabled,
       responseText: result.responseText,
+      effectiveQuery: result.effectiveQuery,
+      citationRefs: result.citationRefs,
       citations: result.citations,
       tokens: result.tokens,
       durationMs: Date.now() - startedAt,
@@ -1245,6 +1502,8 @@ async function runPromptLabQueryForModel(
       modelOwner,
       webSearchEnabled,
       responseText: "",
+      effectiveQuery,
+      citationRefs: [],
       citations: [],
       tokens: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
       durationMs: Date.now() - startedAt,
@@ -2031,7 +2290,7 @@ async function fetchDashboardFromSupabaseViewsForServer(config: BenchmarkConfig)
   const recentRunsResult = await client
     .from("mv_run_summary")
     .select(
-      "run_id,run_month,model,models,models_csv,model_owners,model_owners_csv,model_owner_map,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,query_count,competitor_count,input_tokens,output_tokens,total_tokens,total_duration_ms,avg_duration_ms",
+      "run_id,run_month,model,run_kind,cohort_tag,models,models_csv,model_owners,model_owners_csv,model_owner_map,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,query_count,competitor_count,input_tokens,output_tokens,total_tokens,total_duration_ms,avg_duration_ms",
     )
     .order("created_at", { ascending: false })
     .limit(DASHBOARD_RECENT_RUN_SCAN_LIMIT);
@@ -2172,17 +2431,17 @@ async function fetchDashboardFromSupabaseViewsForServer(config: BenchmarkConfig)
     const highchartsRank =
       latestRunResponseCount > 0 && highchartsRateEntry
         ? (() => {
-            const sortedRates = competitorRatesAll
-              .slice()
-              .sort((left, right) => {
-                if (right.ratePct !== left.ratePct) {
-                  return right.ratePct - left.ratePct;
-                }
-                return left.entity.localeCompare(right.entity);
-              });
-            const index = sortedRates.findIndex((entry) => entry.isHighcharts);
-            return index >= 0 ? index + 1 : null;
-          })()
+          const sortedRates = competitorRatesAll
+            .slice()
+            .sort((left, right) => {
+              if (right.ratePct !== left.ratePct) {
+                return right.ratePct - left.ratePct;
+              }
+              return left.entity.localeCompare(right.entity);
+            });
+          const index = sortedRates.findIndex((entry) => entry.isHighcharts);
+          return index >= 0 ? index + 1 : null;
+        })()
         : null;
 
     const viabilityCount = competitorRates.reduce((sum, entry) => sum + entry.mentions, 0);
@@ -2242,17 +2501,17 @@ async function fetchDashboardFromSupabaseViewsForServer(config: BenchmarkConfig)
     modelSummary.tokenTotals.totalTokens > 0
       ? modelSummary.tokenTotals
       : {
-          inputTokens: Math.max(0, Math.round(asNumber(latestRun.input_tokens))),
-          outputTokens: Math.max(0, Math.round(asNumber(latestRun.output_tokens))),
-          totalTokens: Math.max(0, Math.round(asNumber(latestRun.total_tokens))),
-        };
+        inputTokens: Math.max(0, Math.round(asNumber(latestRun.input_tokens))),
+        outputTokens: Math.max(0, Math.round(asNumber(latestRun.output_tokens))),
+        totalTokens: Math.max(0, Math.round(asNumber(latestRun.total_tokens))),
+      };
   const summaryDurationTotals =
     modelSummary.durationTotals.totalDurationMs > 0
       ? modelSummary.durationTotals
       : {
-          totalDurationMs: Math.max(0, Math.round(asNumber(latestRun.total_duration_ms))),
-          avgDurationMs: roundTo(asNumber(latestRun.avg_duration_ms), 2),
-        };
+        totalDurationMs: Math.max(0, Math.round(asNumber(latestRun.total_duration_ms))),
+        avgDurationMs: roundTo(asNumber(latestRun.avg_duration_ms), 2),
+      };
 
   const kpi = {
     metric_name: "AI Visibility Overall",
@@ -2325,7 +2584,7 @@ async function fetchUnderTheHoodFromSupabaseViewsForServer(
   let runQuery = client
     .from("mv_run_summary")
     .select(
-      "run_id,run_month,model,models,models_csv,model_owners,model_owners_csv,model_owner_map,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,query_count,competitor_count,input_tokens,output_tokens,total_tokens,total_duration_ms,avg_duration_ms",
+      "run_id,run_month,model,run_kind,cohort_tag,models,models_csv,model_owners,model_owners_csv,model_owner_map,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,query_count,competitor_count,input_tokens,output_tokens,total_tokens,total_duration_ms,avg_duration_ms",
     )
     .order("created_at", { ascending: false })
     .limit(500);
@@ -2460,8 +2719,8 @@ async function fetchUnderTheHoodFromSupabaseViewsForServer(
         modelSummary.modelOwners.length > 0
           ? modelSummary.modelOwners
           : [...new Set(Object.values(aggregatedModelOwnerMap))].sort((a, b) =>
-              a.localeCompare(b),
-            ),
+            a.localeCompare(b),
+          ),
       modelOwnerMap: aggregatedModelOwnerMap,
       modelOwnerStats: modelSummary.modelOwnerStats,
       modelStats: modelSummary.modelStats,
@@ -2469,20 +2728,20 @@ async function fetchUnderTheHoodFromSupabaseViewsForServer(
         modelSummary.tokenTotals.totalTokens > 0
           ? modelSummary.tokenTotals
           : {
-              inputTokens: totalsFromRuns.inputTokens,
-              outputTokens: totalsFromRuns.outputTokens,
-              totalTokens: totalsFromRuns.totalTokens,
-            },
+            inputTokens: totalsFromRuns.inputTokens,
+            outputTokens: totalsFromRuns.outputTokens,
+            totalTokens: totalsFromRuns.totalTokens,
+          },
       durationTotals:
         modelSummary.durationTotals.totalDurationMs > 0
           ? modelSummary.durationTotals
           : {
-              totalDurationMs: totalsFromRuns.totalDurationMs,
-              avgDurationMs:
-                totalsFromRuns.responses > 0
-                  ? roundTo(totalsFromRuns.totalDurationMs / totalsFromRuns.responses, 2)
-                  : 0,
-            },
+            totalDurationMs: totalsFromRuns.totalDurationMs,
+            avgDurationMs:
+              totalsFromRuns.responses > 0
+                ? roundTo(totalsFromRuns.totalDurationMs / totalsFromRuns.responses, 2)
+                : 0,
+          },
       runMonth: latestRun.run_month,
       webSearchEnabled,
       windowStartUtc: runTimestamps[0] ?? null,
@@ -2497,7 +2756,7 @@ async function fetchRunCostsFromSupabaseViewsForServer(limit = 30) {
   const runResult = await client
     .from("mv_run_summary")
     .select(
-      "run_id,run_month,model,models,models_csv,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,input_tokens,output_tokens,total_tokens",
+      "run_id,run_month,model,run_kind,cohort_tag,models,models_csv,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,input_tokens,output_tokens,total_tokens",
     )
     .order("created_at", { ascending: false })
     .limit(clampedLimit);
@@ -2556,8 +2815,8 @@ async function fetchRunCostsFromSupabaseViewsForServer(limit = 30) {
       resolveRunModels(run).length > 0
         ? resolveRunModels(run)
         : [...new Set(rowsForRun.map((row) => row.model).filter(Boolean))].sort((a, b) =>
-            a.localeCompare(b),
-          );
+          a.localeCompare(b),
+        );
 
     let estimatedInputCostUsd = 0;
     let estimatedOutputCostUsd = 0;
@@ -2585,6 +2844,8 @@ async function fetchRunCostsFromSupabaseViewsForServer(limit = 30) {
     return {
       runId: run.run_id,
       runMonth: run.run_month,
+      runKind: run.run_kind ?? "full",
+      cohortTag: run.cohort_tag ?? null,
       createdAt: run.created_at,
       startedAt: run.started_at,
       endedAt: run.ended_at,
@@ -2640,6 +2901,62 @@ async function fetchRunCostsFromSupabaseViewsForServer(limit = 30) {
     runs,
   };
 }
+
+app.get(
+  "/api/benchmark/runs",
+  invokeServerlessHandler(benchmarkRunsHandler, { requireTriggerToken: true }),
+);
+app.post(
+  "/api/benchmark/trigger",
+  requireWriteAccess,
+  invokeServerlessHandler(benchmarkTriggerHandler, { requireTriggerToken: true }),
+);
+app.post(
+  "/api/benchmark/stop",
+  requireWriteAccess,
+  invokeServerlessHandler(benchmarkStopHandler, { requireTriggerToken: true }),
+);
+
+app.get("/api/research/gaps", invokeServerlessHandler(researchGapListHandler));
+app.get("/api/research/prompt-cohorts", invokeServerlessHandler(researchPromptCohortsHandler));
+app.get(
+  "/api/research/prompt-cohorts/:id/progress",
+  invokeServerlessHandler(researchPromptCohortProgressHandler, { paramIdToQuery: true }),
+);
+
+app.post(
+  "/api/research/competitors/run",
+  requireWriteAccess,
+  invokeServerlessHandler(researchCompetitorRunHandler, { requireTriggerToken: true }),
+);
+app.post(
+  "/api/research/sitemap/sync",
+  requireWriteAccess,
+  invokeServerlessHandler(researchSitemapSyncHandler, { requireTriggerToken: true }),
+);
+app.post(
+  "/api/research/gaps/refresh",
+  requireWriteAccess,
+  invokeServerlessHandler(researchGapRefreshHandler, { requireTriggerToken: true }),
+);
+app.post(
+  "/api/research/briefs/generate",
+  requireWriteAccess,
+  invokeServerlessHandler(researchBriefGenerateHandler, { requireTriggerToken: true }),
+);
+app.patch(
+  "/api/research/gaps/:id/status",
+  requireWriteAccess,
+  invokeServerlessHandler(researchGapStatusHandler, {
+    requireTriggerToken: true,
+    paramIdToQuery: true,
+  }),
+);
+app.post(
+  "/api/research/prompt-cohorts",
+  requireWriteAccess,
+  invokeServerlessHandler(researchPromptCohortsHandler, { requireTriggerToken: true }),
+);
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "ui-api", repoRoot: "ui-api" });
@@ -2712,6 +3029,41 @@ app.patch("/api/prompts/toggle", requireWriteAccess, async (req, res) => {
   }
 });
 
+app.post("/api/billing/create-portal-session", requireWriteAccess, async (req, res) => {
+  try {
+    const stripeKey = process.env.STRIPE_SECRET_KEY;
+    if (!stripeKey) {
+      res.status(400).json({ error: "Stripe key not configured. Missing STRIPE_SECRET_KEY." });
+      return;
+    }
+    const { email, returnUrl } = req.body;
+    if (!email) {
+      res.status(400).json({ error: "Email is required." });
+      return;
+    }
+
+    const { default: Stripe } = await import("stripe");
+    const stripe = new Stripe(stripeKey, { apiVersion: "2023-10-16" as any });
+
+    const customers = await stripe.customers.list({ email, limit: 1 });
+    let customerId = customers.data.length > 0 ? customers.data[0].id : null;
+
+    if (!customerId) {
+      const newCustomer = await stripe.customers.create({ email });
+      customerId = newCustomer.id;
+    }
+
+    const session = await stripe.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: returnUrl || req.headers.origin || "http://localhost:5173",
+    });
+
+    res.json({ url: session.url });
+  } catch (error) {
+    sendApiError(res, 500, "Failed to create Stripe portal session.", error);
+  }
+});
+
 app.post("/api/prompt-lab/run", async (req, res) => {
   try {
     const parsed = promptLabRunSchema.parse(req.body ?? {});
@@ -2722,6 +3074,7 @@ app.post("/api/prompt-lab/run", async (req, res) => {
     }
     const allowedModels = getPromptLabAllowedModels();
     const requestedWebSearch = parsed.webSearch ?? true;
+    const searchContext = resolvePromptLabSearchContext(parsed.searchContext);
     const models = resolvePromptLabModels(
       {
         model: parsed.model,
@@ -2731,7 +3084,9 @@ app.post("/api/prompt-lab/run", async (req, res) => {
       allowedModels,
     );
     const results = await Promise.all(
-      models.map((model) => runPromptLabQueryForModel(query, model, requestedWebSearch)),
+      models.map((model) =>
+        runPromptLabQueryForModel(query, model, requestedWebSearch, searchContext),
+      ),
     );
     const summary = summarizePromptLabModelResults(results);
     const primaryResult = results[0] ?? null;
@@ -2747,6 +3102,8 @@ app.post("/api/prompt-lab/run", async (req, res) => {
       provider: primaryResult?.provider ?? null,
       modelOwner: primaryResult?.modelOwner ?? null,
       webSearchEnabled: primaryResult?.webSearchEnabled ?? false,
+      effectiveQuery: primaryResult?.effectiveQuery ?? query,
+      citationRefs: primaryResult?.citationRefs ?? [],
       responseText: primaryResult?.responseText ?? "",
       citations: primaryResult?.citations ?? [],
       durationMs: primaryResult?.durationMs ?? 0,
@@ -2920,9 +3277,9 @@ app.get("/api/run-costs", async (req, res) => {
             ? `run-${runCreatedAtRaw}`
             : runMonthRaw && timestampRaw
               ? `${runMonthRaw}-${timestampRaw.slice(0, 10)}`
-          : timestampRaw
-            ? `run-${timestampRaw.slice(0, 10)}`
-            : "run-unknown";
+              : timestampRaw
+                ? `run-${timestampRaw.slice(0, 10)}`
+                : "run-unknown";
       const runId = runIdRaw || fallbackRunId;
 
       let bucket = buckets.get(runId);
@@ -3084,10 +3441,10 @@ app.get("/api/dashboard", async (_req, res) => {
     const inferredWindow = inferWindowFromJsonl(jsonlRows);
     const entityKeys = overallRow
       ? Object.keys(overallRow)
-          .filter((column) => column.endsWith("_rate"))
-          .map((column) => column.replace(/_rate$/, ""))
-          .filter((key) => !key.startsWith("viability_index"))
-          .filter((key) => key !== "our_brand")
+        .filter((column) => column.endsWith("_rate"))
+        .map((column) => column.replace(/_rate$/, ""))
+        .filter((key) => !key.startsWith("viability_index"))
+        .filter((key) => key !== "our_brand")
       : config.competitors.map(slugifyEntity);
 
     const overallCompetitorRows = competitorRows.filter(
@@ -3097,24 +3454,24 @@ app.get("/api/dashboard", async (_req, res) => {
     const competitorSeries =
       overallCompetitorRows.length > 0
         ? overallCompetitorRows.map((row) => ({
-            entity: row.entity,
-            entityKey: row.entity_key,
-            isHighcharts: asYesNo(row.is_highcharts) === "yes",
-            mentionRatePct: Number((asNumber(row.mentions_rate) * 100).toFixed(2)),
-            shareOfVoicePct: Number(
-              (
-                asNumber(row.share_of_voice_rate_pct) ||
-                asNumber(row.share_of_voice_rate) * 100
-              ).toFixed(2),
-            ),
-          }))
+          entity: row.entity,
+          entityKey: row.entity_key,
+          isHighcharts: asYesNo(row.is_highcharts) === "yes",
+          mentionRatePct: Number((asNumber(row.mentions_rate) * 100).toFixed(2)),
+          shareOfVoicePct: Number(
+            (
+              asNumber(row.share_of_voice_rate_pct) ||
+              asNumber(row.share_of_voice_rate) * 100
+            ).toFixed(2),
+          ),
+        }))
         : entityKeys.map((entityKey) => ({
-            entity: config.competitors.find((name) => slugifyEntity(name) === entityKey) ?? entityKey,
-            entityKey,
-            isHighcharts: entityKey === "highcharts",
-            mentionRatePct: Number((asNumber(overallRow?.[`${entityKey}_rate`]) * 100).toFixed(2)),
-            shareOfVoicePct: 0,
-          }));
+          entity: config.competitors.find((name) => slugifyEntity(name) === entityKey) ?? entityKey,
+          entityKey,
+          isHighcharts: entityKey === "highcharts",
+          mentionRatePct: Number((asNumber(overallRow?.[`${entityKey}_rate`]) * 100).toFixed(2)),
+          shareOfVoicePct: 0,
+        }));
 
     const promptLookup = new Map(queryRows.map((row) => [row.query, row]));
     // JSONL artifacts are rewritten per benchmark run, so the full file is the active snapshot.
@@ -3145,8 +3502,8 @@ app.get("/api/dashboard", async (_req, res) => {
           sum +
           safeTokenInt(
             responseRow.prompt_tokens ??
-              responseRow.input_tokens ??
-              responseRow.usage?.prompt_tokens,
+            responseRow.input_tokens ??
+            responseRow.usage?.prompt_tokens,
           ),
         0,
       );
@@ -3155,21 +3512,21 @@ app.get("/api/dashboard", async (_req, res) => {
           sum +
           safeTokenInt(
             responseRow.completion_tokens ??
-              responseRow.output_tokens ??
-              responseRow.usage?.completion_tokens,
+            responseRow.output_tokens ??
+            responseRow.usage?.completion_tokens,
           ),
         0,
       );
       const latestTotalTokens = queryResponses.reduce((sum, responseRow) => {
         const inputTokens = safeTokenInt(
           responseRow.prompt_tokens ??
-            responseRow.input_tokens ??
-            responseRow.usage?.prompt_tokens,
+          responseRow.input_tokens ??
+          responseRow.usage?.prompt_tokens,
         );
         const outputTokens = safeTokenInt(
           responseRow.completion_tokens ??
-            responseRow.output_tokens ??
-            responseRow.usage?.completion_tokens,
+          responseRow.output_tokens ??
+          responseRow.usage?.completion_tokens,
         );
         const totalTokens =
           safeTokenInt(responseRow.total_tokens ?? responseRow.usage?.total_tokens) ||
@@ -3181,13 +3538,13 @@ app.get("/api/dashboard", async (_req, res) => {
           const modelName = String(responseRow.model ?? "");
           const inputTokens = safeTokenInt(
             responseRow.prompt_tokens ??
-              responseRow.input_tokens ??
-              responseRow.usage?.prompt_tokens,
+            responseRow.input_tokens ??
+            responseRow.usage?.prompt_tokens,
           );
           const outputTokens = safeTokenInt(
             responseRow.completion_tokens ??
-              responseRow.output_tokens ??
-              responseRow.usage?.completion_tokens,
+            responseRow.output_tokens ??
+            responseRow.usage?.completion_tokens,
           );
           const costs = estimateResponseCostForServer(modelName, inputTokens, outputTokens);
           totals.inputCostUsd += costs.inputCostUsd;
@@ -3222,14 +3579,14 @@ app.get("/api/dashboard", async (_req, res) => {
       const competitorRates = competitorRatesAll.filter((entry) => !entry.isHighcharts);
       const highchartsRank = row && latestRunResponseCount > 0
         ? competitorRatesAll
-            .slice()
-            .sort((a, b) => {
-              if (b.ratePct !== a.ratePct) {
-                return b.ratePct - a.ratePct;
-              }
-              return a.entity.localeCompare(b.entity);
-            })
-            .findIndex((entry) => entry.isHighcharts) + 1
+          .slice()
+          .sort((a, b) => {
+            if (b.ratePct !== a.ratePct) {
+              return b.ratePct - a.ratePct;
+            }
+            return a.entity.localeCompare(b.entity);
+          })
+          .findIndex((entry) => entry.isHighcharts) + 1
         : null;
       const topCompetitor = competitorRates
         .slice()
@@ -3394,12 +3751,12 @@ app.get("/api/timeseries", async (req, res) => {
       // Try various field names for the raw LLM response text
       const responseText = String(
         row.response_text ??
-          row.response ??
-          row.text ??
-          row.content ??
-          row.completion ??
-          row.output ??
-          "",
+        row.response ??
+        row.text ??
+        row.content ??
+        row.completion ??
+        row.output ??
+        "",
       ).toLowerCase();
 
       const entry = byDate.get(date) ?? { total: 0, mentions: {} };

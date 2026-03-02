@@ -32,6 +32,8 @@ const SYSTEM_PROMPT =
 const USER_PROMPT_TEMPLATE =
   "Query: {query}\nList relevant libraries/tools with a short rationale for each in bullet points."
 const ANTHROPIC_API_VERSION = "2023-06-01"
+const DEFAULT_SEARCH_CONTEXT_LOCATION = "United States"
+const DEFAULT_SEARCH_CONTEXT_LANGUAGE = "en"
 
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode
@@ -208,6 +210,31 @@ function parseWebSearch(value) {
   return true
 }
 
+function resolveSearchContext(value) {
+  const raw = value && typeof value === "object" ? value : {}
+  const enabled = parseBoolean(raw.enabled, false)
+  const location =
+    typeof raw.location === "string" && raw.location.trim()
+      ? raw.location.trim()
+      : DEFAULT_SEARCH_CONTEXT_LOCATION
+  const language =
+    typeof raw.language === "string" && raw.language.trim()
+      ? raw.language.trim()
+      : DEFAULT_SEARCH_CONTEXT_LANGUAGE
+  return {
+    enabled,
+    location,
+    language,
+  }
+}
+
+function buildEffectiveQuery(query, provider, searchContext) {
+  if (provider !== "openai" || !searchContext.enabled) {
+    return query
+  }
+  return `${query} (The user's location is ${searchContext.location}. Be sure to reply in ${searchContext.language} language)`
+}
+
 function inferProviderFromModel(model) {
   const normalized = String(model || "").trim().toLowerCase()
   if (normalized.startsWith("claude") || normalized.startsWith("anthropic/")) {
@@ -299,26 +326,102 @@ function extractResponseText(responsePayload) {
   return texts.join("\n").trim()
 }
 
-function extractCitations(responsePayload) {
-  const citations = []
-  const seen = new Set()
+function normalizeCitationHost(url) {
+  if (typeof url !== "string" || !url.trim()) {
+    return ""
+  }
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, "")
+  } catch {
+    return ""
+  }
+}
 
-  const appendCitation = (candidate) => {
-    if (!candidate || typeof candidate !== "object") {
+function normalizeCitationBounds(value) {
+  if (value === null || value === undefined) {
+    return null
+  }
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) {
+    return null
+  }
+  const rounded = Math.round(parsed)
+  return rounded >= 0 ? rounded : null
+}
+
+function buildCitationRefFromCandidate(candidate, provider, sourceText = "") {
+  if (!candidate || typeof candidate !== "object") {
+    return null
+  }
+  const urlCandidate = [candidate.url, candidate.uri, candidate.href, candidate.source].find(
+    (value) => typeof value === "string" && value.trim(),
+  )
+  if (typeof urlCandidate !== "string") {
+    return null
+  }
+  const url = urlCandidate.trim()
+  const host = normalizeCitationHost(url)
+  const title =
+    typeof candidate.title === "string" && candidate.title.trim()
+      ? candidate.title.trim()
+      : host || url
+  const snippetCandidate = [candidate.snippet, candidate.text, candidate.excerpt].find(
+    (value) => typeof value === "string" && value.trim(),
+  )
+  const snippet = typeof snippetCandidate === "string" ? snippetCandidate.trim() : undefined
+  const startIndex = normalizeCitationBounds(candidate.start_index ?? candidate.startIndex)
+  const endIndex = normalizeCitationBounds(candidate.end_index ?? candidate.endIndex)
+  let anchorText = null
+  if (
+    typeof sourceText === "string" &&
+    sourceText &&
+    startIndex !== null &&
+    endIndex !== null &&
+    endIndex > startIndex &&
+    endIndex <= sourceText.length
+  ) {
+    const sliced = sourceText.slice(startIndex, endIndex).trim()
+    if (sliced) {
+      anchorText = sliced
+    }
+  }
+
+  return {
+    url,
+    title,
+    host,
+    snippet,
+    startIndex,
+    endIndex,
+    anchorText,
+    provider,
+  }
+}
+
+function normalizeCitationRefs(responsePayload, provider) {
+  const refs = []
+  const seen = new Set()
+  let nextId = 1
+
+  const appendRef = (candidate, sourceText = "") => {
+    const normalized = buildCitationRefFromCandidate(candidate, provider, sourceText)
+    if (!normalized) {
       return
     }
-    const urlCandidate = [candidate.url, candidate.uri, candidate.href, candidate.source].find(
-      (value) => typeof value === "string" && value.trim(),
-    )
-    if (typeof urlCandidate !== "string") {
+    const dedupeKey = [
+      normalized.url,
+      normalized.startIndex ?? "",
+      normalized.endIndex ?? "",
+      normalized.title.toLowerCase(),
+    ].join("|")
+    if (seen.has(dedupeKey)) {
       return
     }
-    const normalized = urlCandidate.trim()
-    if (seen.has(normalized)) {
-      return
-    }
-    seen.add(normalized)
-    citations.push(normalized)
+    seen.add(dedupeKey)
+    refs.push({
+      id: `c${nextId++}`,
+      ...normalized,
+    })
   }
 
   for (const key of ["citations", "sources", "references"]) {
@@ -327,7 +430,7 @@ function extractCitations(responsePayload) {
       continue
     }
     for (const item of topLevelValue) {
-      appendCitation(item)
+      appendRef(item)
     }
   }
 
@@ -341,17 +444,18 @@ function extractCitations(responsePayload) {
       if (!content || typeof content !== "object") {
         continue
       }
+      const sourceText = typeof content.text === "string" ? content.text : ""
       if (Array.isArray(content.citations)) {
         for (const citation of content.citations) {
-          appendCitation(citation)
+          appendRef(citation, sourceText)
         }
       }
       if (!Array.isArray(content.annotations)) {
         continue
       }
       for (const annotation of content.annotations) {
-        appendCitation(annotation)
-        appendCitation(annotation?.url_citation)
+        appendRef(annotation, sourceText)
+        appendRef(annotation?.url_citation, sourceText)
       }
     }
   }
@@ -361,9 +465,10 @@ function extractCitations(responsePayload) {
     if (!content || typeof content !== "object") {
       continue
     }
+    const sourceText = typeof content.text === "string" ? content.text : ""
     if (Array.isArray(content.citations)) {
       for (const citation of content.citations) {
-        appendCitation(citation)
+        appendRef(citation, sourceText)
       }
     }
   }
@@ -382,19 +487,48 @@ function extractCitations(responsePayload) {
       if (!chunk || typeof chunk !== "object") {
         continue
       }
-      appendCitation(chunk)
+      appendRef(chunk)
       if (chunk.web && typeof chunk.web === "object") {
-        appendCitation(chunk.web)
+        appendRef(chunk.web)
       }
     }
     const citationSources = Array.isArray(grounding.citationMetadata?.citationSources)
       ? grounding.citationMetadata.citationSources
       : []
     for (const source of citationSources) {
-      appendCitation(source)
+      appendRef(source)
     }
   }
 
+  refs.sort((left, right) => {
+    const leftPos =
+      left.endIndex === null || left.endIndex === undefined
+        ? Number.POSITIVE_INFINITY
+        : left.endIndex
+    const rightPos =
+      right.endIndex === null || right.endIndex === undefined
+        ? Number.POSITIVE_INFINITY
+        : right.endIndex
+    if (leftPos !== rightPos) return leftPos - rightPos
+    return left.url.localeCompare(right.url)
+  })
+
+  return refs.map((ref, index) => ({
+    ...ref,
+    id: `c${index + 1}`,
+  }))
+}
+
+function extractCitations(citationRefs) {
+  const citations = []
+  const seen = new Set()
+  for (const ref of citationRefs) {
+    if (!ref || typeof ref.url !== "string") continue
+    const normalized = ref.url.trim()
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    citations.push(normalized)
+  }
   return citations
 }
 
@@ -441,14 +575,14 @@ function extractTokenUsage(responsePayload) {
   }
 }
 
-async function runOpenAiPromptLabQuery({ query, model, webSearch }) {
+async function runOpenAiPromptLabQuery({ effectiveQuery, model, webSearch }) {
   const apiKey = resolveApiKeyForProvider("openai")
   const requestBody = {
     model,
     temperature: 0.7,
     input: [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: USER_PROMPT_TEMPLATE.replace("{query}", query) },
+      { role: "user", content: USER_PROMPT_TEMPLATE.replace("{query}", effectiveQuery) },
     ],
   }
   if (webSearch) {
@@ -484,14 +618,17 @@ async function runOpenAiPromptLabQuery({ query, model, webSearch }) {
     throw error
   }
 
+  const citationRefs = normalizeCitationRefs(payload, "openai")
   return {
     responseText: extractResponseText(payload),
-    citations: extractCitations(payload),
+    citationRefs,
+    citations: extractCitations(citationRefs),
+    effectiveQuery,
     tokens: extractTokenUsage(payload),
   }
 }
 
-async function runAnthropicPromptLabQuery({ query, model }) {
+async function runAnthropicPromptLabQuery({ effectiveQuery, model }) {
   const apiKey = resolveApiKeyForProvider("anthropic")
   const requestBody = {
     model,
@@ -499,7 +636,7 @@ async function runAnthropicPromptLabQuery({ query, model }) {
     temperature: 0.7,
     system: SYSTEM_PROMPT,
     messages: [
-      { role: "user", content: USER_PROMPT_TEMPLATE.replace("{query}", query) },
+      { role: "user", content: USER_PROMPT_TEMPLATE.replace("{query}", effectiveQuery) },
     ],
   }
 
@@ -533,14 +670,17 @@ async function runAnthropicPromptLabQuery({ query, model }) {
     throw error
   }
 
+  const citationRefs = normalizeCitationRefs(payload, "anthropic")
   return {
     responseText: extractResponseText(payload),
-    citations: extractCitations(payload),
+    citationRefs,
+    citations: extractCitations(citationRefs),
+    effectiveQuery,
     tokens: extractTokenUsage(payload),
   }
 }
 
-async function runGeminiPromptLabQuery({ query, model }) {
+async function runGeminiPromptLabQuery({ effectiveQuery, model }) {
   const apiKey = resolveApiKeyForProvider("google")
   const modelPath = encodeURIComponent(model)
   const url =
@@ -551,7 +691,7 @@ async function runGeminiPromptLabQuery({ query, model }) {
     contents: [
       {
         role: "user",
-        parts: [{ text: USER_PROMPT_TEMPLATE.replace("{query}", query) }],
+        parts: [{ text: USER_PROMPT_TEMPLATE.replace("{query}", effectiveQuery) }],
       },
     ],
     generationConfig: { temperature: 0.7 },
@@ -585,34 +725,40 @@ async function runGeminiPromptLabQuery({ query, model }) {
     throw error
   }
 
+  const citationRefs = normalizeCitationRefs(payload, "google")
   return {
     responseText: extractResponseText(payload),
-    citations: extractCitations(payload),
+    citationRefs,
+    citations: extractCitations(citationRefs),
+    effectiveQuery,
     tokens: extractTokenUsage(payload),
   }
 }
 
-async function runPromptLabQuery({ query, model, webSearch }) {
+async function runPromptLabQuery({ query, model, webSearch, searchContext }) {
   const provider = inferProviderFromModel(model)
+  const effectiveQuery = buildEffectiveQuery(query, provider, searchContext)
   if (provider === "anthropic") {
-    return runAnthropicPromptLabQuery({ query, model, webSearch })
+    return runAnthropicPromptLabQuery({ effectiveQuery, model, webSearch })
   }
   if (provider === "google") {
-    return runGeminiPromptLabQuery({ query, model })
+    return runGeminiPromptLabQuery({ effectiveQuery, model })
   }
-  return runOpenAiPromptLabQuery({ query, model, webSearch })
+  return runOpenAiPromptLabQuery({ effectiveQuery, model, webSearch })
 }
 
-async function runPromptLabQueryForModel({ query, model, webSearch }) {
+async function runPromptLabQueryForModel({ query, model, webSearch, searchContext }) {
   const provider = inferProviderFromModel(model)
   const modelOwner = resolveModelOwner(provider)
   const webSearchEnabled = provider === "openai" ? webSearch : false
+  const effectiveQuery = buildEffectiveQuery(query, provider, searchContext)
   const startedAt = Date.now()
   try {
     const result = await runPromptLabQuery({
       query,
       model,
       webSearch: webSearchEnabled,
+      searchContext,
     })
     return {
       ok: true,
@@ -621,6 +767,8 @@ async function runPromptLabQueryForModel({ query, model, webSearch }) {
       modelOwner,
       webSearchEnabled,
       responseText: result.responseText,
+      effectiveQuery: result.effectiveQuery,
+      citationRefs: result.citationRefs,
       citations: result.citations,
       tokens: result.tokens,
       durationMs: Date.now() - startedAt,
@@ -634,6 +782,8 @@ async function runPromptLabQueryForModel({ query, model, webSearch }) {
       modelOwner,
       webSearchEnabled,
       responseText: "",
+      effectiveQuery,
+      citationRefs: [],
       citations: [],
       tokens: {
         inputTokens: 0,
@@ -696,12 +846,14 @@ module.exports = async (req, res) => {
     const allowedModels = getAllowedModels()
     const models = resolveModels(body, allowedModels)
     const requestedWebSearch = parseWebSearch(body.webSearch)
+    const searchContext = resolveSearchContext(body.searchContext)
     const results = await Promise.all(
       models.map((modelName) =>
         runPromptLabQueryForModel({
           query,
           model: modelName,
           webSearch: requestedWebSearch,
+          searchContext,
         }),
       ),
     )
@@ -718,6 +870,8 @@ module.exports = async (req, res) => {
       provider: primaryResult?.provider ?? null,
       modelOwner: primaryResult?.modelOwner ?? null,
       webSearchEnabled: Boolean(primaryResult?.webSearchEnabled),
+      effectiveQuery: primaryResult?.effectiveQuery ?? query,
+      citationRefs: primaryResult?.citationRefs ?? [],
       responseText: primaryResult?.responseText ?? "",
       citations: primaryResult?.citations ?? [],
       durationMs: toNonNegativeInt(primaryResult?.durationMs),

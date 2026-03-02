@@ -117,7 +117,7 @@ async function listQueueRuns() {
   const restConfig = getSupabaseRestConfig()
   const runs = await supabaseRestRequest(
     restConfig,
-    '/rest/v1/benchmark_runs?select=id,run_month,model,web_search_enabled,overall_score,created_at&order=created_at.desc&limit=30',
+    '/rest/v1/benchmark_runs?select=id,run_month,model,run_kind,cohort_tag,web_search_enabled,overall_score,created_at&order=created_at.desc&limit=30',
     'Fetch benchmark runs',
   )
 
@@ -158,6 +158,8 @@ async function listQueueRuns() {
       id: runId,
       runMonth: run.run_month ? String(run.run_month) : null,
       models: run.model ? String(run.model) : null,
+      runKind: run.run_kind ? String(run.run_kind) : 'full',
+      cohortTag: run.cohort_tag ? String(run.cohort_tag) : null,
       webSearchEnabled:
         typeof run.web_search_enabled === 'boolean' ? run.web_search_enabled : null,
       overallScore:

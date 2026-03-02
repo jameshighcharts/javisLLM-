@@ -47,6 +47,10 @@ class CompetitorContext:
     competitor_id_by_name: Dict[str, str]
 
 
+class JobCancelledError(RuntimeError):
+    """Raised when a job is cancelled while being processed."""
+
+
 class BenchmarkWorker:
     def __init__(self) -> None:
         self.supabase_url = self.require_env("SUPABASE_URL")
@@ -234,6 +238,17 @@ class BenchmarkWorker:
         result = self.supabase.table("benchmark_jobs").update(payload).eq("id", job_id).execute()
         self._expect_ok(result, f"Failed to update benchmark_jobs row {job_id}")
 
+    def _delete_response(self, response_id: int) -> None:
+        result = self.supabase.table("benchmark_responses").delete().eq("id", response_id).execute()
+        self._expect_ok(result, f"Failed to delete benchmark_responses row {response_id}")
+
+    def _is_job_cancelled(self, job_id: int) -> bool:
+        latest = self._fetch_job(job_id)
+        if latest is None:
+            return True
+        status = str(latest.get("status") or "").strip().lower()
+        return status == "dead_letter"
+
     def _upsert_response(
         self,
         job: Dict[str, Any],
@@ -245,7 +260,7 @@ class BenchmarkWorker:
         completion_tokens: int,
         total_tokens: int,
         response_text: str,
-        citations: List[Dict[str, str]],
+        citations: List[Dict[str, Any]],
         error: str | None,
     ) -> int:
         payload = {
@@ -386,7 +401,10 @@ class BenchmarkWorker:
                 return {}
         return {}
 
-    def _process_job_execution(self, job: Dict[str, Any]) -> int:
+    def _process_job_execution(self, job_id: int, job: Dict[str, Any]) -> int:
+        if self._is_job_cancelled(job_id):
+            raise JobCancelledError(f"job {job_id} was cancelled before execution started")
+
         model = str(job.get("model") or "").strip()
         if not model:
             raise RuntimeError("benchmark_jobs row is missing model")
@@ -414,6 +432,9 @@ class BenchmarkWorker:
             web_search=web_search_enabled,
         )
         duration_ms = int(round((time.perf_counter() - started_at) * 1000))
+
+        if self._is_job_cancelled(job_id):
+            raise JobCancelledError(f"job {job_id} was cancelled during execution")
 
         mentions = detect_mentions(response_text, compiled_patterns)
         prompt_tokens = int(usage.get("prompt_tokens") or 0)
@@ -477,7 +498,21 @@ class BenchmarkWorker:
         )
 
         try:
-            response_id = self._process_job_execution(job)
+            response_id = self._process_job_execution(job_id, job)
+        except JobCancelledError as exc:
+            self._update_job(
+                job_id,
+                {
+                    "status": "dead_letter",
+                    "response_id": None,
+                    "completed_at": utc_now_iso(),
+                    "last_error": str(exc),
+                },
+            )
+            print(f"[worker] job {job_id} cancelled: {exc}")
+            self._archive_message(msg_id)
+            self._maybe_finalize_run(run_id)
+            return
         except Exception as exc:  # noqa: BLE001
             error_text = f"{exc.__class__.__name__}: {exc}"
             terminal = attempt_count >= max_attempts
@@ -516,6 +551,27 @@ class BenchmarkWorker:
                 self._archive_message(msg_id)
                 self._maybe_finalize_run(run_id)
 
+            return
+
+        if self._is_job_cancelled(job_id):
+            try:
+                self._delete_response(response_id)
+            except Exception as cleanup_exc:  # noqa: BLE001
+                print(
+                    f"[worker] cleanup warning for cancelled job {job_id} "
+                    f"(response_id={response_id}): {cleanup_exc}"
+                )
+            self._update_job(
+                job_id,
+                {
+                    "status": "dead_letter",
+                    "response_id": None,
+                    "completed_at": utc_now_iso(),
+                    "last_error": "Cancelled manually during execution",
+                },
+            )
+            self._archive_message(msg_id)
+            self._maybe_finalize_run(run_id)
             return
 
         self._update_job(

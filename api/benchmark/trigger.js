@@ -29,6 +29,7 @@ const FALLBACK_ALLOWED_MODELS = [
 const OUR_TERMS_DEFAULT = 'Highcharts'
 const MAX_OUR_TERMS_LENGTH = 300
 const MAX_PROMPT_LIMIT = 10000
+const ALLOWED_PROMPT_ORDERS = new Set(['default', 'newest'])
 const RUN_MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/
 const OUR_TERMS_REGEX = /^[\w\s.,&()+/\-]+$/i
 
@@ -258,6 +259,45 @@ function resolvePromptLimit(value) {
   return parsed
 }
 
+function resolvePromptOrder(value) {
+  if (value === null || value === undefined) {
+    return 'default'
+  }
+  const normalized = String(value).trim().toLowerCase()
+  if (!normalized) {
+    return 'default'
+  }
+  if (!ALLOWED_PROMPT_ORDERS.has(normalized)) {
+    const error = new Error('promptOrder must be either "default" or "newest".')
+    error.statusCode = 400
+    throw error
+  }
+  return normalized
+}
+
+function resolveCohortTag(value) {
+  if (value === null || value === undefined) {
+    return null
+  }
+  const normalized = String(value).trim().toLowerCase()
+  if (!normalized) {
+    return null
+  }
+  if (normalized.length > 120) {
+    const error = new Error('cohortTag is too long. Maximum length is 120 characters.')
+    error.statusCode = 400
+    throw error
+  }
+  if (!/^[a-z0-9:_-]+$/.test(normalized)) {
+    const error = new Error(
+      'cohortTag may only include lowercase letters, numbers, colon, underscore, and hyphen.',
+    )
+    error.statusCode = 400
+    throw error
+  }
+  return normalized
+}
+
 function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms)
@@ -336,13 +376,48 @@ async function supabaseRestRequest(config, path, method, body, contextLabel) {
   return payload
 }
 
-async function triggerViaQueue(body, models, runs, temperature, webSearch, ourTerms, runMonth, promptLimit) {
+async function ensureTaggedPromptsExist(restConfig, cohortTag) {
+  if (!cohortTag) {
+    return
+  }
+  const tagFilter = encodeURIComponent(`{${cohortTag}}`)
+  const rows = await supabaseRestRequest(
+    restConfig,
+    `/rest/v1/prompt_queries?select=id&is_active=eq.true&tags=cs.${tagFilter}&limit=1`,
+    'GET',
+    undefined,
+    'Validate cohort tag',
+  )
+  if (!Array.isArray(rows) || rows.length === 0) {
+    const error = new Error(`No active prompts match cohortTag "${cohortTag}".`)
+    error.statusCode = 400
+    throw error
+  }
+}
+
+async function triggerViaQueue(
+  body,
+  models,
+  runs,
+  temperature,
+  webSearch,
+  ourTerms,
+  runMonth,
+  promptLimit,
+  promptOrder,
+  cohortTag,
+) {
   const restConfig = getSupabaseRestConfig()
   const effectiveRunMonth = runMonth || new Date().toISOString().slice(0, 7)
+  const runKind = cohortTag ? 'cohort' : 'full'
+
+  await ensureTaggedPromptsExist(restConfig, cohortTag)
 
   const runPayload = {
     run_month: effectiveRunMonth,
     model: models.join(','),
+    run_kind: runKind,
+    cohort_tag: cohortTag,
     web_search_enabled: Boolean(webSearch),
     started_at: new Date().toISOString(),
   }
@@ -380,6 +455,8 @@ async function triggerViaQueue(body, models, runs, temperature, webSearch, ourTe
       p_temperature: temperature,
       p_web_search: webSearch,
       p_prompt_limit: promptLimit,
+      p_prompt_order: promptOrder,
+      p_prompt_tag: cohortTag,
     },
     'Enqueue benchmark jobs',
   )
@@ -397,7 +474,10 @@ async function triggerViaQueue(body, models, runs, temperature, webSearch, ourTe
     jobsEnqueued,
     models,
     promptLimit,
+    promptOrder,
     runMonth: effectiveRunMonth,
+    runKind,
+    cohortTag,
   }
 }
 
@@ -436,6 +516,8 @@ module.exports = async (req, res) => {
     const webSearch = parseWebSearch(body.webSearch)
     const runMonth = resolveRunMonth(body.runMonth)
     const promptLimit = resolvePromptLimit(body.promptLimit ?? body.prompt_limit)
+    const promptOrder = resolvePromptOrder(body.promptOrder ?? body.prompt_order)
+    const cohortTag = resolveCohortTag(body.cohortTag ?? body.cohort_tag)
 
     if (isQueueTriggerEnabled()) {
       const queueResult = await triggerViaQueue(
@@ -447,6 +529,8 @@ module.exports = async (req, res) => {
         ourTerms,
         runMonth,
         promptLimit,
+        promptOrder,
+        cohortTag,
       )
 
       return sendJson(res, 200, {
@@ -455,9 +539,18 @@ module.exports = async (req, res) => {
         jobsEnqueued: queueResult.jobsEnqueued,
         models: queueResult.models,
         promptLimit: queueResult.promptLimit,
+        promptOrder: queueResult.promptOrder,
         runMonth: queueResult.runMonth,
+        runKind: queueResult.runKind,
+        cohortTag: queueResult.cohortTag,
         message: 'Benchmark jobs enqueued.',
       })
+    }
+
+    if (cohortTag) {
+      const error = new Error('cohortTag is only supported when USE_QUEUE_TRIGGER=true.')
+      error.statusCode = 400
+      throw error
     }
 
     // Legacy GitHub Actions path (feature-flag fallback).

@@ -3,9 +3,10 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import type { ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { api } from '../api'
+import { useAuth } from './AuthProvider'
 
 // ── Header extra slot ─────────────────────────────────────────────────────────
-const HeaderExtraContext = createContext<(node: ReactNode) => void>(() => {})
+const HeaderExtraContext = createContext<(node: ReactNode) => void>(() => { })
 export function useHeaderExtra() { return useContext(HeaderExtraContext) }
 
 type NavChild = {
@@ -35,11 +36,44 @@ const NAV: NavItem[] = [
     ),
   },
   {
+    to: '/competitors',
+    label: 'Competitors',
+    icon: (
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+      </svg>
+    ),
+    children: [
+      { to: '/competitors', label: 'AI Visibility' },
+      { to: '/competitor-blogs', label: 'Blogs' },
+      { to: '/citation-links', label: 'Citation Links' },
+    ],
+  },
+  {
     to: '/prompts',
     label: 'Prompts',
     icon: (
       <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+      </svg>
+    ),
+  },
+  {
+    to: '/prompt-research',
+    label: 'Prompt Research',
+    icon: (
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M4 12h10M4 17h7" />
+      </svg>
+    ),
+  },
+  {
+    to: '/query-lab',
+    label: 'Query Lab',
+    icon: (
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M10 2v4l-5 8a4 4 0 003.38 6h7.24A4 4 0 0019 14l-5-8V2" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8 11h8" />
       </svg>
     ),
   },
@@ -54,77 +88,46 @@ const NAV: NavItem[] = [
     ),
   },
   {
-    to: '/competitors',
-    label: 'Competitors',
+    to: '/other',
+    label: 'Other',
     icon: (
       <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 12h16" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 17h16" />
       </svg>
     ),
     children: [
-      { to: '/competitors', label: 'AI Visibility' },
-      { to: '/competitor-blogs', label: 'Blogs' },
+      { to: '/logics', label: 'Appendix' },
+      { to: '/under-the-hood', label: 'Under the Hood' },
+      { to: '/okr/kr-2-1', label: 'OKRs' },
     ],
   },
   {
-    to: '/citation-links',
-    label: 'Citation Links',
-    soon: true,
+    to: '#billing',
+    label: 'Billing',
     icon: (
       <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M14.121 14.121a4 4 0 005.657 0l4-4a4 4 0 00-5.657-5.657l-1.1 1.1" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
       </svg>
     ),
-  },
-  {
-    to: '/logics',
-    label: 'Appendix',
-    icon: (
-      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M4 19.5A2.5 2.5 0 016.5 17H20" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M4 4.5A2.5 2.5 0 016.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15z" />
-      </svg>
-    ),
-  },
-  {
-    to: '/under-the-hood',
-    label: 'Under the Hood',
-    icon: (
-      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h10" />
-      </svg>
-    ),
-  },
-  {
-    to: '/okr',
-    label: 'OKRs',
-    icon: (
-      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M4 19h16" />
-        <rect x="4" y="10" width="4" height="9" rx="1" />
-        <rect x="10" y="6" width="4" height="13" rx="1" />
-        <rect x="16" y="3" width="4" height="16" rx="1" />
-      </svg>
-    ),
-    children: [
-      { to: '/okr/kr-2-1', label: 'Key Result 2.1' },
-    ],
   },
 ]
 
-const MOBILE_NAV = NAV.filter((item) => !item.soon).slice(0, 5)
+const MOBILE_NAV = NAV.filter((item) => !item.soon).slice(0, 6)
 
 const PAGE_TITLES: Record<string, string> = {
   '/dashboard': 'Dashboard',
-  '/okr': 'OKR',
+  '/okr': 'OKRs',
   '/okr/kr-2-1': 'KR 2.1: Create and launch 10 LLM-optimized comparison pages by May 31, 2026. Checklist score of +80%',
   '/okr/kr-2-3': 'OKR / KR 2.3',
-  '/runs': 'Run Benchmarks',
+  '/runs': 'Runs',
   '/prompts': 'Prompts',
+  '/prompt-research': 'Prompt Research',
+  '/query-lab': 'Query Lab',
   '/prompts/drilldown': 'Prompt Drilldown',
   '/competitors': 'Competitors',
-  '/competitor-blogs': 'Competitor Blogs',
+  '/competitor-blogs': 'Competitors / Blogs',
   '/citation-links': 'Citation Links',
   '/logics': 'Appendix',
   '/under-the-hood': 'Under the Hood',
@@ -134,7 +137,7 @@ const USING_SUPABASE =
   Boolean(import.meta.env.VITE_SUPABASE_URL) &&
   Boolean(
     import.meta.env.VITE_SUPABASE_ANON_KEY ||
-      import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+    import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
   )
 
 function ApiStatus() {
@@ -158,18 +161,24 @@ function ApiStatus() {
 export default function Layout({ children }: { children: ReactNode }) {
   const { pathname } = useLocation()
   const title = PAGE_TITLES[pathname] ?? 'Javis'
-  const onOkrPath = pathname === '/okr' || pathname.startsWith('/okr/')
-  const onCompetitorsPath = pathname === '/competitors' || pathname === '/competitor-blogs'
+  const onOtherPath =
+    pathname === '/logics' ||
+    pathname === '/under-the-hood' ||
+    pathname === '/okr' ||
+    pathname.startsWith('/okr/')
+  const onCompetitorsPath = pathname === '/competitors' || pathname === '/competitor-blogs' || pathname === '/citation-links'
   const [iconOpen, setIconOpen] = useState(false)
   const [clickCount, setClickCount] = useState(0)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
-  const [okrDesktopOpen, setOkrDesktopOpen] = useState(onOkrPath)
-  const [okrMobileOpen, setOkrMobileOpen] = useState(onOkrPath)
+  const [otherDesktopOpen, setOtherDesktopOpen] = useState(onOtherPath)
+  const [otherMobileOpen, setOtherMobileOpen] = useState(onOtherPath)
   const [competitorsDesktopOpen, setCompetitorsDesktopOpen] = useState(onCompetitorsPath)
   const [competitorsMobileOpen, setCompetitorsMobileOpen] = useState(onCompetitorsPath)
   const videoRef = useRef<HTMLVideoElement>(null)
   const [headerExtra, setHeaderExtraRaw] = useState<ReactNode>(null)
   const setHeaderExtra = useCallback((node: ReactNode) => setHeaderExtraRaw(node), [])
+  const [billingLoading, setBillingLoading] = useState(false)
+  const { user } = useAuth()
 
   const videoSrc = clickCount % 2 === 0 ? '/video.mp4' : '/video2.mp4'
 
@@ -178,11 +187,11 @@ export default function Layout({ children }: { children: ReactNode }) {
   }, [pathname])
 
   useEffect(() => {
-    if (onOkrPath) {
-      setOkrDesktopOpen(true)
-      setOkrMobileOpen(true)
+    if (onOtherPath) {
+      setOtherDesktopOpen(true)
+      setOtherMobileOpen(true)
     }
-  }, [onOkrPath])
+  }, [onOtherPath])
 
   useEffect(() => {
     if (onCompetitorsPath) {
@@ -202,6 +211,21 @@ export default function Layout({ children }: { children: ReactNode }) {
     if (videoRef.current) {
       videoRef.current.pause()
       videoRef.current.currentTime = 0
+    }
+  }
+
+  async function handleBillingClick(e: React.MouseEvent) {
+    e.preventDefault()
+    if (!user?.email || billingLoading) return
+    setBillingLoading(true)
+    try {
+      const { url } = await api.createBillingPortalSession(user.email, window.location.href)
+      if (url) window.location.href = url
+    } catch (err) {
+      console.error('Failed to load billing portal', err)
+      alert('Failed to load billing portal: ' + (err instanceof Error ? err.message : String(err)))
+    } finally {
+      setBillingLoading(false)
     }
   }
 
@@ -338,15 +362,15 @@ export default function Layout({ children }: { children: ReactNode }) {
             <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
               {NAV.map((item) => {
                 const parentActive =
-                  item.to === '/okr'
-                    ? pathname === '/okr' || pathname.startsWith('/okr/')
-                    : item.to === '/competitors'
+                  item.to === '/competitors'
                     ? pathname === '/competitors' || pathname === '/competitor-blogs'
-                    : pathname === item.to
+                    : item.to === '/other'
+                      ? onOtherPath
+                      : pathname === item.to
 
                 if (item.children) {
-                  const isOpen = item.to === '/competitors' ? competitorsMobileOpen : okrMobileOpen
-                  const setOpen = item.to === '/competitors' ? setCompetitorsMobileOpen : setOkrMobileOpen
+                  const isOpen = item.to === '/competitors' ? competitorsMobileOpen : otherMobileOpen
+                  const setOpen = item.to === '/competitors' ? setCompetitorsMobileOpen : setOtherMobileOpen
                   return (
                     <div key={item.to} className="space-y-0.5">
                       <button
@@ -385,31 +409,31 @@ export default function Layout({ children }: { children: ReactNode }) {
                       </button>
                       {isOpen
                         ? item.children.map((child) => (
-                            <NavLink
-                              key={child.to}
-                              to={child.to}
-                              style={({ isActive }) => ({
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '9px',
-                                padding: '8px 10px 8px 32px',
-                                borderRadius: '8px',
-                                fontSize: '12px',
-                                fontWeight: isActive ? '500' : '400',
-                                color: isActive ? '#FDFCF8' : '#8FBB93',
-                                background: isActive ? 'rgba(255,255,255,0.14)' : 'transparent',
-                                textDecoration: 'none',
-                                transition: 'all 0.1s',
-                              })}
-                            >
-                              <span style={{ flexShrink: 0 }}>
-                                <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                  <circle cx="12" cy="12" r="2.5" />
-                                </svg>
-                              </span>
-                              <span className="flex-1">{child.label}</span>
-                            </NavLink>
-                          ))
+                          <NavLink
+                            key={child.to}
+                            to={child.to}
+                            style={({ isActive }) => ({
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '9px',
+                              padding: '8px 10px 8px 32px',
+                              borderRadius: '8px',
+                              fontSize: '12px',
+                              fontWeight: isActive ? '500' : '400',
+                              color: isActive ? '#FDFCF8' : '#8FBB93',
+                              background: isActive ? 'rgba(255,255,255,0.14)' : 'transparent',
+                              textDecoration: 'none',
+                              transition: 'all 0.1s',
+                            })}
+                          >
+                            <span style={{ flexShrink: 0 }}>
+                              <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <circle cx="12" cy="12" r="2.5" />
+                              </svg>
+                            </span>
+                            <span className="flex-1">{child.label}</span>
+                          </NavLink>
+                        ))
                         : null}
                     </div>
                   )
@@ -419,6 +443,11 @@ export default function Layout({ children }: { children: ReactNode }) {
                   <NavLink
                     key={item.to}
                     to={item.to}
+                    onClick={(e) => {
+                      if (item.to === '#billing') {
+                        handleBillingClick(e)
+                      }
+                    }}
                     style={({ isActive }) => ({
                       display: 'flex',
                       alignItems: 'center',
@@ -499,15 +528,15 @@ export default function Layout({ children }: { children: ReactNode }) {
           <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
             {NAV.map((item) => {
               const parentActive =
-                item.to === '/okr'
-                  ? pathname === '/okr' || pathname.startsWith('/okr/')
-                  : item.to === '/competitors'
+                item.to === '/competitors'
                   ? pathname === '/competitors' || pathname === '/competitor-blogs'
-                  : pathname === item.to
+                  : item.to === '/other'
+                    ? onOtherPath
+                    : pathname === item.to
 
               if (item.children) {
-                const isOpen = item.to === '/competitors' ? competitorsDesktopOpen : okrDesktopOpen
-                const setOpen = item.to === '/competitors' ? setCompetitorsDesktopOpen : setOkrDesktopOpen
+                const isOpen = item.to === '/competitors' ? competitorsDesktopOpen : otherDesktopOpen
+                const setOpen = item.to === '/competitors' ? setCompetitorsDesktopOpen : setOtherDesktopOpen
                 return (
                   <div key={item.to} className="space-y-0.5">
                     <button
@@ -560,45 +589,45 @@ export default function Layout({ children }: { children: ReactNode }) {
                     </button>
                     {isOpen
                       ? item.children.map((child) => (
-                          <NavLink
-                            key={child.to}
-                            to={child.to}
-                            style={({ isActive }) => ({
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '9px',
-                              padding: '7px 10px 7px 30px',
-                              borderRadius: '6px',
-                              fontSize: '12px',
-                              fontWeight: isActive ? '500' : '400',
-                              color: isActive ? '#FDFCF8' : '#8FBB93',
-                              background: isActive ? 'rgba(255,255,255,0.14)' : 'transparent',
-                              textDecoration: 'none',
-                              transition: 'all 0.1s',
-                            })}
-                            onMouseEnter={(e) => {
-                              const el = e.currentTarget as HTMLAnchorElement
-                              if (!el.getAttribute('aria-current')) {
-                                el.style.color = '#C8A87A'
-                                el.style.background = 'rgba(255,255,255,0.07)'
-                              }
-                            }}
-                            onMouseLeave={(e) => {
-                              const el = e.currentTarget as HTMLAnchorElement
-                              if (!el.getAttribute('aria-current')) {
-                                el.style.color = '#8FBB93'
-                                el.style.background = 'transparent'
-                              }
-                            }}
-                          >
-                            <span style={{ flexShrink: 0 }}>
-                              <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                <circle cx="12" cy="12" r="2.5" />
-                              </svg>
-                            </span>
-                            <span className="flex-1">{child.label}</span>
-                          </NavLink>
-                        ))
+                        <NavLink
+                          key={child.to}
+                          to={child.to}
+                          style={({ isActive }) => ({
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '9px',
+                            padding: '7px 10px 7px 30px',
+                            borderRadius: '6px',
+                            fontSize: '12px',
+                            fontWeight: isActive ? '500' : '400',
+                            color: isActive ? '#FDFCF8' : '#8FBB93',
+                            background: isActive ? 'rgba(255,255,255,0.14)' : 'transparent',
+                            textDecoration: 'none',
+                            transition: 'all 0.1s',
+                          })}
+                          onMouseEnter={(e) => {
+                            const el = e.currentTarget as HTMLAnchorElement
+                            if (!el.getAttribute('aria-current')) {
+                              el.style.color = '#C8A87A'
+                              el.style.background = 'rgba(255,255,255,0.07)'
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            const el = e.currentTarget as HTMLAnchorElement
+                            if (!el.getAttribute('aria-current')) {
+                              el.style.color = '#8FBB93'
+                              el.style.background = 'transparent'
+                            }
+                          }}
+                        >
+                          <span style={{ flexShrink: 0 }}>
+                            <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <circle cx="12" cy="12" r="2.5" />
+                            </svg>
+                          </span>
+                          <span className="flex-1">{child.label}</span>
+                        </NavLink>
+                      ))
                       : null}
                   </div>
                 )
@@ -608,6 +637,11 @@ export default function Layout({ children }: { children: ReactNode }) {
                 <NavLink
                   key={item.to}
                   to={item.to}
+                  onClick={(e) => {
+                    if (item.to === '#billing') {
+                      handleBillingClick(e)
+                    }
+                  }}
                   style={({ isActive }) => ({
                     display: 'flex',
                     alignItems: 'center',
@@ -709,6 +743,11 @@ export default function Layout({ children }: { children: ReactNode }) {
               <NavLink
                 key={item.to}
                 to={item.to}
+                onClick={(e) => {
+                  if (item.to === '#billing') {
+                    handleBillingClick(e)
+                  }
+                }}
                 className="min-h-[56px] flex flex-col items-center justify-center gap-1 px-1 pt-2 pb-2"
                 style={({ isActive }) => ({
                   color: isActive ? '#2A3A2C' : '#7A8E7C',

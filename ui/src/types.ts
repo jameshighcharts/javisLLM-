@@ -135,6 +135,7 @@ export interface BenchmarkConfig {
   queryTags?: Record<string, string[]>
   competitors: string[]
   aliases: Record<string, string[]>
+  competitorCitationDomains?: Record<string, string[]>
   pausedQueries?: string[]
 }
 
@@ -261,6 +262,7 @@ export interface PromptDrilldownResponseItem {
   completionTokens?: number
   totalTokens?: number
   responseText: string
+  citationRefs: CitationRef[]
   citations: string[]
   mentions: string[]
 }
@@ -299,6 +301,8 @@ export interface PromptLabRunResponse {
   provider?: string | null
   modelOwner?: string | null
   webSearchEnabled: boolean
+  effectiveQuery?: string
+  citationRefs?: CitationRef[]
   responseText: string
   citations: string[]
   durationMs: number
@@ -315,6 +319,8 @@ export interface PromptLabRunResult {
   provider: string
   modelOwner: string
   webSearchEnabled: boolean
+  effectiveQuery?: string
+  citationRefs?: CitationRef[]
   responseText: string
   citations: string[]
   durationMs: number
@@ -336,6 +342,18 @@ export interface PromptLabRunSummary {
   totalTokens: number
 }
 
+export interface CitationRef {
+  id: string
+  url: string
+  title: string
+  host: string
+  snippet?: string
+  startIndex?: number | null
+  endIndex?: number | null
+  anchorText?: string | null
+  provider: 'openai' | 'anthropic' | 'google'
+}
+
 export interface BenchmarkWorkflowRun {
   id: number
   runNumber: number
@@ -353,6 +371,8 @@ export interface BenchmarkQueueRun {
   id: string
   runMonth: string | null
   models: string | null
+  runKind?: 'full' | 'cohort'
+  cohortTag?: string | null
   webSearchEnabled: boolean | null
   overallScore: number | null
   createdAt: string | null
@@ -386,7 +406,10 @@ export interface BenchmarkTriggerQueueResponse {
   jobsEnqueued: number
   models: string[]
   promptLimit?: number | null
+  promptOrder?: 'default' | 'newest'
   runMonth?: string
+  runKind?: 'full' | 'cohort'
+  cohortTag?: string | null
   message: string
 }
 
@@ -410,9 +433,20 @@ export type BenchmarkRunsResponse =
   | BenchmarkRunsWorkflowResponse
   | BenchmarkRunsQueueResponse
 
+export interface BenchmarkStopResponse {
+  ok: boolean
+  runId: string
+  cancelledJobs: number
+  archivedMessages: number
+  finalized: boolean
+  message: string
+}
+
 export interface BenchmarkRunCostItem {
   runId: string
   runMonth: string | null
+  runKind?: 'full' | 'cohort'
+  cohortTag?: string | null
   createdAt: string | null
   startedAt: string | null
   endedAt: string | null
@@ -442,4 +476,132 @@ export interface BenchmarkRunCostsResponse {
     estimatedTotalCostUsd: number
   }
   runs: BenchmarkRunCostItem[]
+}
+
+export interface ResearchRun {
+  id: string
+  runType: 'competitor_research' | 'sitemap_sync' | 'gap_refresh' | 'brief_generation'
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  model: string | null
+  params: Record<string, unknown>
+  stats: Record<string, unknown>
+  error: string | null
+  startedAt: string | null
+  completedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type ContentGapStatus = 'backlog' | 'in_progress' | 'published' | 'verify' | 'closed'
+
+export interface ContentGapCitation {
+  source?: string
+  title?: string
+  link: string
+  publish_date?: string | null
+}
+
+export interface ContentGapItem {
+  id: string
+  topicKey: string
+  topicLabel: string
+  promptQueryId: string | null
+  cohortTag: string | null
+  mentionDeficitScore: number
+  competitorCoverageScore: number
+  compositeScore: number
+  evidenceCount: number
+  evidenceCitations: ContentGapCitation[]
+  status: ContentGapStatus
+  linkedPageUrl: string | null
+  briefMarkdown: string | null
+  briefChecklist: string[]
+  briefCitations: Array<{ title?: string; url: string; note?: string }>
+  briefModel: string | null
+  briefGeneratedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PromptResearchCohort {
+  id: string
+  tag: string
+  displayName: string
+  baselineRunId: string
+  baselineLockedAt: string
+  targetPp: number
+  targetWeeks: number
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PromptResearchProgress {
+  cohort: {
+    id: string
+    tag: string
+    displayName: string
+    baselineRunId: string
+    baselineLockedAt: string
+    targetPp: number
+    targetWeeks: number
+    isActive: boolean
+  }
+  promptCount: number
+  baselineRate: number | null
+  currentRate: number | null
+  currentRunId: string | null
+  upliftPp: number | null
+  progressPct: number
+  dueDate: string | null
+  trend: Array<{
+    runId: string | null
+    createdAt: string | null
+    metric: number | null
+  }>
+}
+
+export interface BrandContentPage {
+  id: string
+  url: string
+  canonicalUrl: string | null
+  title: string | null
+  h1: string | null
+  description: string | null
+  wordCount: number
+  lastmod: string | null
+  contentHash: string | null
+  crawlStatus: 'ok' | 'error'
+  metadata: Record<string, unknown>
+  lastCrawledAt: string | null
+}
+
+export interface CitationLinksRunOption {
+  id: string
+  runMonth: string | null
+  createdAt: string | null
+  webSearchEnabled: boolean | null
+}
+
+export interface CitationLinksSourceStat {
+  key: string
+  host: string
+  title: string
+  primaryUrl: string
+  citationCount: number
+  responseCount: number
+  uniqueUrlCount: number
+  providers: string[]
+}
+
+export interface CitationLinksResponse {
+  generatedAt: string
+  runId: string | null
+  runMonth: string | null
+  availableRuns: CitationLinksRunOption[]
+  totalResponses: number
+  responsesWithCitations: number
+  totalCitations: number
+  uniqueSources: number
+  sources: CitationLinksSourceStat[]
 }
