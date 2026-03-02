@@ -103,15 +103,6 @@ const NAV: NavItem[] = [
       { to: '/okr/kr-2-1', label: 'OKRs' },
     ],
   },
-  {
-    to: '#billing',
-    label: 'Billing',
-    icon: (
-      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-      </svg>
-    ),
-  },
 ]
 
 const MOBILE_NAV = NAV.filter((item) => !item.soon).slice(0, 6)
