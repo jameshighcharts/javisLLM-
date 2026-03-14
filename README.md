@@ -117,6 +117,7 @@ Workflow file used by `/runs` trigger:
 The queue worker is intended to run on Railway from the repo root. This repo now includes:
 - `/Users/jamesm/projects/easy_llm_benchmarker/Procfile` -> `worker: python -m worker.benchmark_worker`
 - `/Users/jamesm/projects/easy_llm_benchmarker/.python-version` -> `3.11`
+- `/Users/jamesm/projects/easy_llm_benchmarker/main.py` -> fallback entrypoint to the same worker if Railpack falls back to root-file auto-detection
 
 That gives Railpack an explicit start command instead of relying on `main.py` / `app.py` auto-detection.
 
