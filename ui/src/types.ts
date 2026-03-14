@@ -305,6 +305,7 @@ export interface PromptLabRunResponse {
   citationRefs?: CitationRef[]
   responseText: string
   citations: string[]
+  rawHtml?: string
   durationMs: number
   tokens?: {
     inputTokens: number
@@ -323,6 +324,7 @@ export interface PromptLabRunResult {
   citationRefs?: CitationRef[]
   responseText: string
   citations: string[]
+  rawHtml?: string
   durationMs: number
   error: string | null
   tokens: {
@@ -351,7 +353,7 @@ export interface CitationRef {
   startIndex?: number | null
   endIndex?: number | null
   anchorText?: string | null
-  provider: 'openai' | 'anthropic' | 'google'
+  provider: 'openai' | 'anthropic' | 'google' | 'chatgpt-web'
 }
 
 export interface BenchmarkWorkflowRun {
@@ -604,4 +606,39 @@ export interface CitationLinksResponse {
   totalCitations: number
   uniqueSources: number
   sources: CitationLinksSourceStat[]
+}
+
+export interface AskillQueryStat {
+  queryId: string
+  queryText: string
+  responseCount: number
+  mentionCount: number
+  mentionRatePct: number
+  totalCitations: number
+  uniqueSources: number
+}
+
+export interface AskillUrlStat {
+  url: string
+  title: string
+  host: string
+  citationCount: number
+  responseCount: number
+  providers: string[]
+}
+
+export interface AskillResponse {
+  generatedAt: string
+  runId: string | null
+  runMonth: string | null
+  availableRuns: CitationLinksRunOption[]
+  highchartsName: string
+  totalResponses: number
+  highchartsMentions: number
+  mentionRatePct: number
+  totalCitations: number
+  uniqueUrls: number
+  uniqueDomains: number
+  queries: AskillQueryStat[]
+  urls: AskillUrlStat[]
 }

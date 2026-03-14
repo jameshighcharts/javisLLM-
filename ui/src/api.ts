@@ -5,6 +5,8 @@ import type {
   BenchmarkRunCostsResponse,
   BenchmarkTriggerResponse,
   BenchmarkConfig,
+  AskillResponse,
+  AskillUrlStat,
   CitationRef,
   CitationLinksResponse,
   ContentGapItem,
@@ -426,6 +428,7 @@ function normalizeCitationProvider(
     .trim()
     .toLowerCase()
   if (!normalized) return fallback
+  if (normalized.includes('chatgpt-web')) return 'chatgpt-web'
   if (normalized.includes('anthropic') || normalized.includes('claude')) return 'anthropic'
   if (normalized.includes('google') || normalized.includes('gemini')) return 'google'
   if (normalized.includes('openai') || normalized.includes('chatgpt') || normalized.includes('gpt')) {
@@ -823,6 +826,7 @@ function slugifyEntity(value: string): string {
 function inferModelOwnerFromModel(model: string): string {
   const normalized = model.trim().toLowerCase()
   if (!normalized) return 'Unknown'
+  if (normalized === 'chatgpt-web') return 'OpenAI'
   if (
     normalized.startsWith('gpt') ||
     normalized.startsWith('o1') ||
@@ -5243,6 +5247,298 @@ async function fetchCitationLinksFromSupabase(options: {
   }
 }
 
+function aggregateUrlStats(
+  refs: Array<{ responseId: string; citationRefs: CitationRef[] }>,
+): AskillUrlStat[] {
+  type Bucket = {
+    url: string
+    title: string
+    host: string
+    citationCount: number
+    responseIds: Set<string>
+    providers: Set<string>
+  }
+  const buckets = new Map<string, Bucket>()
+
+  for (const { responseId, citationRefs } of refs) {
+    for (const ref of citationRefs) {
+      const url = ref.url.trim()
+      if (!url) continue
+      let b = buckets.get(url)
+      if (!b) {
+        b = {
+          url,
+          title: ref.title?.trim() || ref.host || url,
+          host: ref.host || url,
+          citationCount: 0,
+          responseIds: new Set(),
+          providers: new Set(),
+        }
+        buckets.set(url, b)
+      }
+      b.citationCount += 1
+      b.responseIds.add(responseId)
+      if (ref.provider) b.providers.add(ref.provider)
+      // prefer a richer title if we get one later
+      if (ref.title?.trim() && (b.title === b.host || b.title === b.url)) {
+        b.title = ref.title.trim()
+      }
+    }
+  }
+
+  return [...buckets.values()]
+    .map((b) => ({
+      url: b.url,
+      title: b.title,
+      host: b.host,
+      citationCount: b.citationCount,
+      responseCount: b.responseIds.size,
+      providers: [...b.providers].sort(),
+    }))
+    .sort((a, b) => b.citationCount - a.citationCount || b.responseCount - a.responseCount || a.url.localeCompare(b.url))
+}
+
+async function fetchAskillFromSupabase(options: {
+  runId?: string
+  providers?: string[]
+} = {}): Promise<AskillResponse> {
+  if (!supabase) {
+    throw new Error('Supabase is not configured.')
+  }
+
+  // Fetch recent runs
+  const runsResult = await supabase
+    .from('benchmark_runs')
+    .select('id,run_month,web_search_enabled,created_at')
+    .order('created_at', { ascending: false })
+    .limit(20)
+
+  if (runsResult.error) {
+    throw asError(runsResult.error, 'Failed to load benchmark_runs for Askill')
+  }
+
+  const runsRaw = (runsResult.data ?? []) as Array<{
+    id: string
+    run_month: string | null
+    web_search_enabled: boolean | null
+    created_at: string | null
+  }>
+
+  const availableRuns = runsRaw.map((r) => ({
+    id: r.id,
+    runMonth: r.run_month,
+    createdAt: r.created_at,
+    webSearchEnabled: r.web_search_enabled,
+  }))
+
+  const targetRunId = options.runId ?? availableRuns[0]?.id ?? null
+
+  const empty: AskillResponse = {
+    generatedAt: new Date().toISOString(),
+    runId: null,
+    runMonth: null,
+    availableRuns,
+    highchartsName: 'Highcharts',
+    totalResponses: 0,
+    highchartsMentions: 0,
+    mentionRatePct: 0,
+    totalCitations: 0,
+    uniqueUrls: 0,
+    uniqueDomains: 0,
+    queries: [],
+    urls: [],
+  }
+
+  if (!targetRunId) return empty
+
+  const targetRun = availableRuns.find((r) => r.id === targetRunId) ?? null
+
+  // Fetch Highcharts competitor (primary)
+  const competitorResult = await supabase
+    .from('competitors')
+    .select('id,name')
+    .eq('is_primary', true)
+    .limit(1)
+
+  if (competitorResult.error) {
+    throw asError(competitorResult.error, 'Failed to load primary competitor for Askill')
+  }
+
+  const hcRow = ((competitorResult.data ?? [])[0] ?? null) as { id: string; name: string } | null
+  if (!hcRow) {
+    return { ...empty, runId: targetRunId, runMonth: targetRun?.runMonth ?? null }
+  }
+
+  // Fetch all responses for the run
+  const responseRows: CitationLinksResponseRow[] = []
+  let offset = 0
+  while (true) {
+    const result = await supabase
+      .from('benchmark_responses')
+      .select('id,run_id,query_id,model,provider,model_owner,web_search_enabled,citations,error')
+      .eq('run_id', targetRunId)
+      .range(offset, offset + SUPABASE_PAGE_SIZE - 1)
+
+    if (result.error) {
+      if (isMissingRelation(result.error)) break
+      throw asError(result.error, 'Failed to load benchmark_responses for Askill')
+    }
+
+    const page = (result.data ?? []) as Array<CitationLinksResponseRow & { query_id: string | null; error: string | null }>
+    if (page.length === 0) break
+    responseRows.push(...(page as CitationLinksResponseRow[]))
+    offset += page.length
+    if (page.length < SUPABASE_PAGE_SIZE) break
+  }
+
+  const selectedProviderSet = new Set(normalizeSelectedProviders(options.providers ?? []))
+  const filteredRows =
+    selectedProviderSet.size > 0
+      ? responseRows.filter((row) => responseMatchesProviderFilter(row, selectedProviderSet))
+      : responseRows
+
+  const rowsExtended = filteredRows as Array<CitationLinksResponseRow & { query_id: string | null; error: string | null }>
+
+  // Fetch response_mentions for Highcharts
+  const responseIds = rowsExtended.map((r) => Number(r.id))
+  const mentionedResponseIds = new Set<number>()
+
+  if (responseIds.length > 0) {
+    for (let i = 0; i < responseIds.length; i += SUPABASE_IN_CLAUSE_CHUNK_SIZE) {
+      const chunk = responseIds.slice(i, i + SUPABASE_IN_CLAUSE_CHUNK_SIZE)
+      let mOffset = 0
+      while (true) {
+        const mResult = await supabase
+          .from('response_mentions')
+          .select('response_id,mentioned')
+          .in('response_id', chunk)
+          .eq('competitor_id', hcRow.id)
+          .eq('mentioned', true)
+          .range(mOffset, mOffset + SUPABASE_PAGE_SIZE - 1)
+
+        if (mResult.error) {
+          if (isMissingRelation(mResult.error)) break
+          throw asError(mResult.error, 'Failed to load response_mentions for Askill')
+        }
+
+        const page = (mResult.data ?? []) as Array<{ response_id: number; mentioned: boolean }>
+        if (page.length === 0) break
+        page.forEach((row) => {
+          if (row.mentioned) mentionedResponseIds.add(Number(row.response_id))
+        })
+        mOffset += page.length
+        if (page.length < SUPABASE_PAGE_SIZE) break
+      }
+    }
+  }
+
+  // Fetch query texts
+  const queryIds = [...new Set(rowsExtended.map((r) => r.query_id).filter(Boolean) as string[])]
+  const queryTextMap = new Map<string, string>()
+
+  if (queryIds.length > 0) {
+    for (let i = 0; i < queryIds.length; i += SUPABASE_IN_CLAUSE_CHUNK_SIZE) {
+      const chunk = queryIds.slice(i, i + SUPABASE_IN_CLAUSE_CHUNK_SIZE)
+      const qResult = await supabase.from('prompt_queries').select('id,query_text').in('id', chunk)
+      if (!qResult.error) {
+        const rows = (qResult.data ?? []) as Array<{ id: string; query_text: string }>
+        rows.forEach((row) => queryTextMap.set(row.id, row.query_text))
+      }
+    }
+  }
+
+  // Parse citation refs once per HC-mentioned response
+  const hcCitationInputs: Array<{ responseId: string; citationRefs: CitationRef[] }> = []
+
+  for (const row of rowsExtended) {
+    if (!mentionedResponseIds.has(Number(row.id))) continue
+    const provider = normalizeCitationProvider(
+      String(row.provider || row.model_owner || row.model || ''),
+      'openai',
+    )
+    hcCitationInputs.push({
+      responseId: String(row.id),
+      citationRefs: normalizeCitationRefs(row.citations, provider),
+    })
+  }
+
+  // Per-query stats
+  type QueryAccum = {
+    queryId: string
+    queryText: string
+    responseCount: number
+    mentionCount: number
+    totalCitations: number
+    urlSet: Set<string>
+  }
+
+  const queryMap = new Map<string, QueryAccum>()
+
+  for (const row of rowsExtended) {
+    const qid = row.query_id ?? '__unknown__'
+    if (!queryMap.has(qid)) {
+      queryMap.set(qid, {
+        queryId: qid,
+        queryText: queryTextMap.get(qid) ?? qid,
+        responseCount: 0,
+        mentionCount: 0,
+        totalCitations: 0,
+        urlSet: new Set(),
+      })
+    }
+    const accum = queryMap.get(qid)!
+    accum.responseCount += 1
+
+    if (mentionedResponseIds.has(Number(row.id))) {
+      accum.mentionCount += 1
+      const provider = normalizeCitationProvider(
+        String(row.provider || row.model_owner || row.model || ''),
+        'openai',
+      )
+      const refs = normalizeCitationRefs(row.citations, provider)
+      accum.totalCitations += refs.length
+      refs.forEach((ref) => accum.urlSet.add(ref.url.trim()))
+    }
+  }
+
+  const queries: import('./types').AskillQueryStat[] = [...queryMap.values()]
+    .map((accum) => ({
+      queryId: accum.queryId,
+      queryText: accum.queryText,
+      responseCount: accum.responseCount,
+      mentionCount: accum.mentionCount,
+      mentionRatePct: accum.responseCount > 0
+        ? Math.round((accum.mentionCount / accum.responseCount) * 100)
+        : 0,
+      totalCitations: accum.totalCitations,
+      uniqueSources: accum.urlSet.size,
+    }))
+    .sort((a, b) => b.mentionCount - a.mentionCount || a.queryText.localeCompare(b.queryText))
+
+  // URL-level aggregation from HC-mentioned responses
+  const urls = aggregateUrlStats(hcCitationInputs)
+  const totalCitations = urls.reduce((sum, u) => sum + u.citationCount, 0)
+  const uniqueDomains = new Set(urls.map((u) => u.host)).size
+
+  return {
+    generatedAt: new Date().toISOString(),
+    runId: targetRunId,
+    runMonth: targetRun?.runMonth ?? null,
+    availableRuns,
+    highchartsName: hcRow.name,
+    totalResponses: filteredRows.length,
+    highchartsMentions: mentionedResponseIds.size,
+    mentionRatePct: filteredRows.length > 0
+      ? Math.round((mentionedResponseIds.size / filteredRows.length) * 100)
+      : 0,
+    totalCitations,
+    uniqueUrls: urls.length,
+    uniqueDomains,
+    queries,
+    urls,
+  }
+}
+
 export const api = {
   async health() {
     if (hasSupabaseConfig()) {
@@ -5343,6 +5639,7 @@ export const api = {
       models?: string[]
       selectAllModels?: boolean
       webSearch?: boolean
+      includeRawHtml?: boolean
       searchContext?: {
         enabled?: boolean
         location?: string
@@ -5709,5 +6006,12 @@ export const api = {
       return fetchCitationLinksFromSupabase(options)
     }
     throw new Error('Citation links require a Supabase connection.')
+  },
+
+  async askill(options: { runId?: string; providers?: string[] } = {}): Promise<AskillResponse> {
+    if (hasSupabaseConfig()) {
+      return fetchAskillFromSupabase(options)
+    }
+    throw new Error('Askill requires a Supabase connection.')
   },
 }

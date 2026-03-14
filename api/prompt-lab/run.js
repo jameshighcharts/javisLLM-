@@ -28,9 +28,16 @@ const FALLBACK_ALLOWED_MODELS = [
 ]
 const QUERY_MAX_LENGTH = 600
 const SYSTEM_PROMPT =
-  "You are a helpful assistant. Answer with concise bullets and include direct library names."
+  "You are a research assistant for software and tooling questions. Produce clear markdown with short section headers, ranked options, concise rationale, and practical trade-offs. When web search is available, ground factual claims in current web sources."
 const USER_PROMPT_TEMPLATE =
-  "Query: {query}\nList relevant libraries/tools with a short rationale for each in bullet points."
+  [
+    "Query: {query}",
+    "Answer with this structure:",
+    "1) Top options (ranked)",
+    "2) Why each option fits",
+    "3) Trade-offs or caveats",
+    "Keep bullets concise and name concrete libraries/tools.",
+  ].join("\n")
 const ANTHROPIC_API_VERSION = "2023-06-01"
 const DEFAULT_SEARCH_CONTEXT_LOCATION = "United States"
 const DEFAULT_SEARCH_CONTEXT_LANGUAGE = "en"
@@ -233,6 +240,14 @@ function buildEffectiveQuery(query, provider, searchContext) {
     return query
   }
   return `${query} (The user's location is ${searchContext.location}. Be sure to reply in ${searchContext.language} language)`
+}
+
+function buildPromptLabUserPrompt(effectiveQuery, enforceWebGrounding) {
+  const base = USER_PROMPT_TEMPLATE.replace("{query}", effectiveQuery)
+  if (!enforceWebGrounding) {
+    return base
+  }
+  return `${base}\nUse web search before finalizing and include source-grounded statements.`
 }
 
 function inferProviderFromModel(model) {
@@ -577,12 +592,13 @@ function extractTokenUsage(responsePayload) {
 
 async function runOpenAiPromptLabQuery({ effectiveQuery, model, webSearch }) {
   const apiKey = resolveApiKeyForProvider("openai")
+  const userPrompt = buildPromptLabUserPrompt(effectiveQuery, webSearch)
   const requestBody = {
     model,
     temperature: 0.7,
     input: [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: USER_PROMPT_TEMPLATE.replace("{query}", effectiveQuery) },
+      { role: "user", content: userPrompt },
     ],
   }
   if (webSearch) {
@@ -630,13 +646,14 @@ async function runOpenAiPromptLabQuery({ effectiveQuery, model, webSearch }) {
 
 async function runAnthropicPromptLabQuery({ effectiveQuery, model }) {
   const apiKey = resolveApiKeyForProvider("anthropic")
+  const userPrompt = buildPromptLabUserPrompt(effectiveQuery, false)
   const requestBody = {
     model,
     max_tokens: 1024,
     temperature: 0.7,
     system: SYSTEM_PROMPT,
     messages: [
-      { role: "user", content: USER_PROMPT_TEMPLATE.replace("{query}", effectiveQuery) },
+      { role: "user", content: userPrompt },
     ],
   }
 
@@ -686,12 +703,13 @@ async function runGeminiPromptLabQuery({ effectiveQuery, model }) {
   const url =
     `${GEMINI_GENERATE_CONTENT_API_ROOT}/${modelPath}:generateContent` +
     `?key=${encodeURIComponent(apiKey)}`
+  const userPrompt = buildPromptLabUserPrompt(effectiveQuery, false)
   const requestBody = {
     systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
     contents: [
       {
         role: "user",
-        parts: [{ text: USER_PROMPT_TEMPLATE.replace("{query}", effectiveQuery) }],
+        parts: [{ text: userPrompt }],
       },
     ],
     generationConfig: { temperature: 0.7 },

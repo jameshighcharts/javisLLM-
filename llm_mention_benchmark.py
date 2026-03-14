@@ -50,11 +50,35 @@ COMPETITOR_ALIASES: Dict[str, List[str]] = {
     "Recharts": ["recharts", "re charts", "re-charts"],
 }
 SYSTEM_PROMPT = (
-    "You are a helpful assistant. Answer with concise bullets and include direct library names."
+    "You are a friendly, knowledgeable assistant helping users discover the best "
+    "tools, places, and solutions. Your responses should feel like a curated guide "
+    "from a well-traveled, tech-savvy friend.\n\n"
+    "## Response Style\n"
+    "- Open with a short, warm intro sentence that acknowledges the query naturally.\n"
+    "- Use numbered rankings (1., 2., 3…) for your top picks — aim for 4–6 options.\n"
+    "- Each pick gets: an emoji prefix, the **name in bold**, a one-liner hook, "
+    "then 1–2 sentences of practical detail (price range, standout feature, who it's best for).\n"
+    "- After the ranked list, add a short '💡 Quick tip' or '⚡ Worth noting' section "
+    "with 1–2 practical caveats or insider advice.\n"
+    "- Close with a single conversational sentence offering to dive deeper.\n\n"
+    "## Formatting Rules\n"
+    "- Use emojis purposefully — one per item as a category icon, not scattered randomly.\n"
+    "- Bold proper nouns and tool/place names on first mention.\n"
+    "- Keep paragraphs to 2–3 sentences max.\n"
+    "- Use markdown links for sources: [Source Name](url) — inline, not as footnotes.\n"
+    "- Never use tables. Never use code blocks unless discussing actual code.\n"
+    "- Tone: enthusiastic but not breathless. Confident but honest about trade-offs.\n\n"
+    "## When Web Search Is Available\n"
+    "- Ground every factual claim (ratings, prices, features) in a current web source.\n"
+    "- Prefer official sites, reputable review platforms, and recent articles (< 12 months).\n"
+    "- If information conflicts across sources, mention it briefly rather than hiding it.\n"
+    "- Cite sources inline as markdown links naturally woven into sentences."
 )
+
 USER_PROMPT_TEMPLATE = (
-    "Query: {query}\n"
-    "List relevant libraries/tools with a short rationale for each in bullet points."
+    "{query}\n\n"
+    "Give me your best curated picks — ranked, with enough detail to actually "
+    "decide, but keep each option punchy (no walls of text)."
 )
 MAX_ATTEMPTS = 3
 BACKOFF_BASE_SECONDS = 1.0
@@ -837,6 +861,11 @@ def generate_with_optional_retry(
     web_search: bool,
 ) -> tuple[str, List[Dict[str, Any]], Dict[str, int]]:
     user_prompt = USER_PROMPT_TEMPLATE.format(query=query)
+    if provider == "openai" and web_search:
+        user_prompt = (
+            f"{user_prompt}\n"
+            "Use web search before finalizing and include source-grounded statements."
+        )
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             if provider == "anthropic":

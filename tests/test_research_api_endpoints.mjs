@@ -264,11 +264,19 @@ test('prompt lab run returns effectiveQuery + citationRefs while keeping legacy 
         const target = String(url)
         assert.equal(target, 'https://api.openai.com/v1/responses')
         const payload = JSON.parse(String(options.body ?? '{}'))
+        const systemContent = payload?.input?.[0]?.content ?? ''
         const userContent = payload?.input?.[1]?.content ?? ''
+        assert.match(
+          systemContent,
+          /You are a research assistant for software and tooling questions\./,
+        )
         assert.match(
           userContent,
           /\(The user's location is United States\. Be sure to reply in en language\)/,
         )
+        assert.match(userContent, /Answer with this structure:/)
+        assert.match(userContent, /1\) Top options \(ranked\)/)
+        assert.match(userContent, /Use web search before finalizing and include source-grounded statements\./)
         return createJsonResponse({
           output_text: 'Highcharts supports WCAG and keyboard navigation.',
           output: [

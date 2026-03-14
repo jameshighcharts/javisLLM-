@@ -593,9 +593,11 @@ function RunHistoryTable({ runPoints }: { runPoints: PromptDrilldownRunPoint[] }
 function ResponseExplorer({
   responses,
   runOptions,
+  promptQuery,
 }: {
   responses: PromptDrilldownResponseItem[]
   runOptions: PromptDrilldownRunPoint[]
+  promptQuery: string
 }) {
   const [selectedRunId, setSelectedRunId] = useState<string>('all')
   const [selectedOwner, setSelectedOwner] = useState<string>('all')
@@ -860,6 +862,8 @@ function ResponseExplorer({
               >
                 {isExpanded ? (
                   <CitationRichOutput
+                    variant="search-cache"
+                    query={promptQuery}
                     text={response.responseText}
                     citationRefs={response.citationRefs}
                     citations={response.citations}
@@ -1438,7 +1442,11 @@ export default function PromptDrilldown() {
               ))}
             </div>
           ) : (
-            <ResponseExplorer responses={data.responses} runOptions={data.runPoints} />
+            <ResponseExplorer
+              responses={data.responses}
+              runOptions={data.runPoints}
+              promptQuery={data.prompt.query}
+            />
           )}
         </div>
       </div>

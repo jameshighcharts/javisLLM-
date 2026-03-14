@@ -19,3 +19,4 @@ firebase-debug.log
 
 # Runtime artifacts
 output/logs/
+output/supabase_legacy_dump/

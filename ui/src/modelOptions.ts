@@ -15,9 +15,24 @@ export const BENCHMARK_MODEL_OPTIONS: BenchmarkModelOption[] = [
 
 export const BENCHMARK_MODEL_VALUES = BENCHMARK_MODEL_OPTIONS.map((option) => option.value)
 
+const SHOW_LOCAL_CHATGPT_WEB_MODEL =
+  import.meta.env.DEV ||
+  (typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'))
+
+export const PROMPT_LAB_MODEL_OPTIONS: BenchmarkModelOption[] = [
+  ...BENCHMARK_MODEL_OPTIONS,
+  ...(SHOW_LOCAL_CHATGPT_WEB_MODEL
+    ? [{ value: 'chatgpt-web', label: 'ChatGPT Web UI', owner: 'OpenAI' as const }]
+    : []),
+]
+
+export const PROMPT_LAB_MODEL_VALUES = PROMPT_LAB_MODEL_OPTIONS.map((option) => option.value)
+
 export function inferModelOwnerFromModelId(model: string): string {
   const normalized = model.trim().toLowerCase()
   if (!normalized) return 'Unknown'
+  if (normalized === 'chatgpt-web') return 'OpenAI'
   if (
     normalized.startsWith('gpt') ||
     normalized.startsWith('o1') ||

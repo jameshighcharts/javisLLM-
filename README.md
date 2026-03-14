@@ -83,10 +83,20 @@ To run real prompt/scoring runs from the app, open `/runs`:
 - Paste `BENCHMARK_TRIGGER_TOKEN` into the token field (stored in browser session storage only)
 
 To run a one-off prompt test in Query Lab, open `/prompts`:
-- Uses `/api/prompt-lab/run` (OpenAI Responses API, Anthropic Messages API, or Gemini GenerateContent API)
+- Uses `/api/prompt-lab/run` (OpenAI Responses API, Anthropic Messages API, Gemini GenerateContent API, or local ChatGPT web scraper)
 - Uses selected model + web search toggle (web search currently applies to OpenAI models)
 - Displays mention detection across tracked entities
 - No trigger token required
+
+Local-only ChatGPT web scraper setup (not available on Vercel):
+- `ENABLE_CHATGPT_WEB_SCRAPER=true`
+- `CHATGPT_SESSION_COOKIE=...` (semicolon-separated cookie header copied from a logged-in `chatgpt.com` browser session)
+- Optional: `CHATGPT_WEB_HEADLESS=true` (default true)
+- Optional: `CHATGPT_WEB_TIMEOUT_MS=90000`
+- Optional: `CHATGPT_WEB_SLOW_MO_MS=0`
+- Supports model id `chatgpt-web` in Query Lab and `/api/prompt-lab/run`.
+- Debug endpoint: `POST /api/prompt-lab/chatgpt-web` with `{ \"query\": \"...\", \"includeRawHtml\": true }`.
+- Compliance note: automating ChatGPT web UI may violate OpenAI Terms of Service. Keep this internal and low-volume only.
 
 ### GitHub Actions secrets (required for `/runs`)
 
@@ -101,6 +111,28 @@ Workflow file used by `/runs` trigger:
 - `/Users/jamesm/projects/easy_llm_benchmarker/.github/workflows/run-benchmark.yml`
 - Helper script used by workflow:
   - `/Users/jamesm/projects/easy_llm_benchmarker/scripts/pull_config_from_supabase.py`
+
+### Railway worker deployment
+
+The queue worker is intended to run on Railway from the repo root. This repo now includes:
+- `/Users/jamesm/projects/easy_llm_benchmarker/Procfile` -> `worker: python -m worker.benchmark_worker`
+- `/Users/jamesm/projects/easy_llm_benchmarker/.python-version` -> `3.11`
+
+That gives Railpack an explicit start command instead of relying on `main.py` / `app.py` auto-detection.
+
+Required Railway env vars:
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `GEMINI_API_KEY`
+
+Optional worker tuning:
+- `WORKER_QUEUE_NAME`
+- `WORKER_VT_SECONDS`
+- `WORKER_POLL_QTY`
+- `WORKER_EMPTY_SLEEP_SECONDS`
+- `WORKER_IDLE_EXIT_SECONDS`
 
 ## Configure inputs (no code edits needed)
 
@@ -126,6 +158,7 @@ Edit `/Users/jamesm/projects/easy_llm_benchmarker/.env.monthly` and set:
 - `GSHEET_WEBAPP_SECRET`
 - `GSHEET_TAB_NAME`
 - `GSHEET_COMPETITOR_TAB_NAME`
+- Optional: `SF_TARGET_ORG` (Salesforce org alias for SOQL helper script)
 
 Run benchmark only:
 ```bash
@@ -172,6 +205,55 @@ Outputs:
 - `/Users/jamesm/projects/easy_llm_benchmarker/output/looker_studio_table_paste.csv`
 - `/Users/jamesm/projects/easy_llm_benchmarker/output/looker_kpi.csv`
 - `/Users/jamesm/projects/easy_llm_benchmarker/output/looker_competitor_chart.csv`
+
+## Salesforce SOQL via `sf` CLI (optional)
+
+Yes, you can query Salesforce directly from this project with SOQL.
+
+1) Install Salesforce CLI (`sf`) if not already installed:
+- macOS (Homebrew): `brew install sf`
+- Or installer: https://developer.salesforce.com/tools/salesforcecli
+
+2) Authenticate your org and set alias:
+```bash
+sf org login web --alias my-sandbox --set-default
+```
+
+3) Add alias to local env (optional but recommended):
+```bash
+# in /Users/jamesm/projects/easy_llm_benchmarker/.env.monthly
+SF_TARGET_ORG=my-sandbox
+```
+
+4) Run a SOQL query through the repo helper:
+```bash
+cd /Users/jamesm/projects/easy_llm_benchmarker
+python3 /Users/jamesm/projects/easy_llm_benchmarker/scripts/fetch_salesforce_soql.py \
+  --query "SELECT Id, Name FROM Account LIMIT 20"
+```
+
+5) Save output JSON under `output/`:
+```bash
+cd /Users/jamesm/projects/easy_llm_benchmarker
+python3 /Users/jamesm/projects/easy_llm_benchmarker/scripts/fetch_salesforce_soql.py \
+  --query "SELECT Id, Name FROM Account LIMIT 20" \
+  --output salesforce/accounts.json
+```
+
+Useful flags:
+- `--target-org my-org` to override `SF_TARGET_ORG`
+- `--query-file /path/to/query.soql` to keep long SOQL in a file
+- `--use-tooling-api` for metadata/object model queries
+- `--bulk --wait 10` for larger result sets
+- `--raw` to print full raw `sf --json` payload
+
+Direct CLI equivalent (without helper script):
+```bash
+sf data query \
+  --target-org my-sandbox \
+  --query "SELECT Id, Name FROM Account LIMIT 20" \
+  --result-format json
+```
 
 ## Monthly automation
 

@@ -47,6 +47,7 @@ const NAV: NavItem[] = [
       { to: '/competitors', label: 'AI Visibility' },
       { to: '/competitor-blogs', label: 'Blogs' },
       { to: '/citation-links', label: 'Citation Links' },
+      { to: '/askill', label: 'Askill' },
     ],
   },
   {
@@ -100,6 +101,7 @@ const NAV: NavItem[] = [
     children: [
       { to: '/logics', label: 'Appendix' },
       { to: '/under-the-hood', label: 'Under the Hood' },
+      { to: '/product-mentions', label: 'Product Mentions' },
       { to: '/okr/kr-2-1', label: 'OKRs' },
     ],
   },
@@ -115,11 +117,13 @@ const PAGE_TITLES: Record<string, string> = {
   '/runs': 'Runs',
   '/prompts': 'Prompts',
   '/prompt-research': 'Prompt Research',
+  '/product-mentions': 'Product Mention Planner',
   '/query-lab': 'Query Lab',
   '/prompts/drilldown': 'Prompt Drilldown',
   '/competitors': 'Competitors',
   '/competitor-blogs': 'Competitors / Blogs',
   '/citation-links': 'Citation Links',
+  '/askill': 'Askill',
   '/logics': 'Appendix',
   '/under-the-hood': 'Under the Hood',
 }
@@ -154,10 +158,11 @@ export default function Layout({ children }: { children: ReactNode }) {
   const title = PAGE_TITLES[pathname] ?? 'Javis'
   const onOtherPath =
     pathname === '/logics' ||
+    pathname === '/product-mentions' ||
     pathname === '/under-the-hood' ||
     pathname === '/okr' ||
     pathname.startsWith('/okr/')
-  const onCompetitorsPath = pathname === '/competitors' || pathname === '/competitor-blogs' || pathname === '/citation-links'
+  const onCompetitorsPath = pathname === '/competitors' || pathname === '/competitor-blogs' || pathname === '/citation-links' || pathname === '/askill'
   const [iconOpen, setIconOpen] = useState(false)
   const [clickCount, setClickCount] = useState(0)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)

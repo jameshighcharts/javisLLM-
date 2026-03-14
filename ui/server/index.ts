@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
+import { CHATGPT_WEB_MODEL, runChatGptWebPromptLabQuery } from "./prompt-lab/chatgptWeb";
 
 type CsvRow = Record<string, string>;
 
@@ -196,11 +197,19 @@ const PROMPT_LAB_FALLBACK_MODELS = [
   PROMPT_LAB_DEFAULT_CLAUDE_MODEL,
   PROMPT_LAB_DEFAULT_CLAUDE_OPUS_MODEL,
   PROMPT_LAB_DEFAULT_GEMINI_MODEL,
+  CHATGPT_WEB_MODEL,
 ];
 const PROMPT_LAB_SYSTEM_PROMPT =
-  "You are a helpful assistant. Answer with concise bullets and include direct library names.";
+  "You are a research assistant for software and tooling questions. Produce clear markdown with short section headers, ranked options, concise rationale, and practical trade-offs. When web search is available, ground factual claims in current web sources.";
 const PROMPT_LAB_USER_PROMPT_TEMPLATE =
-  "Query: {query}\nList relevant libraries/tools with a short rationale for each in bullet points.";
+  [
+    "Query: {query}",
+    "Answer with this structure:",
+    "1) Top options (ranked)",
+    "2) Why each option fits",
+    "3) Trade-offs or caveats",
+    "Keep bullets concise and name concrete libraries/tools.",
+  ].join("\n");
 const PROMPT_LAB_DEFAULT_SEARCH_CONTEXT_LOCATION = "United States";
 const PROMPT_LAB_DEFAULT_SEARCH_CONTEXT_LANGUAGE = "en";
 const OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses";
@@ -214,6 +223,7 @@ const promptLabRunSchema = z.object({
   models: z.union([z.array(z.string().min(1).max(100)).max(32), z.string().max(2000)]).optional(),
   selectAllModels: z.boolean().optional(),
   webSearch: z.boolean().optional(),
+  includeRawHtml: z.boolean().optional(),
   searchContext: z
     .object({
       enabled: z.boolean().optional(),
@@ -221,6 +231,11 @@ const promptLabRunSchema = z.object({
       language: z.string().min(1).max(24).optional(),
     })
     .optional(),
+});
+
+const promptLabChatGptWebSchema = z.object({
+  query: z.string().min(1).max(600),
+  includeRawHtml: z.boolean().optional(),
 });
 
 type PromptLabCitationRef = {
@@ -240,7 +255,7 @@ type HttpError = Error & {
   exposeMessage?: boolean;
 };
 
-type PromptLabProvider = "openai" | "anthropic" | "google";
+type PromptLabProvider = "openai" | "anthropic" | "google" | "chatgpt-web";
 
 const app = express();
 app.disable("x-powered-by");
@@ -646,6 +661,7 @@ function estimateResponseCostForServer(
 function inferModelOwnerFromModel(model: string): string {
   const normalized = model.trim().toLowerCase();
   if (!normalized) return "Unknown";
+  if (normalized === CHATGPT_WEB_MODEL) return "OpenAI";
   if (
     normalized.startsWith("gpt") ||
     normalized.startsWith("o1") ||
@@ -752,9 +768,13 @@ function getPromptLabAllowedModels(): string[] {
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
-  return normalizePromptLabModelList(
+  const allowed = normalizePromptLabModelList(
     configured.length > 0 ? configured : PROMPT_LAB_FALLBACK_MODELS,
   );
+  if (!allowed.some((model) => model.toLowerCase() === CHATGPT_WEB_MODEL)) {
+    allowed.push(CHATGPT_WEB_MODEL);
+  }
+  return allowed;
 }
 
 function resolvePromptLabModel(modelInput: string, allowedModels: string[]): string {
@@ -815,6 +835,9 @@ function resolvePromptLabModels(
 
 function inferPromptLabProvider(modelInput: string): PromptLabProvider {
   const normalized = modelInput.trim().toLowerCase();
+  if (normalized === CHATGPT_WEB_MODEL) {
+    return "chatgpt-web";
+  }
   if (normalized.startsWith("claude") || normalized.startsWith("anthropic/")) {
     return "anthropic";
   }
@@ -861,6 +884,17 @@ function buildPromptLabEffectiveQuery(
   return `${query} (The user's location is ${searchContext.location}. Be sure to reply in ${searchContext.language} language)`;
 }
 
+function buildPromptLabUserPrompt(
+  effectiveQuery: string,
+  enforceWebGrounding: boolean,
+): string {
+  const base = PROMPT_LAB_USER_PROMPT_TEMPLATE.replace("{query}", effectiveQuery);
+  if (!enforceWebGrounding) {
+    return base;
+  }
+  return `${base}\nUse web search before finalizing and include source-grounded statements.`;
+}
+
 function resolvePromptLabApiKey(provider: PromptLabProvider): string {
   const keyName =
     provider === "anthropic"
@@ -883,6 +917,7 @@ function resolvePromptLabApiKey(provider: PromptLabProvider): string {
 function resolvePromptLabModelOwner(provider: PromptLabProvider): string {
   if (provider === "anthropic") return "Anthropic";
   if (provider === "google") return "Google";
+  if (provider === "chatgpt-web") return "OpenAI";
   if (provider === "openai") return "OpenAI";
   return "Unknown";
 }
@@ -1222,6 +1257,7 @@ async function runOpenAiPromptLabQuery(
   tokens: { inputTokens: number; outputTokens: number; totalTokens: number };
 }> {
   const apiKey = resolvePromptLabApiKey("openai");
+  const userPrompt = buildPromptLabUserPrompt(effectiveQuery, webSearch);
 
   const body: Record<string, unknown> = {
     model,
@@ -1230,7 +1266,7 @@ async function runOpenAiPromptLabQuery(
       { role: "system", content: PROMPT_LAB_SYSTEM_PROMPT },
       {
         role: "user",
-        content: PROMPT_LAB_USER_PROMPT_TEMPLATE.replace("{query}", effectiveQuery),
+        content: userPrompt,
       },
     ],
   };
@@ -1293,6 +1329,7 @@ async function runAnthropicPromptLabQuery(
   tokens: { inputTokens: number; outputTokens: number; totalTokens: number };
 }> {
   const apiKey = resolvePromptLabApiKey("anthropic");
+  const userPrompt = buildPromptLabUserPrompt(effectiveQuery, false);
 
   const body: Record<string, unknown> = {
     model,
@@ -1302,7 +1339,7 @@ async function runAnthropicPromptLabQuery(
     messages: [
       {
         role: "user",
-        content: PROMPT_LAB_USER_PROMPT_TEMPLATE.replace("{query}", effectiveQuery),
+        content: userPrompt,
       },
     ],
   };
@@ -1367,13 +1404,14 @@ async function runGeminiPromptLabQuery(
   const url =
     `${GEMINI_GENERATE_CONTENT_API_ROOT}/${modelPath}:generateContent` +
     `?key=${encodeURIComponent(apiKey)}`;
+  const userPrompt = buildPromptLabUserPrompt(effectiveQuery, false);
 
   const body: Record<string, unknown> = {
     systemInstruction: { parts: [{ text: PROMPT_LAB_SYSTEM_PROMPT }] },
     contents: [
       {
         role: "user",
-        parts: [{ text: PROMPT_LAB_USER_PROMPT_TEMPLATE.replace("{query}", effectiveQuery) }],
+        parts: [{ text: userPrompt }],
       },
     ],
     generationConfig: { temperature: 0.7 },
@@ -1426,6 +1464,7 @@ async function runPromptLabQuery(
   query: string,
   model: string,
   webSearch: boolean,
+  includeRawHtml: boolean,
   searchContext: {
     enabled: boolean;
     location: string;
@@ -1436,10 +1475,17 @@ async function runPromptLabQuery(
   citationRefs: PromptLabCitationRef[];
   citations: string[];
   effectiveQuery: string;
+  rawHtml?: string;
   tokens: { inputTokens: number; outputTokens: number; totalTokens: number };
 }> {
   const provider = inferPromptLabProvider(model);
   const effectiveQuery = buildPromptLabEffectiveQuery(query, provider, searchContext);
+  if (provider === "chatgpt-web") {
+    return runChatGptWebPromptLabQuery({
+      query: buildPromptLabUserPrompt(effectiveQuery, true),
+      includeRawHtml,
+    });
+  }
   if (provider === "anthropic") {
     return runAnthropicPromptLabQuery(effectiveQuery, model);
   }
@@ -1453,6 +1499,7 @@ async function runPromptLabQueryForModel(
   query: string,
   model: string,
   requestedWebSearch: boolean,
+  includeRawHtml: boolean,
   searchContext: {
     enabled: boolean;
     location: string;
@@ -1468,18 +1515,26 @@ async function runPromptLabQueryForModel(
   effectiveQuery: string;
   citationRefs: PromptLabCitationRef[];
   citations: string[];
+  rawHtml?: string;
   tokens: { inputTokens: number; outputTokens: number; totalTokens: number };
   durationMs: number;
   error: string | null;
 }> {
   const provider = inferPromptLabProvider(model);
   const modelOwner = resolvePromptLabModelOwner(provider);
-  const webSearchEnabled = provider === "openai" ? requestedWebSearch : false;
+  const webSearchEnabled =
+    provider === "chatgpt-web" ? true : provider === "openai" ? requestedWebSearch : false;
   const effectiveQuery = buildPromptLabEffectiveQuery(query, provider, searchContext);
   const startedAt = Date.now();
 
   try {
-    const result = await runPromptLabQuery(query, model, webSearchEnabled, searchContext);
+    const result = await runPromptLabQuery(
+      query,
+      model,
+      webSearchEnabled,
+      includeRawHtml,
+      searchContext,
+    );
     return {
       ok: true,
       model,
@@ -1490,6 +1545,7 @@ async function runPromptLabQueryForModel(
       effectiveQuery: result.effectiveQuery,
       citationRefs: result.citationRefs,
       citations: result.citations,
+      rawHtml: result.rawHtml,
       tokens: result.tokens,
       durationMs: Date.now() - startedAt,
       error: null,
@@ -1505,6 +1561,7 @@ async function runPromptLabQueryForModel(
       effectiveQuery,
       citationRefs: [],
       citations: [],
+      rawHtml: undefined,
       tokens: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
       durationMs: Date.now() - startedAt,
       error: error instanceof Error ? error.message : String(error),
@@ -3074,6 +3131,7 @@ app.post("/api/prompt-lab/run", async (req, res) => {
     }
     const allowedModels = getPromptLabAllowedModels();
     const requestedWebSearch = parsed.webSearch ?? true;
+    const includeRawHtml = parsed.includeRawHtml === true;
     const searchContext = resolvePromptLabSearchContext(parsed.searchContext);
     const models = resolvePromptLabModels(
       {
@@ -3085,7 +3143,13 @@ app.post("/api/prompt-lab/run", async (req, res) => {
     );
     const results = await Promise.all(
       models.map((model) =>
-        runPromptLabQueryForModel(query, model, requestedWebSearch, searchContext),
+        runPromptLabQueryForModel(
+          query,
+          model,
+          requestedWebSearch,
+          includeRawHtml,
+          searchContext,
+        ),
       ),
     );
     const summary = summarizePromptLabModelResults(results);
@@ -3106,6 +3170,7 @@ app.post("/api/prompt-lab/run", async (req, res) => {
       citationRefs: primaryResult?.citationRefs ?? [],
       responseText: primaryResult?.responseText ?? "",
       citations: primaryResult?.citations ?? [],
+      rawHtml: primaryResult?.rawHtml,
       durationMs: primaryResult?.durationMs ?? 0,
       tokens: primaryResult?.tokens ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     });
@@ -3123,6 +3188,58 @@ app.post("/api/prompt-lab/run", async (req, res) => {
         : 500;
     if (statusCode >= 500 && !httpError?.exposeMessage) {
       sendApiError(res, statusCode, "Prompt lab run failed.", error);
+      return;
+    }
+    res
+      .status(statusCode)
+      .json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post("/api/prompt-lab/chatgpt-web", async (req, res) => {
+  try {
+    const parsed = promptLabChatGptWebSchema.parse(req.body ?? {});
+    const query = parsed.query.trim();
+    if (!query) {
+      res.status(400).json({ error: "query is required." });
+      return;
+    }
+
+    const startedAt = Date.now();
+    const result = await runChatGptWebPromptLabQuery({
+      query,
+      includeRawHtml: parsed.includeRawHtml === true,
+    });
+
+    res.json({
+      ok: true,
+      model: CHATGPT_WEB_MODEL,
+      provider: "chatgpt-web",
+      modelOwner: "OpenAI",
+      webSearchEnabled: true,
+      responseText: result.responseText,
+      effectiveQuery: result.effectiveQuery,
+      citationRefs: result.citationRefs,
+      citations: result.citations,
+      rawHtml: result.rawHtml,
+      durationMs: Date.now() - startedAt,
+      tokens: result.tokens,
+      error: null,
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: "Invalid payload.", issues: error.issues });
+      return;
+    }
+
+    const httpError =
+      typeof error === "object" && error !== null ? (error as HttpError) : null;
+    const statusCode =
+      httpError && Number(httpError.statusCode)
+        ? Number(httpError.statusCode)
+        : 500;
+    if (statusCode >= 500 && !httpError?.exposeMessage) {
+      sendApiError(res, statusCode, "Prompt lab ChatGPT web run failed.", error);
       return;
     }
     res

@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './components/AuthProvider'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import Layout from './components/Layout'
 import Login from './pages/Login'
+import Askill from './pages/Askill'
 import CitationLinks from './pages/CitationLinks'
 import Competitors from './pages/Competitors'
 import CompetitorBlogs from './pages/CompetitorBlogs'
@@ -12,6 +13,7 @@ import Dashboard from './pages/Dashboard'
 import Logics from './pages/Logics'
 import PromptDrilldown from './pages/PromptDrilldown'
 import PromptDrilldownHub from './pages/PromptDrilldownHub'
+import ProductMentions from './pages/ProductMentions'
 import Prompts from './pages/Prompts'
 import PromptResearch from './pages/PromptResearch'
 import Runs from './pages/Runs'
@@ -103,12 +105,14 @@ export default function App() {
                   <Route path="/gantt" element={<LazyPageRoute Page={Gantt} label="Gantt" />} />
                   <Route path="/prompts" element={<Prompts />} />
                   <Route path="/prompt-research" element={<PromptResearch />} />
+                  <Route path="/product-mentions" element={<ProductMentions />} />
                   <Route path="/query-lab" element={<Prompts queryLabOnly />} />
                   <Route path="/prompt-drilldown" element={<PromptDrilldownHub />} />
                   <Route path="/prompts/drilldown" element={<PromptDrilldown />} />
                   <Route path="/competitors" element={<Competitors />} />
                   <Route path="/competitor-blogs" element={<CompetitorBlogs />} />
                   <Route path="/citation-links" element={<CitationLinks />} />
+                  <Route path="/askill" element={<Askill />} />
                   <Route path="/logics" element={<Logics />} />
                   <Route path="/under-the-hood" element={<UnderTheHood />} />
                 </Routes>

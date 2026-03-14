@@ -4,7 +4,11 @@ import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import CitationRichOutput from '../components/CitationRichOutput'
 import CitationSourceLeaderboard from '../components/CitationSourceLeaderboard'
-import { BENCHMARK_MODEL_OPTIONS, BENCHMARK_MODEL_VALUES, dedupeModels } from '../modelOptions'
+import {
+  PROMPT_LAB_MODEL_OPTIONS,
+  PROMPT_LAB_MODEL_VALUES,
+  dedupeModels,
+} from '../modelOptions'
 import { aggregateCitationSources } from '../utils/citationSources'
 import { formatUsd } from '../utils/modelPricing'
 import type {
@@ -1635,7 +1639,7 @@ function QueryLab({
   const [resultViews, setResultViews] = useState<QueryLabResultView[]>([])
   const [errorText, setErrorText] = useState('')
   const [allowMultipleModels, setAllowMultipleModels] = useState(true)
-  const [selectedModels, setSelectedModels] = useState<string[]>([BENCHMARK_MODEL_VALUES[0]])
+  const [selectedModels, setSelectedModels] = useState<string[]>([PROMPT_LAB_MODEL_VALUES[0]])
   const [webSearch, setWebSearch] = useState(true)
   const [searchContextEnabled, setSearchContextEnabled] = useState(false)
   const [searchContextLocation, setSearchContextLocation] = useState('United States')
@@ -1687,7 +1691,7 @@ function QueryLab({
     if (!allowMultipleModels) {
       setSelectedModels((current) => {
         const normalized = dedupeModels(current)
-        return normalized.length > 0 ? [normalized[0]] : [BENCHMARK_MODEL_VALUES[0]]
+        return normalized.length > 0 ? [normalized[0]] : [PROMPT_LAB_MODEL_VALUES[0]]
       })
     }
   }, [allowMultipleModels])
@@ -1946,8 +1950,8 @@ function QueryLab({
                   onClick={() =>
                     setSelectedModels(
                       allowMultipleModels
-                        ? BENCHMARK_MODEL_VALUES
-                        : [BENCHMARK_MODEL_VALUES[0]],
+                        ? PROMPT_LAB_MODEL_VALUES
+                        : [PROMPT_LAB_MODEL_VALUES[0]],
                     )
                   }
                   style={{
@@ -1966,7 +1970,7 @@ function QueryLab({
 
                 <button
                   type="button"
-                  onClick={() => setSelectedModels([BENCHMARK_MODEL_VALUES[0]])}
+                  onClick={() => setSelectedModels([PROMPT_LAB_MODEL_VALUES[0]])}
                   style={{
                     fontSize: 11,
                     fontWeight: 600,
@@ -2115,7 +2119,7 @@ function QueryLab({
             </div>
 
             <div className="query-lab-model-grid">
-              {BENCHMARK_MODEL_OPTIONS.map((option) => {
+              {PROMPT_LAB_MODEL_OPTIONS.map((option) => {
                 const checked = selectedModels.includes(option.value)
                 const disabled = !allowMultipleModels && !checked && effectiveModels.length >= 1
                 return (
@@ -2144,7 +2148,7 @@ function QueryLab({
                       onChange={(event) => {
                         const isChecked = event.target.checked
                         if (!allowMultipleModels) {
-                          setSelectedModels(isChecked ? [option.value] : [BENCHMARK_MODEL_VALUES[0]])
+                          setSelectedModels(isChecked ? [option.value] : [PROMPT_LAB_MODEL_VALUES[0]])
                           return
                         }
 
@@ -2153,7 +2157,7 @@ function QueryLab({
                             return dedupeModels([...current, option.value])
                           }
                           const next = current.filter((model) => model !== option.value)
-                          return next.length > 0 ? next : [BENCHMARK_MODEL_VALUES[0]]
+                          return next.length > 0 ? next : [PROMPT_LAB_MODEL_VALUES[0]]
                         })
                       }}
                     />
@@ -2375,7 +2379,7 @@ function QueryLab({
                     ...mentions.map((mention) => mention.count),
                   )
                   const modelLabel =
-                    BENCHMARK_MODEL_OPTIONS.find((option) => option.value === result.model)?.label ??
+                    PROMPT_LAB_MODEL_OPTIONS.find((option) => option.value === result.model)?.label ??
                     result.model
 
                   return (
@@ -2508,6 +2512,8 @@ function QueryLab({
                             }}
                           >
                             <CitationRichOutput
+                              variant="search-cache"
+                              query={result.effectiveQuery || queryText.trim()}
                               text={result.responseText}
                               citationRefs={result.citationRefs ?? []}
                               citations={result.citations}

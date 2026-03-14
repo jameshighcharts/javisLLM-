@@ -10,8 +10,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Sequence, Tuple
 
-from supabase import Client, create_client
-
 from llm_mention_benchmark import (
     build_entity_specs,
     compile_entity_patterns,
@@ -23,6 +21,7 @@ from llm_mention_benchmark import (
     normalize_api_key,
     resolve_api_key_env,
 )
+from worker._supabase_import import Client, create_client
 
 
 def utc_now_iso() -> str:

@@ -78,6 +78,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="HTTP timeout seconds.",
     )
     parser.add_argument(
+        "--auth-mode",
+        choices=("auto", "signed", "legacy"),
+        default=os.getenv("GSHEET_WEBAPP_AUTH_MODE", "auto"),
+        help=(
+            "Web app auth mode. 'signed' uses HMAC fields (ts/sig), "
+            "'legacy' sends a plain 'secret', and 'auto' tries signed first "
+            "then falls back if the deployed Apps Script still expects the legacy secret."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate payload and print summary without HTTP request.",
@@ -156,9 +166,12 @@ def build_signature_payload(payload: Dict[str, Any], secret: str) -> Dict[str, A
     return {**payload, "ts": timestamp, "sig": signature}
 
 
-def post_payload(url: str, payload: Dict[str, Any], timeout: int, secret: str) -> Dict[str, Any]:
-    signed_payload = build_signature_payload(payload, secret)
-    body = json.dumps(signed_payload).encode("utf-8")
+def build_legacy_secret_payload(payload: Dict[str, Any], secret: str) -> Dict[str, Any]:
+    return {**payload, "secret": secret}
+
+
+def execute_post(url: str, request_payload: Dict[str, Any], timeout: int) -> Dict[str, Any]:
+    body = json.dumps(request_payload).encode("utf-8")
     request = urllib.request.Request(
         url=url,
         data=body,
@@ -185,6 +198,43 @@ def post_payload(url: str, payload: Dict[str, Any], timeout: int, secret: str) -
     return parsed
 
 
+def should_retry_with_legacy(result: Dict[str, Any]) -> bool:
+    status = str(result.get("status", "")).strip().lower()
+    message = str(result.get("message", "")).strip().lower()
+    return status == "error" and message == "invalid secret"
+
+
+def post_payload(
+    url: str,
+    payload: Dict[str, Any],
+    timeout: int,
+    secret: str,
+    auth_mode: str,
+) -> tuple[Dict[str, Any], str]:
+    effective_auth_mode = auth_mode.strip().lower()
+    if effective_auth_mode not in {"auto", "signed", "legacy"}:
+        raise RuntimeError(f"Unsupported auth mode: {auth_mode}")
+
+    if effective_auth_mode == "signed":
+        return (
+            execute_post(url, build_signature_payload(payload, secret), timeout),
+            "signed",
+        )
+
+    if effective_auth_mode == "legacy":
+        return (
+            execute_post(url, build_legacy_secret_payload(payload, secret), timeout),
+            "legacy",
+        )
+
+    signed_result = execute_post(url, build_signature_payload(payload, secret), timeout)
+    if not should_retry_with_legacy(signed_result):
+        return signed_result, "signed"
+
+    legacy_result = execute_post(url, build_legacy_secret_payload(payload, secret), timeout)
+    return legacy_result, "legacy"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     load_env_file(DEFAULT_ENV_FILE)
     args = parse_args(argv)
@@ -207,6 +257,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"sheet_name={payload['sheet_name']}")
         print(f"run_month={payload['run_month']}")
         print(f"run_id={payload['run_id']}")
+        print(f"auth_mode={args.auth_mode}")
         print(f"headers={len(payload['headers'])}")
         print(f"rows={len(payload['rows'])}")
         preview = {
@@ -221,12 +272,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.secret:
         raise RuntimeError("--secret is required (or set GSHEET_WEBAPP_SECRET).")
 
-    result = post_payload(url=args.url, payload=payload, timeout=args.timeout, secret=args.secret)
+    result, auth_mode_used = post_payload(
+        url=args.url,
+        payload=payload,
+        timeout=args.timeout,
+        secret=args.secret,
+        auth_mode=args.auth_mode,
+    )
     status = str(result.get("status", "")).strip().lower()
     rows_appended = result.get("rows_appended", 0)
     message = result.get("message", "")
 
     print(json.dumps(result, indent=2))
+    print(f"auth_mode={auth_mode_used}")
     print(f"status={status}")
     print(f"rows_appended={rows_appended}")
     print(f"message={message}")
