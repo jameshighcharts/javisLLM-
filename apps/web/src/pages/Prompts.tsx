@@ -1,0 +1,4953 @@
+/* biome-ignore-all lint/suspicious/noArrayIndexKey: display-only mapped lists in this file */
+/* biome-ignore-all lint/a11y/noSvgWithoutTitle: decorative inline icons */
+/* biome-ignore-all lint/a11y/noStaticElementInteractions: custom overlays and hover shells in this page are intentional */
+/* biome-ignore-all lint/a11y/useKeyWithClickEvents: custom overlays and hover shells in this page are intentional */
+/* biome-ignore-all lint/security/noDangerouslySetInnerHtml: Prompt Lab markdown is sanitized with DOMPurify before rendering */
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import DOMPurify from "dompurify";
+import { marked } from "marked";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { api } from "../api";
+import CitationRichOutput from "../components/CitationRichOutput";
+import CitationSourceLeaderboard from "../components/CitationSourceLeaderboard";
+import {
+	dedupeModels,
+	PROMPT_LAB_MODEL_OPTIONS,
+	PROMPT_LAB_MODEL_VALUES,
+} from "../modelOptions";
+import type {
+	BenchmarkConfig,
+	BenchmarkQueueRun,
+	BenchmarkWorkflowRun,
+	CitationRef,
+	DashboardResponse,
+	PromptLabRunResult,
+	PromptStatus,
+} from "../types";
+import { aggregateCitationSources } from "../utils/citationSources";
+import { formatUsd } from "../utils/modelPricing";
+
+const TRIGGER_TOKEN_STORAGE_KEY = "benchmark_trigger_token";
+
+function renderPromptLabResponseHtml(markdown: string): string {
+	return DOMPurify.sanitize(marked.parse(markdown) as string);
+}
+
+function canUseSessionStorage(): boolean {
+	return (
+		typeof window !== "undefined" &&
+		typeof window.sessionStorage !== "undefined"
+	);
+}
+
+function readStoredTriggerToken(): string {
+	if (!canUseSessionStorage()) {
+		return "";
+	}
+	return window.sessionStorage.getItem(TRIGGER_TOKEN_STORAGE_KEY)?.trim() ?? "";
+}
+
+function writeStoredTriggerToken(nextToken: string): void {
+	if (!canUseSessionStorage()) {
+		return;
+	}
+	const normalized = nextToken.trim();
+	if (!normalized) {
+		window.sessionStorage.removeItem(TRIGGER_TOKEN_STORAGE_KEY);
+		return;
+	}
+	window.sessionStorage.setItem(TRIGGER_TOKEN_STORAGE_KEY, normalized);
+}
+
+// ── Toggle Switch ─────────────────────────────────────────────────────────────
+
+function Toggle({
+	active,
+	onChange,
+	disabled,
+}: {
+	active: boolean;
+	onChange: (v: boolean) => void;
+	disabled?: boolean;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={() => !disabled && onChange(!active)}
+			disabled={disabled}
+			style={{
+				width: 30,
+				height: 17,
+				borderRadius: 9,
+				border: "none",
+				padding: 0,
+				background: active ? "#8FBB93" : "#DDD0BC",
+				position: "relative",
+				cursor: disabled ? "not-allowed" : "pointer",
+				transition: "background 0.15s",
+				flexShrink: 0,
+				outline: "none",
+				opacity: disabled ? 0.5 : 1,
+			}}
+			aria-label={active ? "Pause prompt" : "Resume prompt"}
+		>
+			<span
+				style={{
+					position: "absolute",
+					top: 2,
+					left: active ? 13 : 2,
+					width: 13,
+					height: 13,
+					borderRadius: "50%",
+					background: "#fff",
+					transition: "left 0.15s",
+					display: "block",
+					boxShadow: "0 1px 2px rgba(0,0,0,0.15)",
+				}}
+			/>
+		</button>
+	);
+}
+
+// ── Status Badge ──────────────────────────────────────────────────────────────
+
+function StatusBadge({
+	status,
+	isPaused,
+}: {
+	status: PromptStatus["status"];
+	isPaused: boolean;
+}) {
+	if (status === "deleted") {
+		return (
+			<span
+				className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
+				style={{
+					background: "#FEF2F2",
+					color: "#B91C1C",
+					border: "1px solid #FECACA",
+				}}
+			>
+				<span
+					className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+					style={{ background: "#EF4444" }}
+				/>
+				Deleted
+			</span>
+		);
+	}
+
+	if (isPaused) {
+		return (
+			<span
+				className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
+				style={{
+					background: "#F2EDE6",
+					color: "#9AAE9C",
+					border: "1px solid #DDD0BC",
+				}}
+			>
+				<span
+					className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+					style={{ background: "#DDD0BC" }}
+				/>
+				Paused
+			</span>
+		);
+	}
+	const tracked = status === "tracked";
+	return (
+		<span
+			className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
+			style={{
+				background: "#F2EDE6",
+				color: tracked ? "#607860" : "#9AAE9C",
+				border: "1px solid #DDD0BC",
+			}}
+		>
+			<span
+				className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+				style={{ background: tracked ? "#22c55e" : "#E5DDD0" }}
+			/>
+			{tracked ? "Tracked" : "Awaiting run"}
+		</span>
+	);
+}
+
+// ── Mini Bar ──────────────────────────────────────────────────────────────────
+
+function MiniBar({
+	pct,
+	color = "#8FBB93",
+	muted,
+}: {
+	pct: number;
+	color?: string;
+	muted?: boolean;
+}) {
+	return (
+		<div className="flex items-center gap-2.5">
+			<div
+				className="flex-1 rounded-full overflow-hidden"
+				style={{ background: "#E5DDD0", height: 4, minWidth: 64 }}
+			>
+				<div
+					className="h-full rounded-full"
+					style={{
+						width: `${Math.min(pct, 100)}%`,
+						background: muted ? "#DDD0BC" : color,
+					}}
+				/>
+			</div>
+			<span
+				className="text-xs w-9 text-right flex-shrink-0 font-medium tabular-nums"
+				style={{ color: muted ? "#9AAE9C" : "#607860" }}
+			>
+				{pct.toFixed(0)}%
+			</span>
+		</div>
+	);
+}
+
+// ── Lead Badge ────────────────────────────────────────────────────────────────
+
+function LeadBadge({ delta, muted }: { delta: number; muted?: boolean }) {
+	const neutral = Math.abs(delta) < 1;
+	const positive = delta >= 1;
+	if (muted) {
+		return (
+			<span
+				className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold"
+				style={{ background: "#F2EDE6", color: "#9AAE9C" }}
+			>
+				–
+			</span>
+		);
+	}
+	return (
+		<span
+			className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold tabular-nums"
+			style={{
+				background: neutral ? "#F2EDE6" : positive ? "#dcfce7" : "#fef2f2",
+				color: neutral ? "#7A8E7C" : positive ? "#15803d" : "#dc2626",
+			}}
+		>
+			{neutral ? "≈ 0%" : `${positive ? "+" : ""}${delta.toFixed(0)}%`}
+		</span>
+	);
+}
+
+// ── Skeleton ──────────────────────────────────────────────────────────────────
+
+function Skeleton({ className = "" }: { className?: string }) {
+	return (
+		<div
+			className={`rounded animate-pulse ${className}`}
+			style={{ background: "#E5DDD0" }}
+		/>
+	);
+}
+
+// ── Brand logos ──────────────────────────────────────────────────────────────
+
+const ENTITY_LOGOS: Record<string, string> = {
+	"chart.js": "/chartjs.png",
+	chartjs: "/chartjs.png",
+	"d3.js": "/d3.png",
+	d3: "/d3.png",
+	highcharts: "/highcharts%20(1).svg",
+	echarts: "/echarts.png",
+	"ag grid": "/aggrid.png",
+	aggrid: "/aggrid.png",
+	"ag chart": "/aggrid.png",
+	amcharts: "/amcharts.png",
+	recharts: "/react-svgrepo-com.svg",
+};
+
+interface LogoCrop {
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+	srcW: number;
+	srcH: number;
+	displayH: number;
+}
+const LOGO_CROP: Record<string, LogoCrop> = {
+	"/aggrid.png": {
+		x: 16,
+		y: 116,
+		w: 374,
+		h: 118,
+		srcW: 400,
+		srcH: 400,
+		displayH: 13,
+	},
+	"/amcharts.png": {
+		x: 100,
+		y: 100,
+		w: 799,
+		h: 353,
+		srcW: 1000,
+		srcH: 558,
+		displayH: 13,
+	},
+};
+
+function getEntityLogo(entity: string): string | null {
+	return ENTITY_LOGOS[entity.toLowerCase()] ?? null;
+}
+
+function EntityLogo({ entity, size = 16 }: { entity: string; size?: number }) {
+	const src = getEntityLogo(entity);
+	if (!src) return null;
+	const crop = LOGO_CROP[src];
+	if (crop) {
+		const scale = crop.displayH / crop.h;
+		const displayW = Math.round(crop.w * scale);
+		const imgW = Math.round(crop.srcW * scale);
+		const imgH = Math.round(crop.srcH * scale);
+		const offX = Math.round(crop.x * scale);
+		const offY = Math.round(crop.y * scale);
+		return (
+			<div
+				style={{
+					width: displayW,
+					height: crop.displayH,
+					overflow: "hidden",
+					position: "relative",
+					flexShrink: 0,
+				}}
+			>
+				<img
+					src={src}
+					alt={entity}
+					style={{
+						position: "absolute",
+						width: imgW,
+						height: imgH,
+						top: -offY,
+						left: -offX,
+						objectFit: "fill",
+					}}
+				/>
+			</div>
+		);
+	}
+	return (
+		<div
+			style={{
+				width: size,
+				height: size,
+				overflow: "hidden",
+				borderRadius: 3,
+				flexShrink: 0,
+				display: "flex",
+				alignItems: "center",
+				justifyContent: "center",
+			}}
+		>
+			<img
+				src={src}
+				width={size}
+				height={size}
+				style={{ objectFit: "contain", flexShrink: 0 }}
+				alt={entity}
+			/>
+		</div>
+	);
+}
+
+function inferPromptTags(query: string): string[] {
+	const normalized = query.toLowerCase();
+	const tags: string[] = [];
+
+	if (normalized.includes("react")) {
+		tags.push("react");
+	}
+	if (normalized.includes("javascript") || /\bjs\b/.test(normalized)) {
+		tags.push("javascript");
+	}
+	if (tags.length === 0) {
+		tags.push("general");
+	}
+
+	return tags;
+}
+
+// ── Tag color system ─────────────────────────────────────────────────────────
+
+const TAG_STYLES: Record<
+	string,
+	{ bg: string; color: string; border: string }
+> = {
+	react: { bg: "#EFF6FF", color: "#2563EB", border: "#BFDBFE" },
+	javascript: { bg: "#FFFBEB", color: "#B45309", border: "#FDE68A" },
+	js: { bg: "#FFFBEB", color: "#B45309", border: "#FDE68A" },
+	general: { bg: "#F2EDE6", color: "#7A8E7C", border: "#DDD0BC" },
+	grid: { bg: "#F5F3FF", color: "#7C3AED", border: "#DDD6FE" },
+	data: { bg: "#F0FDF4", color: "#15803D", border: "#BBF7D0" },
+	accessibility: { bg: "#FFF7ED", color: "#C2410C", border: "#FED7AA" },
+	python: { bg: "#EEF2FF", color: "#4338CA", border: "#C7D2FE" },
+};
+
+const _TAG_FALLBACKS = [
+	{ bg: "#F0F9FF", color: "#0369A1", border: "#BAE6FD" },
+	{ bg: "#FDF4FF", color: "#7E22CE", border: "#E9D5FF" },
+	{ bg: "#F0FDFA", color: "#0F766E", border: "#99F6E4" },
+	{ bg: "#FFF1F2", color: "#BE123C", border: "#FECDD3" },
+];
+
+function getTagStyle(tag: string, muted?: boolean) {
+	if (muted) return { bg: "#F2EDE6", color: "#9AAE9C", border: "#DDD0BC" };
+	const key = tag.toLowerCase();
+	if (TAG_STYLES[key]) return TAG_STYLES[key];
+	let h = 0;
+	for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+	return _TAG_FALLBACKS[h % _TAG_FALLBACKS.length];
+}
+
+function normalizePromptTagList(tags: string[]): string[] {
+	return [
+		...new Set(
+			tags
+				.map((tag) => {
+					const normalizedTag = tag.trim().toLowerCase();
+					return normalizedTag === "generic" ? "general" : normalizedTag;
+				})
+				.filter(Boolean),
+		),
+	];
+}
+
+function normalizePromptTags(tags: string[], query: string): string[] {
+	const normalized = normalizePromptTagList(tags);
+	return normalized.length > 0 ? normalized : inferPromptTags(query);
+}
+
+function normalizeQueryTagsMap(
+	queries: string[],
+	rawQueryTags?: Record<string, string[]>,
+): Record<string, string[]> {
+	const lookup = new Map<string, string[]>();
+	for (const [query, tags] of Object.entries(rawQueryTags ?? {})) {
+		lookup.set(query.trim().toLowerCase(), tags);
+	}
+
+	return Object.fromEntries(
+		queries.map((query) => [
+			query,
+			normalizePromptTags(lookup.get(query.trim().toLowerCase()) ?? [], query),
+		]),
+	);
+}
+
+function normalizeQueryKey(query: string): string {
+	return query.trim().toLowerCase();
+}
+
+function buildQueryTagsForQueries(
+	nextQueries: string[],
+	rawQueryTags: Record<string, string[]>,
+): Record<string, string[]> {
+	const lookup = new Map<string, string[]>();
+	for (const [query, tags] of Object.entries(rawQueryTags)) {
+		lookup.set(normalizeQueryKey(query), tags);
+	}
+
+	return Object.fromEntries(
+		nextQueries.map((query) => [
+			query,
+			normalizePromptTags(
+				lookup.get(normalizeQueryKey(query)) ?? inferPromptTags(query),
+				query,
+			),
+		]),
+	);
+}
+
+function applyImportTagsToQueries(
+	nextQueries: string[],
+	baseQueryTags: Record<string, string[]>,
+	importedQueries: string[],
+	importTags: string[],
+): Record<string, string[]> {
+	const normalizedImportTags = normalizePromptTagList(importTags);
+	if (normalizedImportTags.length === 0 || importedQueries.length === 0) {
+		return baseQueryTags;
+	}
+
+	const importedQueryKeys = new Set(
+		importedQueries.map((query) => normalizeQueryKey(query)),
+	);
+
+	return Object.fromEntries(
+		nextQueries.map((query) => {
+			const baseTags = baseQueryTags[query] ?? inferPromptTags(query);
+			if (!importedQueryKeys.has(normalizeQueryKey(query))) {
+				return [query, baseTags];
+			}
+			return [
+				query,
+				normalizePromptTags([...baseTags, ...normalizedImportTags], query),
+			];
+		}),
+	);
+}
+
+function PromptTagChips({ tags, muted }: { tags: string[]; muted?: boolean }) {
+	if (tags.length === 0) {
+		return (
+			<span className="text-sm" style={{ color: "#E5DDD0" }}>
+				–
+			</span>
+		);
+	}
+
+	return (
+		<div className="flex flex-wrap gap-1.5">
+			{tags.slice(0, 3).map((tag) => {
+				const s = getTagStyle(tag, muted);
+				return (
+					<span
+						key={tag}
+						className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium"
+						style={{
+							background: s.bg,
+							color: s.color,
+							border: `1px solid ${s.border}`,
+						}}
+					>
+						{tag}
+					</span>
+				);
+			})}
+		</div>
+	);
+}
+
+// ── Inline Query Tag Row ───────────────────────────────────────────────────────
+
+function QueryTagRow({
+	query,
+	tags,
+	onChange,
+}: {
+	query: string;
+	tags: string[];
+	onChange: (nextTags: string[]) => void;
+}) {
+	const [editing, setEditing] = useState(false);
+	const [input, setInput] = useState("");
+	const inputRef = useRef<HTMLInputElement>(null);
+
+	useEffect(() => {
+		if (editing) {
+			inputRef.current?.focus();
+		}
+	}, [editing]);
+
+	function addTag() {
+		const val = input.trim().toLowerCase();
+		if (val && !tags.includes(val)) onChange([...tags, val]);
+		setInput("");
+		setEditing(false);
+	}
+
+	function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+		if (e.key === "Enter") {
+			e.preventDefault();
+			addTag();
+		}
+		if (e.key === "Escape") {
+			setInput("");
+			setEditing(false);
+		}
+	}
+
+	return (
+		<div
+			className="flex flex-col items-start gap-2 px-3 py-2 sm:flex-row sm:items-center sm:gap-3"
+			style={{ borderBottom: "1px solid #F2EDE6" }}
+		>
+			<span
+				className="text-xs font-medium flex-shrink-0 truncate w-full sm:w-[200px]"
+				style={{ color: "#3D5840" }}
+				title={query}
+			>
+				{query}
+			</span>
+			<div className="flex flex-wrap items-center gap-1 flex-1 min-w-0">
+				{tags.map((tag) => {
+					const s = getTagStyle(tag);
+					return (
+						<span
+							key={tag}
+							className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium"
+							style={{
+								background: s.bg,
+								color: s.color,
+								border: `1px solid ${s.border}`,
+							}}
+						>
+							{tag}
+							<button
+								type="button"
+								onClick={() => onChange(tags.filter((t) => t !== tag))}
+								className="leading-none"
+								style={{ color: s.color, fontSize: 13, opacity: 0.5 }}
+								onMouseEnter={(e) => {
+									(e.currentTarget as HTMLButtonElement).style.opacity = "1";
+									(e.currentTarget as HTMLButtonElement).style.color =
+										"#dc2626";
+								}}
+								onMouseLeave={(e) => {
+									(e.currentTarget as HTMLButtonElement).style.opacity = "0.5";
+									(e.currentTarget as HTMLButtonElement).style.color = s.color;
+								}}
+							>
+								×
+							</button>
+						</span>
+					);
+				})}
+				{editing ? (
+					<input
+						ref={inputRef}
+						value={input}
+						onChange={(e) => setInput(e.target.value)}
+						onKeyDown={handleKeyDown}
+						onBlur={addTag}
+						placeholder="add tag…"
+						className="text-[11px] px-2 py-0.5 rounded-full outline-none"
+						style={{
+							border: "1px solid #8FBB93",
+							background: "#FFFFFF",
+							color: "#2A3A2C",
+							width: 76,
+						}}
+					/>
+				) : (
+					<button
+						type="button"
+						onClick={() => {
+							setEditing(true);
+							setTimeout(() => inputRef.current?.focus(), 0);
+						}}
+						className="inline-flex w-6 h-6 sm:w-[18px] sm:h-[18px] items-center justify-center rounded-full font-bold leading-none"
+						style={{
+							background: "#F2EDE6",
+							color: "#8FBB93",
+							border: "1px solid #DDD0BC",
+							fontSize: 14,
+							cursor: "pointer",
+						}}
+						onMouseEnter={(e) =>
+							((e.currentTarget as HTMLButtonElement).style.background =
+								"#E8E0D2")
+						}
+						onMouseLeave={(e) =>
+							((e.currentTarget as HTMLButtonElement).style.background =
+								"#F2EDE6")
+						}
+					>
+						+
+					</button>
+				)}
+			</div>
+		</div>
+	);
+}
+
+// ── Tag Groups Editor ─────────────────────────────────────────────────────────
+
+const TAG_GROUP_PAGE = 6;
+
+function TagGroupsEditor({
+	queries,
+	queryTags,
+	isLoading,
+	promptStats,
+	onTagChange,
+}: {
+	queries: string[];
+	queryTags: Record<string, string[]>;
+	isLoading: boolean;
+	promptStats?: Record<string, { runs: number; highchartsRatePct: number }>;
+	onTagChange: (query: string, nextTags: string[]) => void;
+}) {
+	const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+	const [showAllGroups, setShowAllGroups] = useState<Set<string>>(new Set());
+
+	const groups = useMemo(() => {
+		const map = new Map<string, string[]>();
+		for (const query of queries) {
+			const tags = queryTags[query] ?? inferPromptTags(query);
+			for (const tag of tags) {
+				const existing = map.get(tag) ?? [];
+				if (!existing.includes(query)) existing.push(query);
+				map.set(tag, existing);
+			}
+		}
+		return [...map.entries()].sort((a, b) => b[1].length - a[1].length);
+	}, [queries, queryTags]);
+
+	function toggleGroup(tag: string) {
+		setExpandedGroups((prev) => {
+			const next = new Set(prev);
+			if (next.has(tag)) next.delete(tag);
+			else next.add(tag);
+			return next;
+		});
+	}
+
+	if (isLoading) {
+		return (
+			<div className="flex flex-wrap gap-1.5">
+				{[80, 110, 70, 95, 60].map((w, i) => (
+					<div
+						key={i}
+						className="h-7 rounded-full animate-pulse"
+						style={{ background: "#F2EDE6", width: w }}
+					/>
+				))}
+			</div>
+		);
+	}
+
+	if (queries.length === 0) {
+		return (
+			<p className="text-sm" style={{ color: "#9AAE9C" }}>
+				Add queries to assign tags.
+			</p>
+		);
+	}
+
+	const expandedGroupList = groups.filter(([tag]) => expandedGroups.has(tag));
+
+	return (
+		<div className="space-y-3">
+			{/* Tag overview pills — click to expand/collapse */}
+			<div className="flex flex-wrap gap-1.5">
+				{groups.map(([tag, qs]) => {
+					const s = getTagStyle(tag);
+					const isOpen = expandedGroups.has(tag);
+					return (
+						<button
+							key={tag}
+							type="button"
+							onClick={() => toggleGroup(tag)}
+							className="inline-flex items-center gap-1.5 rounded-full text-[11px] font-semibold transition-all"
+							style={{
+								padding: "5px 11px 5px 8px",
+								background: isOpen ? s.bg : "#F6F2EC",
+								color: isOpen ? s.color : "#6B7E6E",
+								border: `1px solid ${isOpen ? s.border : "#DDD0BC"}`,
+								boxShadow: isOpen ? `0 0 0 1.5px ${s.border}` : "none",
+							}}
+						>
+							<span
+								className="w-2 h-2 rounded-full flex-shrink-0"
+								style={{ background: isOpen ? s.color : "#C4D4C6" }}
+							/>
+							{tag}
+							<span
+								className="tabular-nums ml-0.5"
+								style={{ opacity: 0.6, fontWeight: 500 }}
+							>
+								{qs.length}
+							</span>
+							<svg
+								width="10"
+								height="10"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2.5"
+								strokeLinecap="round"
+								style={{
+									marginLeft: 1,
+									transition: "transform 0.15s",
+									transform: isOpen ? "rotate(180deg)" : "none",
+									opacity: 0.5,
+								}}
+							>
+								<polyline points="6 9 12 15 18 9" />
+							</svg>
+						</button>
+					);
+				})}
+			</div>
+
+			{/* Expanded group panels */}
+			{expandedGroupList.length > 0 && (
+				<div className="space-y-2">
+					{expandedGroupList.map(([tag, qs]) => {
+						const s = getTagStyle(tag);
+						const showAll = showAllGroups.has(tag);
+						const visible = showAll ? qs : qs.slice(0, TAG_GROUP_PAGE);
+						const remaining = qs.length - TAG_GROUP_PAGE;
+						return (
+							<div
+								key={tag}
+								className="rounded-xl overflow-hidden"
+								style={{ border: `1px solid ${s.border}` }}
+							>
+								<div
+									className="flex items-center justify-between px-3 py-2"
+									style={{
+										background: s.bg,
+										borderBottom: `1px solid ${s.border}`,
+									}}
+								>
+									<div className="flex items-center gap-2">
+										<span
+											className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold"
+											style={{
+												background: "white",
+												color: s.color,
+												border: `1px solid ${s.border}`,
+											}}
+										>
+											{tag}
+										</span>
+										<span
+											className="text-[11px] font-medium"
+											style={{ color: s.color, opacity: 0.7 }}
+										>
+											{qs.length} {qs.length === 1 ? "query" : "queries"}
+										</span>
+									</div>
+									<button
+										type="button"
+										onClick={() => toggleGroup(tag)}
+										className="w-5 h-5 flex items-center justify-center rounded-full"
+										style={{ color: s.color, opacity: 0.5 }}
+										onMouseEnter={(e) => {
+											(e.currentTarget as HTMLButtonElement).style.opacity =
+												"1";
+										}}
+										onMouseLeave={(e) => {
+											(e.currentTarget as HTMLButtonElement).style.opacity =
+												"0.5";
+										}}
+									>
+										<svg
+											width="11"
+											height="11"
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="currentColor"
+											strokeWidth="2.5"
+										>
+											<path d="M18 6L6 18M6 6l12 12" />
+										</svg>
+									</button>
+								</div>
+								<div style={{ background: "#FDFCF9" }}>
+									{visible.map((query, idx) => {
+										const tags = (
+											queryTags[query] ?? inferPromptTags(query)
+										).filter((t) => t !== tag);
+										const stats = promptStats?.[query];
+										const isLast = idx === visible.length - 1;
+										const hcPct = stats?.highchartsRatePct ?? null;
+										const hcColor =
+											hcPct == null
+												? "#9AAE9C"
+												: hcPct >= 75
+													? "#2F7A3B"
+													: hcPct >= 40
+														? "#7A6E2A"
+														: "#9A3A3A";
+										const hcBg =
+											hcPct == null
+												? "#F2EDE6"
+												: hcPct >= 75
+													? "#EAF5EC"
+													: hcPct >= 40
+														? "#FBF6E5"
+														: "#FBE9E9";
+										const hcBorder =
+											hcPct == null
+												? "#DDD0BC"
+												: hcPct >= 75
+													? "#B8DFC0"
+													: hcPct >= 40
+														? "#E8D89A"
+														: "#F0BBBB";
+										return (
+											<div
+												key={query}
+												className="group flex items-center gap-3 px-4"
+												style={{
+													minHeight: 36,
+													borderTop: idx === 0 ? "none" : "1px solid #F0EBE2",
+													transition: "background 0.1s",
+												}}
+												onMouseEnter={(e) => {
+													(e.currentTarget as HTMLDivElement).style.background =
+														"#F7F3EE";
+												}}
+												onMouseLeave={(e) => {
+													(e.currentTarget as HTMLDivElement).style.background =
+														"";
+												}}
+											>
+												{/* Query text + inline tags */}
+												<div
+													className="flex-1 flex flex-wrap items-center gap-x-2 gap-y-1 py-2"
+													style={{ minWidth: 0 }}
+												>
+													<span
+														className="text-[12px] leading-snug"
+														style={{ color: "#3A4D3C" }}
+													>
+														{query}
+													</span>
+													{tags.map((t) => {
+														const ts = getTagStyle(t);
+														return (
+															<span
+																key={t}
+																className="inline-flex items-center px-1.5 py-px rounded text-[10px] font-medium flex-shrink-0"
+																style={{
+																	background: ts.bg,
+																	color: ts.color,
+																	border: `1px solid ${ts.border}`,
+																}}
+															>
+																{t}
+															</span>
+														);
+													})}
+												</div>
+												{/* Stats pinned to far right */}
+												{stats != null && (
+													<div className="flex items-center gap-2 flex-shrink-0">
+														<span
+															className="text-[11px] tabular-nums"
+															style={{ color: "#B5C4B7" }}
+														>
+															{stats.runs} run{stats.runs !== 1 ? "s" : ""}
+														</span>
+														<span
+															className="text-[11px] tabular-nums font-semibold px-2 py-px rounded"
+															style={{
+																background: hcBg,
+																color: hcColor,
+																border: `1px solid ${hcBorder}`,
+																minWidth: 36,
+																textAlign: "center",
+															}}
+														>
+															{hcPct!.toFixed(0)}% HC
+														</span>
+													</div>
+												)}
+											</div>
+										);
+									})}
+									{!showAll && remaining > 0 && (
+										<button
+											type="button"
+											onClick={() =>
+												setShowAllGroups((prev) => {
+													const next = new Set(prev);
+													next.add(tag);
+													return next;
+												})
+											}
+											className="w-full px-4 py-2 text-[11px] font-medium text-left"
+											style={{
+												color: "#A8BEA9",
+												borderTop: "1px solid #EDE7DC",
+											}}
+											onMouseEnter={(e) => {
+												(e.currentTarget as HTMLButtonElement).style.color =
+													"#5A8A60";
+											}}
+											onMouseLeave={(e) => {
+												(e.currentTarget as HTMLButtonElement).style.color =
+													"#A8BEA9";
+											}}
+										>
+											+ {remaining} more
+										</button>
+									)}
+								</div>
+							</div>
+						);
+					})}
+				</div>
+			)}
+		</div>
+	);
+}
+
+// ── Sort Header ───────────────────────────────────────────────────────────────
+
+type SortKey =
+	| "query"
+	| "tags"
+	| "status"
+	| "runs"
+	| "estimatedTotalCostUsd"
+	| "highchartsRatePct"
+	| "highchartsRank"
+	| "viabilityRatePct"
+	| "lead"
+	| "isPaused";
+
+function HeaderInfoBadge({
+	text,
+	align = "left",
+}: {
+	text: string;
+	align?: "left" | "right";
+}) {
+	return (
+		<span
+			className="relative inline-flex items-center group"
+			style={{ verticalAlign: "middle" }}
+		>
+			<button
+				type="button"
+				onClick={(event) => event.stopPropagation()}
+				className="inline-flex items-center justify-center rounded-full text-[9px] font-bold leading-none ml-1"
+				style={{
+					width: 14,
+					height: 14,
+					background: "#DDD0BC",
+					color: "#7A8E7C",
+					cursor: "pointer",
+					border: "none",
+					flexShrink: 0,
+				}}
+				aria-label="Column info"
+			>
+				i
+			</button>
+			<div
+				className="pointer-events-none absolute z-50 rounded-lg shadow-xl border text-xs leading-relaxed p-3 opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 transition-all duration-150"
+				style={{
+					top: "calc(100% + 6px)",
+					width: 230,
+					maxWidth: "min(230px, calc(100vw - 32px))",
+					background: "#FFFFFF",
+					borderColor: "#DDD0BC",
+					color: "#2A3A2C",
+					boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+					whiteSpace: "normal",
+					...(align === "right" ? { right: 0 } : { left: 0 }),
+				}}
+			>
+				{text}
+			</div>
+		</span>
+	);
+}
+
+function SortTh({
+	label,
+	col,
+	current,
+	dir,
+	align = "left",
+	width,
+	info,
+	infoAlign,
+	onSort,
+}: {
+	label: string;
+	col: SortKey;
+	current: SortKey | null;
+	dir: "asc" | "desc";
+	align?: "left" | "right";
+	width?: string;
+	info?: string;
+	infoAlign?: "left" | "right";
+	onSort: (k: SortKey) => void;
+}) {
+	const active = current === col;
+	return (
+		<th
+			className="px-4 py-3 text-xs font-medium select-none"
+			style={{
+				color: active ? "#2A3A2C" : "#7A8E7C",
+				textAlign: align,
+				width: width ?? undefined,
+				cursor: "pointer",
+				userSelect: "none",
+				whiteSpace: "nowrap",
+			}}
+			onClick={() => onSort(col)}
+		>
+			<span className="inline-flex items-center gap-1">
+				{label}
+				{info && (
+					<HeaderInfoBadge
+						text={info}
+						align={infoAlign ?? (align === "right" ? "right" : "left")}
+					/>
+				)}
+				<span
+					style={{
+						fontSize: 9,
+						color: active ? "#8FBB93" : "#DDD0BC",
+						fontWeight: 700,
+					}}
+				>
+					{active ? (dir === "asc" ? "▲" : "▼") : "⬍"}
+				</span>
+			</span>
+		</th>
+	);
+}
+
+// ── Tag Input ────────────────────────────────────────────────────────────────
+
+function TagInput({
+	items,
+	onChange,
+	placeholder,
+	showLogos,
+	maxVisibleItems,
+}: {
+	items: string[];
+	onChange: (next: string[]) => void;
+	placeholder?: string;
+	showLogos?: boolean;
+	maxVisibleItems?: number;
+}) {
+	const [input, setInput] = useState("");
+	const [err, setErr] = useState<string | null>(null);
+	const [focused, setFocused] = useState(false);
+	const [showAllItems, setShowAllItems] = useState(false);
+
+	const hasOverflow =
+		typeof maxVisibleItems === "number" &&
+		maxVisibleItems > 0 &&
+		items.length > maxVisibleItems;
+
+	const visibleItems =
+		hasOverflow && !showAllItems ? items.slice(0, maxVisibleItems) : items;
+
+	useEffect(() => {
+		if (!hasOverflow && showAllItems) {
+			setShowAllItems(false);
+		}
+	}, [hasOverflow, showAllItems]);
+
+	function add() {
+		const val = input.trim();
+		if (!val) return;
+		if (items.map((i) => i.toLowerCase()).includes(val.toLowerCase())) {
+			setErr("Already in list");
+			return;
+		}
+		onChange([...items, val]);
+		setInput("");
+		setErr(null);
+	}
+
+	return (
+		<div className="space-y-3">
+			{items.length > 0 && (
+				<div className="flex flex-wrap gap-2">
+					{visibleItems.map((item) => {
+						const logo = showLogos ? getEntityLogo(item) : null;
+						return (
+							<span
+								key={item}
+								className="inline-flex items-center gap-1.5 rounded-full text-xs font-medium"
+								style={{
+									background: "#F2EDE6",
+									color: "#3D5840",
+									border: "1px solid #DDD0BC",
+									paddingLeft: logo ? 6 : 12,
+									paddingRight: 8,
+									paddingTop: 4,
+									paddingBottom: 4,
+								}}
+							>
+								{logo && <EntityLogo entity={item} size={14} />}
+								{item}
+								<button
+									type="button"
+									onClick={() => onChange(items.filter((i) => i !== item))}
+									className="flex items-center justify-center leading-none"
+									style={{ color: "#9AAE9C", fontSize: "14px" }}
+									onMouseEnter={(e) =>
+										((e.currentTarget as HTMLButtonElement).style.color =
+											"#dc2626")
+									}
+									onMouseLeave={(e) =>
+										((e.currentTarget as HTMLButtonElement).style.color =
+											"#9AAE9C")
+									}
+								>
+									×
+								</button>
+							</span>
+						);
+					})}
+					{hasOverflow && !showAllItems && (
+						<button
+							type="button"
+							onClick={() => setShowAllItems(true)}
+							className="inline-flex items-center rounded-full text-xs font-semibold"
+							style={{
+								background: "#EEF5EF",
+								color: "#2A5C2E",
+								border: "1px solid #C8DEC9",
+								padding: "5px 11px",
+								cursor: "pointer",
+							}}
+						>
+							See all
+						</button>
+					)}
+					{hasOverflow && showAllItems && (
+						<button
+							type="button"
+							onClick={() => setShowAllItems(false)}
+							className="inline-flex items-center rounded-full text-xs font-semibold"
+							style={{
+								background: "#F2EDE6",
+								color: "#607860",
+								border: "1px solid #DDD0BC",
+								padding: "5px 11px",
+								cursor: "pointer",
+							}}
+						>
+							Show less
+						</button>
+					)}
+				</div>
+			)}
+			<div className="flex gap-2">
+				<input
+					type="text"
+					value={input}
+					placeholder={placeholder}
+					className="flex-1 px-3 py-2.5 sm:py-2 rounded-lg text-sm outline-none"
+					style={{
+						border: `1px solid ${err ? "#fca5a5" : focused ? "#8FBB93" : "#DDD0BC"}`,
+						background: "#FFFFFF",
+						color: "#2A3A2C",
+						transition: "border-color 0.1s",
+					}}
+					onFocus={() => {
+						setFocused(true);
+						setErr(null);
+					}}
+					onBlur={() => setFocused(false)}
+					onChange={(e) => {
+						setInput(e.target.value);
+						setErr(null);
+					}}
+					onKeyDown={(e) => {
+						if (e.key === "Enter") {
+							e.preventDefault();
+							add();
+						}
+					}}
+				/>
+				<button
+					type="button"
+					onClick={add}
+					className="px-4 py-2.5 sm:py-2 rounded-lg text-sm font-medium"
+					style={{
+						background: "#F2EDE6",
+						color: "#3D5840",
+						border: "1px solid #DDD0BC",
+						cursor: "pointer",
+					}}
+					onMouseEnter={(e) =>
+						((e.currentTarget as HTMLButtonElement).style.background =
+							"#E8E0D2")
+					}
+					onMouseLeave={(e) =>
+						((e.currentTarget as HTMLButtonElement).style.background =
+							"#F2EDE6")
+					}
+				>
+					Add
+				</button>
+			</div>
+			{err && (
+				<div className="text-xs" style={{ color: "#dc2626" }}>
+					{err}
+				</div>
+			)}
+		</div>
+	);
+}
+
+// ── Query CSV Import ─────────────────────────────────────────────────────────
+
+const QUERY_IMPORT_MAX_LENGTH = 600;
+const QUERY_IMPORT_HEADER_KEYS = new Set([
+	"query",
+	"queries",
+	"prompt",
+	"prompts",
+	"query_text",
+	"prompt_text",
+]);
+
+interface QueryImportInvalidRow {
+	lineNumber: number;
+	value: string;
+}
+
+interface QueryImportPreview {
+	parsedQueries: string[];
+	totalRows: number;
+	skippedEmptyRows: number;
+	duplicateRows: number;
+	existingDuplicateRows: number;
+	tooLongRows: QueryImportInvalidRow[];
+	headerRowSkipped: boolean;
+}
+
+function parseCsvCells(line: string): string[] {
+	const out: string[] = [];
+	let current = "";
+	let inQuotes = false;
+
+	for (let i = 0; i < line.length; i += 1) {
+		const ch = line[i];
+		if (ch === '"') {
+			if (inQuotes && line[i + 1] === '"') {
+				current += '"';
+				i += 1;
+			} else {
+				inQuotes = !inQuotes;
+			}
+			continue;
+		}
+
+		if (ch === "," && !inQuotes) {
+			out.push(current);
+			current = "";
+			continue;
+		}
+
+		current += ch;
+	}
+
+	out.push(current);
+	return out;
+}
+
+function escapeCsvCell(value: string): string {
+	const escaped = value.replace(/"/g, '""');
+	if (/[",\n\r]/.test(value)) {
+		return `"${escaped}"`;
+	}
+	return escaped;
+}
+
+function buildQueryExportCsv(queries: string[]): string {
+	const lines = ["query", ...queries.map((query) => escapeCsvCell(query))];
+	return `${lines.join("\n")}\n`;
+}
+
+function parseQueryImportText(
+	rawText: string,
+	existingQueries: string[],
+): QueryImportPreview {
+	const lines = rawText.split(/\r?\n/);
+	const existingKeys = new Set(
+		existingQueries.map((query) => normalizeQueryKey(query)),
+	);
+	const seenImported = new Set<string>();
+	const parsedQueries: string[] = [];
+	const tooLongRows: QueryImportInvalidRow[] = [];
+
+	let totalRows = 0;
+	let skippedEmptyRows = 0;
+	let duplicateRows = 0;
+	let existingDuplicateRows = 0;
+	let headerRowSkipped = false;
+	let firstContentRowSeen = false;
+
+	for (let index = 0; index < lines.length; index += 1) {
+		const rawLine = lines[index];
+		if (!rawLine.trim()) {
+			skippedEmptyRows += 1;
+			continue;
+		}
+
+		totalRows += 1;
+		const lineNumber = index + 1;
+		const cells = parseCsvCells(rawLine).map((cell) => cell.trim());
+		const firstValue = cells.find((cell) => cell.length > 0) ?? "";
+
+		if (!firstValue) {
+			skippedEmptyRows += 1;
+			continue;
+		}
+
+		if (!firstContentRowSeen) {
+			firstContentRowSeen = true;
+			const normalizedHeader = firstValue.toLowerCase();
+			if (QUERY_IMPORT_HEADER_KEYS.has(normalizedHeader)) {
+				headerRowSkipped = true;
+				continue;
+			}
+		}
+
+		if (firstValue.length > QUERY_IMPORT_MAX_LENGTH) {
+			tooLongRows.push({
+				lineNumber,
+				value: firstValue.slice(0, 120),
+			});
+			continue;
+		}
+
+		const key = normalizeQueryKey(firstValue);
+		if (seenImported.has(key)) {
+			duplicateRows += 1;
+			continue;
+		}
+		seenImported.add(key);
+
+		if (existingKeys.has(key)) {
+			existingDuplicateRows += 1;
+		}
+
+		parsedQueries.push(firstValue);
+	}
+
+	return {
+		parsedQueries,
+		totalRows,
+		skippedEmptyRows,
+		duplicateRows,
+		existingDuplicateRows,
+		tooLongRows,
+		headerRowSkipped,
+	};
+}
+
+function QueryCsvImporter({
+	existingQueries,
+	existingQueryTags,
+	onApply,
+}: {
+	existingQueries: string[];
+	existingQueryTags: Record<string, string[]>;
+	onApply: (
+		nextQueries: string[],
+		nextQueryTags: Record<string, string[]>,
+	) => Promise<void> | void;
+}) {
+	const fileInputRef = useRef<HTMLInputElement>(null);
+	const [rawText, setRawText] = useState("");
+	const [sourceLabel, setSourceLabel] = useState("");
+	const [mode, setMode] = useState<"append" | "replace">("append");
+	const [importTags, setImportTags] = useState<string[]>([]);
+	const [isApplying, setIsApplying] = useState(false);
+	const [status, setStatus] = useState<{
+		type: "idle" | "success" | "error";
+		text: string;
+	}>({
+		type: "idle",
+		text: "",
+	});
+
+	const preview = useMemo(
+		() => parseQueryImportText(rawText, existingQueries),
+		[rawText, existingQueries],
+	);
+
+	const mergedAppendQueries = useMemo(
+		() => dedupeCaseInsensitive([...existingQueries, ...preview.parsedQueries]),
+		[existingQueries, preview.parsedQueries],
+	);
+	const replaceQueries = useMemo(
+		() => dedupeCaseInsensitive(preview.parsedQueries),
+		[preview.parsedQueries],
+	);
+	const existingQueryKeySet = useMemo(
+		() => new Set(existingQueries.map((query) => normalizeQueryKey(query))),
+		[existingQueries],
+	);
+	const normalizedImportTags = useMemo(
+		() => normalizePromptTagList(importTags),
+		[importTags],
+	);
+	const importTagTargetQueries = useMemo(
+		() => replaceQueries,
+		[replaceQueries],
+	);
+	const appendImportedExistingCount = useMemo(
+		() =>
+			replaceQueries.reduce(
+				(count, query) =>
+					count + (existingQueryKeySet.has(normalizeQueryKey(query)) ? 1 : 0),
+				0,
+			),
+		[existingQueryKeySet, replaceQueries],
+	);
+
+	const appendNewCount = Math.max(
+		0,
+		mergedAppendQueries.length - existingQueries.length,
+	);
+	const hasImportText = rawText.trim().length > 0;
+	const canApply =
+		mode === "append"
+			? preview.parsedQueries.length > 0 &&
+				(appendNewCount > 0 ||
+					(normalizedImportTags.length > 0 &&
+						importTagTargetQueries.length > 0))
+			: replaceQueries.length > 0;
+
+	async function handleFileInputChange(
+		event: React.ChangeEvent<HTMLInputElement>,
+	) {
+		const file = event.target.files?.[0];
+		if (!file) return;
+
+		try {
+			const text = await file.text();
+			setRawText(text);
+			setSourceLabel(file.name);
+			setStatus({ type: "idle", text: "" });
+		} catch {
+			setStatus({
+				type: "error",
+				text: "Could not read file. Try another CSV.",
+			});
+		}
+	}
+
+	function clearImport() {
+		setRawText("");
+		setSourceLabel("");
+		setImportTags([]);
+		setStatus({ type: "idle", text: "" });
+		if (fileInputRef.current) {
+			fileInputRef.current.value = "";
+		}
+	}
+
+	async function applyImport() {
+		if (!canApply) return;
+
+		const nextQueries =
+			mode === "append" ? mergedAppendQueries : replaceQueries;
+		const baseNextQueryTags = buildQueryTagsForQueries(
+			nextQueries,
+			existingQueryTags,
+		);
+		const nextQueryTags = applyImportTagsToQueries(
+			nextQueries,
+			baseNextQueryTags,
+			importTagTargetQueries,
+			normalizedImportTags,
+		);
+		const importTagSummary =
+			normalizedImportTags.length > 0 && importTagTargetQueries.length > 0
+				? ` Applied tag${normalizedImportTags.length === 1 ? "" : "s"} (${normalizedImportTags.join(", ")}) to ${importTagTargetQueries.length} prompt${importTagTargetQueries.length === 1 ? "" : "s"}.`
+				: "";
+		setIsApplying(true);
+		setStatus({ type: "idle", text: "" });
+		try {
+			await onApply(nextQueries, nextQueryTags);
+			if (mode === "append") {
+				setStatus({
+					type: "success",
+					text: `Imported and saved. Added ${appendNewCount} prompt${appendNewCount === 1 ? "" : "s"}.${importTagSummary}`,
+				});
+			} else {
+				setStatus({
+					type: "success",
+					text: `Imported and saved. Replaced with ${replaceQueries.length} prompt${replaceQueries.length === 1 ? "" : "s"}.${importTagSummary}`,
+				});
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			setStatus({
+				type: "error",
+				text: message
+					? `Import failed: ${message}`
+					: "Import failed. Please try again.",
+			});
+		} finally {
+			setIsApplying(false);
+		}
+	}
+
+	function handleExportCsv() {
+		if (existingQueries.length === 0) {
+			setStatus({ type: "error", text: "No prompts to export yet." });
+			return;
+		}
+
+		try {
+			const csv = buildQueryExportCsv(existingQueries);
+			const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+			const url = URL.createObjectURL(blob);
+			const stamp = new Date().toISOString().slice(0, 10);
+			const link = document.createElement("a");
+			link.href = url;
+			link.download = `prompt-queries-${stamp}.csv`;
+			document.body.appendChild(link);
+			link.click();
+			document.body.removeChild(link);
+			URL.revokeObjectURL(url);
+			setStatus({
+				type: "success",
+				text: `Exported ${existingQueries.length} prompt${existingQueries.length === 1 ? "" : "s"} to CSV.`,
+			});
+		} catch {
+			setStatus({ type: "error", text: "Could not export CSV. Try again." });
+		}
+	}
+
+	return (
+		<div
+			className="rounded-xl"
+			style={{
+				background: "#F9F6F0",
+				border: "1px solid #E6DCCB",
+				boxShadow: "inset 0 1px 0 rgba(255,255,255,0.55)",
+			}}
+		>
+			<div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-3 pb-2">
+				<div>
+					<p
+						className="text-xs font-semibold uppercase tracking-[0.08em]"
+						style={{ color: "#7A8E7C" }}
+					>
+						Import Prompt CSV
+					</p>
+					<p className="text-xs mt-0.5" style={{ color: "#8C9D8E" }}>
+						Upload a CSV/text list where each row contains one prompt query.
+					</p>
+				</div>
+				<div className="flex items-center gap-2">
+					<input
+						ref={fileInputRef}
+						type="file"
+						accept=".csv,text/csv,.txt,text/plain"
+						onChange={(event) => {
+							void handleFileInputChange(event);
+						}}
+						className="hidden"
+					/>
+					<button
+						type="button"
+						onClick={() => fileInputRef.current?.click()}
+						className="inline-flex items-center rounded-lg text-xs font-semibold"
+						style={{
+							background: "#EEF5EF",
+							color: "#2C5D30",
+							border: "1px solid #C8DEC9",
+							padding: "7px 10px",
+							cursor: "pointer",
+						}}
+					>
+						Upload CSV
+					</button>
+					<button
+						type="button"
+						onClick={clearImport}
+						disabled={!hasImportText}
+						className="inline-flex items-center rounded-lg text-xs font-semibold"
+						style={{
+							background: hasImportText ? "#F2EDE6" : "#EEEAE3",
+							color: hasImportText ? "#6D7F6F" : "#AAB7AC",
+							border: "1px solid #DDD0BC",
+							padding: "7px 10px",
+							cursor: hasImportText ? "pointer" : "not-allowed",
+						}}
+					>
+						Clear
+					</button>
+				</div>
+			</div>
+
+			<div className="px-4 pb-3">
+				<textarea
+					value={rawText}
+					onChange={(event) => {
+						setRawText(event.target.value);
+						setSourceLabel("");
+						setStatus({ type: "idle", text: "" });
+					}}
+					rows={4}
+					placeholder={
+						"Paste CSV here (one query per row)\nquery\nbest charting library for react\njavascript graphing tool"
+					}
+					className="w-full rounded-lg p-3 text-sm outline-none resize-y"
+					style={{
+						border: "1px solid #D8CCB8",
+						background: "#FFFFFF",
+						color: "#2A3A2C",
+						minHeight: 170,
+					}}
+				/>
+
+				{sourceLabel && (
+					<div className="mt-2 text-xs" style={{ color: "#6D8170" }}>
+						Loaded: <span className="font-semibold">{sourceLabel}</span>
+					</div>
+				)}
+
+				{hasImportText && (
+					<div className="mt-3 space-y-3">
+						<div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+							<span
+								className="rounded-md px-2 py-1"
+								style={{ background: "#EEF5EF", color: "#2C5D30" }}
+							>
+								Parsed: {preview.parsedQueries.length}
+							</span>
+							<span
+								className="rounded-md px-2 py-1"
+								style={{ background: "#F3F7FB", color: "#2F5B84" }}
+							>
+								Rows: {preview.totalRows}
+							</span>
+							<span
+								className="rounded-md px-2 py-1"
+								style={{ background: "#FFF6E8", color: "#A66619" }}
+							>
+								Empty skipped: {preview.skippedEmptyRows}
+							</span>
+							<span
+								className="rounded-md px-2 py-1"
+								style={{ background: "#FFF4EC", color: "#B56A2A" }}
+							>
+								In-file duplicates: {preview.duplicateRows}
+							</span>
+							<span
+								className="rounded-md px-2 py-1"
+								style={{ background: "#F4F1FF", color: "#6A4EB0" }}
+							>
+								Already tracked: {preview.existingDuplicateRows}
+							</span>
+							<span
+								className="rounded-md px-2 py-1"
+								style={{ background: "#FEF2F2", color: "#B45353" }}
+							>
+								Too long (&gt;{QUERY_IMPORT_MAX_LENGTH}):{" "}
+								{preview.tooLongRows.length}
+							</span>
+						</div>
+
+						{preview.headerRowSkipped && (
+							<div
+								className="rounded-lg px-3 py-2 text-xs"
+								style={{
+									background: "#F2EDE6",
+									border: "1px solid #DDD0BC",
+									color: "#6D7F6F",
+								}}
+							>
+								Header row detected and skipped.
+							</div>
+						)}
+
+						{preview.tooLongRows.length > 0 && (
+							<div
+								className="rounded-lg px-3 py-2 text-xs"
+								style={{
+									background: "#FEF2F2",
+									border: "1px solid #FECACA",
+									color: "#B91C1C",
+								}}
+							>
+								Some rows are too long and were skipped:
+								<div className="mt-1.5 space-y-1">
+									{preview.tooLongRows.slice(0, 4).map((row) => (
+										<div key={row.lineNumber}>
+											Line {row.lineNumber}: {row.value}
+											{row.value.length >= 120 ? "…" : ""}
+										</div>
+									))}
+									{preview.tooLongRows.length > 4 && (
+										<div>+{preview.tooLongRows.length - 4} more rows</div>
+									)}
+								</div>
+							</div>
+						)}
+
+						<div
+							className="rounded-lg px-3 py-3"
+							style={{ background: "#F4F8FD", border: "1px solid #D5E1F1" }}
+						>
+							<div
+								className="text-[11px] font-semibold uppercase tracking-[0.06em]"
+								style={{ color: "#4C6785" }}
+							>
+								Import tags
+							</div>
+							<p className="text-xs mt-1" style={{ color: "#6C829A" }}>
+								Optional. Apply custom tags to imported prompts before they are
+								added.
+							</p>
+							<div className="mt-2">
+								<TagInput
+									items={normalizedImportTags}
+									onChange={(next) =>
+										setImportTags(normalizePromptTagList(next))
+									}
+									placeholder="e.g. custom batch tag"
+									maxVisibleItems={6}
+								/>
+							</div>
+							{normalizedImportTags.length > 0 && (
+								<p className="text-xs mt-2" style={{ color: "#6C829A" }}>
+									{mode === "append"
+										? `Will tag ${importTagTargetQueries.length} imported prompt${importTagTargetQueries.length === 1 ? "" : "s"} on append${appendImportedExistingCount > 0 ? ` (${appendImportedExistingCount} already tracked)` : ""}.`
+										: `Will tag ${importTagTargetQueries.length} imported prompt${importTagTargetQueries.length === 1 ? "" : "s"} on replace.`}
+								</p>
+							)}
+						</div>
+
+						{preview.parsedQueries.length > 0 && (
+							<div
+								className="rounded-lg p-2.5"
+								style={{
+									background: "#FFFFFF",
+									border: "1px solid #E7DDCE",
+									maxHeight: 150,
+									overflowY: "auto",
+								}}
+							>
+								<div
+									className="text-[11px] font-semibold uppercase tracking-[0.06em] mb-2"
+									style={{ color: "#90A292" }}
+								>
+									Import Preview
+								</div>
+								<div className="flex flex-wrap gap-2">
+									{preview.parsedQueries.slice(0, 30).map((query) => {
+										return (
+											<span
+												key={query}
+												className="inline-flex items-center rounded-full text-xs font-medium"
+												style={{
+													background: "#F2EDE6",
+													color: "#3D5840",
+													border: "1px solid #DDD0BC",
+													padding: "5px 11px",
+													maxWidth: "100%",
+												}}
+												title={query}
+											>
+												<span className="truncate">{query}</span>
+											</span>
+										);
+									})}
+									{preview.parsedQueries.length > 30 && (
+										<div className="text-xs" style={{ color: "#8EA08F" }}>
+											+{preview.parsedQueries.length - 30} more prompts
+										</div>
+									)}
+								</div>
+							</div>
+						)}
+
+						<div className="flex flex-wrap items-center justify-between gap-3">
+							<div
+								className="inline-flex rounded-lg overflow-hidden"
+								style={{ border: "1px solid #D9CCB7" }}
+							>
+								<button
+									type="button"
+									onClick={() => setMode("append")}
+									className="px-3 py-1.5 text-xs font-semibold"
+									style={{
+										background: mode === "append" ? "#2A6032" : "#F7F3EB",
+										color: mode === "append" ? "#FFFFFF" : "#5D7260",
+										cursor: "pointer",
+									}}
+								>
+									Append
+								</button>
+								<button
+									type="button"
+									onClick={() => setMode("replace")}
+									className="px-3 py-1.5 text-xs font-semibold"
+									style={{
+										background: mode === "replace" ? "#A35D2A" : "#F7F3EB",
+										color: mode === "replace" ? "#FFFFFF" : "#6D6B62",
+										borderLeft: "1px solid #D9CCB7",
+										cursor: "pointer",
+									}}
+								>
+									Replace
+								</button>
+							</div>
+
+							<button
+								type="button"
+								disabled={!canApply}
+								onClick={() => {
+									void applyImport();
+								}}
+								className="inline-flex items-center rounded-lg text-xs font-semibold"
+								style={{
+									background: canApply && !isApplying ? "#2A6032" : "#EDEBE6",
+									color: canApply && !isApplying ? "#FFFFFF" : "#B0BAB2",
+									border: `1px solid ${canApply && !isApplying ? "#1F4A26" : "#DDD8CE"}`,
+									padding: "7px 11px",
+									cursor: canApply && !isApplying ? "pointer" : "not-allowed",
+								}}
+							>
+								{isApplying
+									? "Applying…"
+									: mode === "append"
+										? appendNewCount > 0
+											? `Apply import (+${appendNewCount})`
+											: normalizedImportTags.length > 0 &&
+													importTagTargetQueries.length > 0
+												? `Apply tags (${importTagTargetQueries.length})`
+												: "Apply import"
+										: `Replace with ${replaceQueries.length}`}
+							</button>
+						</div>
+
+						<div className="text-xs" style={{ color: "#8C9D8E" }}>
+							{mode === "append"
+								? "Append keeps existing prompts and adds only new ones. Import tags apply to all imported prompts, including already tracked ones."
+								: "Replace discards current prompts and keeps only imported prompts."}
+						</div>
+					</div>
+				)}
+
+				{status.type !== "idle" && (
+					<div
+						className="mt-3 rounded-lg px-3 py-2 text-xs font-medium"
+						style={{
+							background: status.type === "success" ? "#EEF5EF" : "#FEF2F2",
+							border: `1px solid ${status.type === "success" ? "#C8DEC9" : "#FECACA"}`,
+							color: status.type === "success" ? "#2C5D30" : "#B91C1C",
+						}}
+					>
+						{status.text}
+					</div>
+				)}
+			</div>
+		</div>
+	);
+}
+
+// ── Query Lab ─────────────────────────────────────────────────────────────────
+
+type LabStatus = "idle" | "running" | "done" | "error";
+
+interface LabMention {
+	entity: string;
+}
+
+interface QueryLabResultView {
+	result: PromptLabRunResult;
+	mentions: LabMention[];
+	ownedMetrics: {
+		ownedSourceCount: number;
+		firstOwnedRank: number | null;
+		ownedSharePct: number;
+		totalSources: number;
+	};
+}
+
+const LAB_SUGGESTIONS = [
+	"best javascript charting library for React",
+	"highcharts vs chart.js comparison",
+	"data visualization library with TypeScript support",
+	"lightweight chart library for dashboards",
+];
+
+function dedupeCaseInsensitive(values: string[]): string[] {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const value of values) {
+		const trimmed = value.trim();
+		if (!trimmed) continue;
+		const key = trimmed.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		out.push(trimmed);
+	}
+	return out;
+}
+
+function normalizeCitationHost(value: string): string {
+	const trimmed = value.trim();
+	if (!trimmed) return "";
+	try {
+		return new URL(trimmed).hostname.toLowerCase().replace(/^www\./, "");
+	} catch {
+		return (
+			trimmed
+				.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")
+				.split("/")[0]
+				.split("?")[0]
+				.split("#")[0]
+				.split("@")
+				.at(-1)
+				?.split(":")[0]
+				?.toLowerCase()
+				.replace(/^www\./, "")
+				.trim() || ""
+		);
+	}
+}
+
+function normalizeOwnedDomain(value: string): string {
+	return normalizeCitationHost(value);
+}
+
+function hostMatchesOwnedDomain(host: string, domain: string): boolean {
+	const normalizedHost = normalizeCitationHost(host);
+	const normalizedDomain = normalizeOwnedDomain(domain);
+	if (!normalizedHost || !normalizedDomain) return false;
+	return (
+		normalizedHost === normalizedDomain ||
+		normalizedHost.endsWith(`.${normalizedDomain}`)
+	);
+}
+
+function normalizeOrderedCitationSources(
+	result: PromptLabRunResult,
+): Array<{ url: string; host: string }> {
+	const refs: CitationRef[] = Array.isArray(result.citationRefs)
+		? result.citationRefs
+		: [];
+	const seen = new Set<string>();
+	const ordered = refs
+		.filter((ref) => typeof ref.url === "string" && ref.url.trim().length > 0)
+		.slice()
+		.sort((left, right) => {
+			const leftEnd =
+				typeof left.endIndex === "number" && Number.isFinite(left.endIndex)
+					? left.endIndex
+					: Number.POSITIVE_INFINITY;
+			const rightEnd =
+				typeof right.endIndex === "number" && Number.isFinite(right.endIndex)
+					? right.endIndex
+					: Number.POSITIVE_INFINITY;
+			if (leftEnd !== rightEnd) return leftEnd - rightEnd;
+			return left.url.localeCompare(right.url);
+		})
+		.map((ref) => ({
+			url: ref.url.trim(),
+			host: ref.host || normalizeCitationHost(ref.url),
+		}))
+		.filter((ref) => {
+			if (!ref.url || seen.has(ref.url)) return false;
+			seen.add(ref.url);
+			return true;
+		});
+	if (ordered.length > 0) return ordered;
+
+	return (result.citations ?? [])
+		.map((url) => String(url ?? "").trim())
+		.filter(Boolean)
+		.filter((url) => {
+			if (seen.has(url)) return false;
+			seen.add(url);
+			return true;
+		})
+		.map((url) => ({ url, host: normalizeCitationHost(url) }));
+}
+
+function computeOwnedCitationMetrics(
+	result: PromptLabRunResult,
+	ownedDomains: string[],
+): {
+	ownedSourceCount: number;
+	firstOwnedRank: number | null;
+	ownedSharePct: number;
+	totalSources: number;
+} {
+	const sources = normalizeOrderedCitationSources(result);
+	if (sources.length === 0 || ownedDomains.length === 0) {
+		return {
+			ownedSourceCount: 0,
+			firstOwnedRank: null,
+			ownedSharePct: 0,
+			totalSources: sources.length,
+		};
+	}
+	const ownedIndexes = sources
+		.map((source, index) =>
+			ownedDomains.some((domain) => hostMatchesOwnedDomain(source.host, domain))
+				? index
+				: -1,
+		)
+		.filter((index) => index >= 0);
+	const ownedSourceCount = ownedIndexes.length;
+	return {
+		ownedSourceCount,
+		firstOwnedRank: ownedIndexes.length > 0 ? ownedIndexes[0] + 1 : null,
+		ownedSharePct:
+			sources.length > 0 ? (ownedSourceCount / sources.length) * 100 : 0,
+		totalSources: sources.length,
+	};
+}
+
+function isOpenAiModelId(model: string): boolean {
+	const normalized = model.trim().toLowerCase();
+	return (
+		normalized.startsWith("gpt") ||
+		normalized.startsWith("o1") ||
+		normalized.startsWith("o3") ||
+		normalized.startsWith("openai/")
+	);
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function aliasToMentionPattern(alias: string): RegExp | null {
+	const chunks = alias.trim().split(/\s+/).filter(Boolean).map(escapeRegExp);
+	if (chunks.length === 0) return null;
+	const body = chunks.join("\\s+");
+	return new RegExp(`(?<![A-Za-z0-9])${body}(?![A-Za-z0-9])`, "i");
+}
+
+function hasMentionMatch(text: string, alias: string): boolean {
+	const pattern = aliasToMentionPattern(alias);
+	return pattern ? pattern.test(text) : false;
+}
+
+function buildAliasLookup(
+	aliasesByEntity: Record<string, string[]>,
+): Map<string, string[]> {
+	const map = new Map<string, string[]>();
+	for (const [entity, aliases] of Object.entries(aliasesByEntity)) {
+		const key = entity.trim().toLowerCase();
+		if (!key) continue;
+		const normalizedAliases = dedupeCaseInsensitive(
+			(aliases ?? []).map((value) => String(value)),
+		);
+		if (normalizedAliases.length > 0) {
+			map.set(key, normalizedAliases);
+		}
+	}
+	return map;
+}
+
+function detectMentions(
+	responseText: string,
+	trackedEntities: string[],
+	aliasLookup: Map<string, string[]>,
+): LabMention[] {
+	return trackedEntities
+		.map((entity) => {
+			const normalizedEntity = entity.trim();
+			const aliases = dedupeCaseInsensitive([
+				normalizedEntity,
+				...(aliasLookup.get(normalizedEntity.toLowerCase()) ?? []),
+			]);
+
+			const mentioned = aliases.some((alias) =>
+				hasMentionMatch(responseText, alias),
+			);
+
+			return mentioned ? { entity } : null;
+		})
+		.filter((mention): mention is LabMention => mention !== null);
+}
+
+function normalizeQueryLabErrorMessage(error: unknown): string {
+	const raw =
+		error instanceof Error ? error.message.trim() : String(error ?? "").trim();
+
+	if (!raw) {
+		return "Run failed. Check Query Lab server logs.";
+	}
+
+	const normalized = raw.toLowerCase();
+	if (
+		normalized === "internal server error." ||
+		normalized === "prompt lab run failed."
+	) {
+		return "Query Lab server error. If this is a new setup, set OPENAI_API_KEY (GPT), ANTHROPIC_API_KEY (Claude), or GEMINI_API_KEY (Gemini) on the server.";
+	}
+
+	if (normalized.includes("not configured")) {
+		return `${raw} Add OPENAI_API_KEY (GPT), ANTHROPIC_API_KEY (Claude), or GEMINI_API_KEY (Gemini) to your server environment and retry.`;
+	}
+
+	if (
+		normalized.includes("quota") ||
+		normalized.includes("billing") ||
+		normalized.includes("rate-limit")
+	) {
+		return `${raw} Query Lab reached provider quota/rate limits. Verify billing/quota for the selected model and retry.`;
+	}
+
+	return raw;
+}
+
+function QueryLab({
+	trackedEntities,
+	aliasesByEntity,
+	competitorCitationDomains,
+	onQueryRun,
+	competitors,
+	onCompetitorsChange,
+	hasHighcharts,
+}: {
+	trackedEntities: string[];
+	aliasesByEntity: Record<string, string[]>;
+	competitorCitationDomains?: Record<string, string[]>;
+	onQueryRun?: (query: string) => Promise<void> | void;
+	competitors: string[];
+	onCompetitorsChange: (v: string[]) => void;
+	hasHighcharts: boolean;
+}) {
+	const [queryText, setQueryText] = useState("");
+	const [status, setStatus] = useState<LabStatus>("idle");
+	const [resultViews, setResultViews] = useState<QueryLabResultView[]>([]);
+	const [errorText, setErrorText] = useState("");
+	const [allowMultipleModels, setAllowMultipleModels] = useState(true);
+	const [selectedModels, setSelectedModels] = useState<string[]>([
+		PROMPT_LAB_MODEL_VALUES[0],
+	]);
+	const [webSearch, setWebSearch] = useState(true);
+	const [searchContextEnabled, setSearchContextEnabled] = useState(false);
+	const [searchContextLocation, setSearchContextLocation] =
+		useState("United States");
+	const [searchContextLanguage, setSearchContextLanguage] = useState("en");
+	const [elapsedMs, setElapsedMs] = useState(0);
+	const [resultModalOpen, setResultModalOpen] = useState(false);
+	const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const aliasLookup = useMemo(
+		() => buildAliasLookup(aliasesByEntity),
+		[aliasesByEntity],
+	);
+	const effectiveModels = useMemo(
+		() =>
+			allowMultipleModels
+				? dedupeModels(selectedModels)
+				: dedupeModels(selectedModels).slice(0, 1),
+		[allowMultipleModels, selectedModels],
+	);
+	const hasOpenAiModel = useMemo(
+		() => effectiveModels.some((model) => isOpenAiModelId(model)),
+		[effectiveModels],
+	);
+	const ownedDomains = useMemo(() => {
+		const normalizedConfig = Object.fromEntries(
+			Object.entries(competitorCitationDomains ?? {}).map(([slug, domains]) => [
+				slug.trim().toLowerCase(),
+				dedupeCaseInsensitive(
+					(domains ?? []).map((domain) => normalizeOwnedDomain(String(domain))),
+				).filter(Boolean),
+			]),
+		);
+		const configured = normalizedConfig.highcharts ?? [];
+		return configured.length > 0 ? configured : ["highcharts.com"];
+	}, [competitorCitationDomains]);
+
+	const [moreSettingsOpen, setMoreSettingsOpen] = useState(false);
+	const [showHint, setShowHint] = useState(false);
+	const hintShownRef = useRef(false);
+
+	const canRun =
+		queryText.trim().length > 0 &&
+		status !== "running" &&
+		effectiveModels.length > 0;
+
+	function startTimer() {
+		const t0 = Date.now();
+		intervalRef.current = setInterval(() => setElapsedMs(Date.now() - t0), 100);
+	}
+	function stopTimer() {
+		if (intervalRef.current) {
+			clearInterval(intervalRef.current);
+			intervalRef.current = null;
+		}
+	}
+
+	useEffect(
+		() => () => {
+			if (intervalRef.current) {
+				clearInterval(intervalRef.current);
+				intervalRef.current = null;
+			}
+		},
+		[],
+	);
+
+	useEffect(() => {
+		if (!allowMultipleModels) {
+			setSelectedModels((current) => {
+				const normalized = dedupeModels(current);
+				return normalized.length > 0
+					? [normalized[0]]
+					: [PROMPT_LAB_MODEL_VALUES[0]];
+			});
+		}
+	}, [allowMultipleModels]);
+
+	useEffect(() => {
+		if (!hasOpenAiModel) {
+			setSearchContextEnabled(false);
+		}
+	}, [hasOpenAiModel]);
+
+	async function handleRun() {
+		if (!canRun) return;
+		const normalizedQuery = queryText.trim();
+		setStatus("running");
+		setResultViews([]);
+		setErrorText("");
+		setResultModalOpen(false);
+		setElapsedMs(0);
+		startTimer();
+		try {
+			const response = await api.promptLabRun({
+				query: normalizedQuery,
+				model: effectiveModels[0],
+				models: effectiveModels,
+				webSearch: hasOpenAiModel ? webSearch : false,
+				searchContext: {
+					enabled: hasOpenAiModel ? searchContextEnabled : false,
+					location: searchContextLocation.trim() || "United States",
+					language: searchContextLanguage.trim() || "en",
+				},
+			});
+			if (response.summary.successCount > 0 && onQueryRun) {
+				await onQueryRun(normalizedQuery);
+			}
+			const normalizedResults =
+				response.results?.length > 0
+					? response.results
+					: [
+							{
+								ok: response.ok,
+								model: response.model ?? effectiveModels[0],
+								provider: response.provider ?? "openai",
+								modelOwner: response.modelOwner ?? "Unknown",
+								webSearchEnabled: response.webSearchEnabled,
+								effectiveQuery: response.effectiveQuery ?? normalizedQuery,
+								citationRefs: response.citationRefs ?? [],
+								responseText: response.responseText,
+								citations: response.citations,
+								durationMs: response.durationMs,
+								error: response.ok ? null : "Run failed",
+								tokens: response.tokens ?? {
+									inputTokens: 0,
+									outputTokens: 0,
+									totalTokens: 0,
+								},
+							},
+						];
+
+			const nextViews = normalizedResults.map((item) => {
+				const text = (item.responseText || "").trim();
+				return {
+					result: {
+						...item,
+						responseText:
+							text || (item.ok ? "Model returned an empty response." : ""),
+					},
+					mentions: text
+						? detectMentions(text, trackedEntities, aliasLookup)
+						: [],
+					ownedMetrics: computeOwnedCitationMetrics(item, ownedDomains),
+				};
+			});
+
+			setResultViews(nextViews);
+			setResultModalOpen(true);
+			setStatus(response.summary.successCount > 0 ? "done" : "error");
+			if (response.summary.successCount === 0) {
+				const firstError =
+					nextViews.find((view) => view.result.error)?.result.error ??
+					"All selected models failed.";
+				setErrorText(normalizeQueryLabErrorMessage(firstError));
+			}
+		} catch (error) {
+			setErrorText(normalizeQueryLabErrorMessage(error));
+			setStatus("error");
+		} finally {
+			stopTimer();
+		}
+	}
+
+	const elapsedSec = (elapsedMs / 1000).toFixed(1);
+	const resultSummary = useMemo(() => {
+		const base = {
+			modelCount: resultViews.length,
+			successCount: 0,
+			failureCount: 0,
+			totalDurationMs: 0,
+			totalInputTokens: 0,
+			totalOutputTokens: 0,
+			totalTokens: 0,
+		};
+
+		for (const { result } of resultViews) {
+			const failed = Boolean(result.error) || !result.ok;
+			if (failed) {
+				base.failureCount += 1;
+			} else {
+				base.successCount += 1;
+			}
+			base.totalDurationMs += Math.max(0, Math.round(result.durationMs ?? 0));
+			base.totalInputTokens += Math.max(
+				0,
+				Math.round(result.tokens?.inputTokens ?? 0),
+			);
+			base.totalOutputTokens += Math.max(
+				0,
+				Math.round(result.tokens?.outputTokens ?? 0),
+			);
+			base.totalTokens += Math.max(
+				0,
+				Math.round(result.tokens?.totalTokens ?? 0),
+			);
+		}
+
+		return base;
+	}, [resultViews]);
+
+	const sourceStats = useMemo(
+		() =>
+			aggregateCitationSources(
+				resultViews.map((view, index) => ({
+					responseId: `${view.result.model}:${index + 1}`,
+					citationRefs: view.result.citationRefs ?? [],
+					citations: view.result.citations,
+				})),
+			),
+		[resultViews],
+	);
+
+	return (
+		<>
+			{/* Full-screen onboarding hint */}
+			{showHint && (
+				<div
+					onClick={() => setShowHint(false)}
+					style={{
+						position: "fixed",
+						inset: 0,
+						zIndex: 1000,
+						background: "rgba(20,30,22,0.45)",
+						backdropFilter: "blur(4px)",
+						WebkitBackdropFilter: "blur(4px)",
+						display: "flex",
+						alignItems: "center",
+						justifyContent: "center",
+						animation: "hint-backdrop-in 0.2s ease",
+					}}
+				>
+					<div
+						onClick={(e) => e.stopPropagation()}
+						style={{
+							background: "#FFFFFF",
+							borderRadius: 16,
+							boxShadow:
+								"0 8px 40px rgba(20,30,22,0.18), 0 2px 8px rgba(20,30,22,0.08)",
+							padding: "20px 22px 18px",
+							maxWidth: 320,
+							width: "calc(100% - 48px)",
+							position: "relative",
+							animation: "hint-card-in 0.22s cubic-bezier(0.16,1,0.3,1)",
+						}}
+					>
+						<button
+							type="button"
+							onClick={() => setShowHint(false)}
+							style={{
+								position: "absolute",
+								top: 12,
+								right: 12,
+								background: "none",
+								border: "none",
+								cursor: "pointer",
+								color: "#C5D4C6",
+								padding: 2,
+							}}
+						>
+							<svg
+								width="11"
+								height="11"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2.5"
+								strokeLinecap="round"
+							>
+								<line x1="18" y1="6" x2="6" y2="18" />
+								<line x1="6" y1="6" x2="18" y2="18" />
+							</svg>
+						</button>
+
+						<p
+							style={{
+								fontSize: 12,
+								color: "#2A3A2C",
+								margin: "0 0 8px",
+								lineHeight: 1.55,
+								paddingRight: 16,
+							}}
+						>
+							Test and run single prompts across all models to see if Highcharts
+							gets mentioned.
+						</p>
+						<p
+							style={{
+								fontSize: 12,
+								color: "#7A8E7C",
+								margin: 0,
+								lineHeight: 1.55,
+							}}
+						>
+							For full runs,{" "}
+							<Link
+								to="/runs"
+								style={{
+									color: "#2A6032",
+									fontWeight: 600,
+									textDecoration: "underline",
+									textUnderlineOffset: 2,
+								}}
+								onClick={() => setShowHint(false)}
+							>
+								Runs →
+							</Link>
+						</p>
+					</div>
+				</div>
+			)}
+
+			<div
+				style={{
+					background: "#FFFFFF",
+					border: "1px solid #DDD5C5",
+					borderRadius: 20,
+					overflow: "hidden",
+					boxShadow:
+						"0 2px 8px rgba(30,40,25,0.07), 0 6px 28px rgba(30,40,25,0.05)",
+				}}
+			>
+				{/* ── Two-column body ── */}
+				<div className="query-lab-grid" style={{ minHeight: 260 }}>
+					{/* ── Left: input + controls ── */}
+					<div
+						className="query-lab-left"
+						style={{
+							display: "flex",
+							flexDirection: "column",
+							padding: "22px 24px 20px",
+							gap: 16,
+							borderRight: "1px solid #EDE7DA",
+						}}
+					>
+						{/* Title row */}
+						<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+							<span
+								style={{
+									width: 7,
+									height: 7,
+									borderRadius: "50%",
+									flexShrink: 0,
+									background:
+										status === "running"
+											? "#52A55A"
+											: status === "done"
+												? "#7DB882"
+												: "#C5D4C6",
+									boxShadow:
+										status === "running" ? "0 0 0 3px #52A55A22" : "none",
+									transition: "all 0.2s",
+									display: "inline-block",
+								}}
+							/>
+							<span
+								style={{
+									fontSize: 12,
+									fontWeight: 700,
+									color: "#2A3A2C",
+									letterSpacing: "-0.01em",
+								}}
+							>
+								Query Lab
+							</span>
+							<span style={{ fontSize: 11, color: "#B4C4B6", fontWeight: 400 }}>
+								· test a prompt and see which entities get mentioned
+							</span>
+						</div>
+
+						{/* Input area — white box, no visible border until focus */}
+						<div
+							style={{
+								flex: 1,
+								position: "relative",
+								borderRadius: 12,
+								background: "#F8F5F0",
+								border: "1px solid #E4DDD0",
+								overflow: "hidden",
+								transition: "border-color 0.15s, box-shadow 0.15s",
+								display: "flex",
+								flexDirection: "column",
+							}}
+							onFocusCapture={(e) => {
+								const el = e.currentTarget as HTMLDivElement;
+								el.style.borderColor = "#96C49A";
+								el.style.boxShadow = "0 0 0 3px #96C49A1A";
+							}}
+							onBlurCapture={(e) => {
+								const el = e.currentTarget as HTMLDivElement;
+								el.style.borderColor = "#E4DDD0";
+								el.style.boxShadow = "none";
+							}}
+						>
+							{/* Centered placeholder */}
+							{queryText.length === 0 && (
+								<div
+									style={{
+										position: "absolute",
+										inset: 0,
+										display: "flex",
+										alignItems: "center",
+										justifyContent: "center",
+										pointerEvents: "none",
+										fontSize: 14,
+										color: "#B8C8BA",
+										fontStyle: "italic",
+									}}
+								>
+									add a prompt
+								</div>
+							)}
+							<textarea
+								ref={textareaRef}
+								value={queryText}
+								onChange={(e) => setQueryText(e.target.value)}
+								placeholder=""
+								rows={5}
+								style={{
+									flex: 1,
+									width: "100%",
+									background: "transparent",
+									border: "none",
+									outline: "none",
+									resize: "none",
+									padding: "14px 16px 12px",
+									fontSize: 14,
+									lineHeight: 1.65,
+									color: "#1E2E20",
+									fontFamily: "inherit",
+								}}
+								onFocus={() => {
+									if (!hintShownRef.current) {
+										hintShownRef.current = true;
+										setShowHint(true);
+									}
+								}}
+								onKeyDown={(e) => {
+									if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+										void handleRun();
+									}
+								}}
+							/>
+							{/* Char count if user typed */}
+							{queryText.length > 0 && (
+								<div
+									style={{
+										position: "absolute",
+										bottom: 8,
+										right: 10,
+										fontSize: 10,
+										color: "#B8C8BA",
+										fontVariantNumeric: "tabular-nums",
+									}}
+								>
+									{queryText.length}
+								</div>
+							)}
+						</div>
+
+						{/* Controls row */}
+						<div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+							{/* Primary bar: Models · Web search · More settings · Run */}
+							<div
+								style={{
+									display: "flex",
+									alignItems: "center",
+									gap: 8,
+									flexWrap: "wrap",
+								}}
+							>
+								{/* Models badge */}
+								<span
+									style={{
+										fontSize: 11,
+										color: "#7A8E7C",
+										fontWeight: 600,
+										padding: "5px 8px",
+										borderRadius: 12,
+										background: "#F2EDE6",
+										border: "1px solid #DDD0BC",
+										flexShrink: 0,
+									}}
+								>
+									Models: {effectiveModels.length}
+								</span>
+
+								{/* Web search toggle */}
+								<div
+									style={{
+										display: "flex",
+										alignItems: "center",
+										gap: 6,
+										cursor: "pointer",
+										userSelect: "none",
+										flexShrink: 0,
+									}}
+								>
+									<Toggle
+										active={webSearch}
+										onChange={setWebSearch}
+										disabled={!hasOpenAiModel}
+									/>
+									<span
+										style={{ fontSize: 11, color: "#7A8E7C", fontWeight: 500 }}
+									>
+										Web search
+									</span>
+								</div>
+
+								{/* More settings toggle */}
+								<button
+									type="button"
+									onClick={() => setMoreSettingsOpen((v) => !v)}
+									style={{
+										display: "inline-flex",
+										alignItems: "center",
+										gap: 4,
+										fontSize: 11,
+										fontWeight: 600,
+										color: moreSettingsOpen ? "#2A5C2E" : "#7A8E7C",
+										background: moreSettingsOpen ? "#EEF5EF" : "transparent",
+										border: `1px solid ${moreSettingsOpen ? "#C8DDC9" : "#DDD0BC"}`,
+										borderRadius: 12,
+										padding: "5px 9px",
+										cursor: "pointer",
+										transition: "all 0.15s",
+										flexShrink: 0,
+									}}
+								>
+									<svg
+										width="10"
+										height="10"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										strokeWidth="2.5"
+										strokeLinecap="round"
+										strokeLinejoin="round"
+										style={{
+											transform: moreSettingsOpen ? "rotate(180deg)" : "none",
+											transition: "transform 0.15s",
+										}}
+									>
+										<polyline points="6 9 12 15 18 9" />
+									</svg>
+									More settings
+								</button>
+
+								{/* Spacer */}
+								<div style={{ flex: 1 }} />
+
+								{/* Run button */}
+								<button
+									type="button"
+									onClick={() => {
+										void handleRun();
+									}}
+									disabled={!canRun}
+									style={{
+										display: "inline-flex",
+										alignItems: "center",
+										gap: 7,
+										padding: "9px 22px",
+										borderRadius: 12,
+										background: canRun ? "#2A6032" : "#EDEBE6",
+										color: canRun ? "#FFFFFF" : "#B0BAB2",
+										border: `1.5px solid ${canRun ? "#1C4826" : "transparent"}`,
+										cursor: canRun ? "pointer" : "not-allowed",
+										fontSize: 13,
+										fontWeight: 700,
+										boxShadow: canRun
+											? "0 2px 14px rgba(42,96,50,0.28)"
+											: "none",
+										transition: "all 0.15s",
+										letterSpacing: "-0.01em",
+										flexShrink: 0,
+									}}
+								>
+									{status === "running" ? (
+										<>
+											<svg
+												width="12"
+												height="12"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												strokeWidth="2.5"
+												strokeLinecap="round"
+												style={{ animation: "spin-lab 0.85s linear infinite" }}
+											>
+												<path d="M21 12a9 9 0 1 1-6.219-8.56" />
+											</svg>
+											<span className="tabular-nums">{elapsedSec}s</span>
+										</>
+									) : (
+										<>
+											<svg
+												width="10"
+												height="10"
+												viewBox="0 0 24 24"
+												fill="currentColor"
+												stroke="none"
+											>
+												<polygon points="5,3 19,12 5,21" />
+											</svg>
+											Run
+											<span
+												style={{ fontSize: 10, opacity: 0.5, fontWeight: 400 }}
+											>
+												⌘↵
+											</span>
+										</>
+									)}
+								</button>
+							</div>
+
+							{/* Expanded settings panel */}
+							{moreSettingsOpen && (
+								<div
+									style={{
+										display: "flex",
+										flexDirection: "column",
+										gap: 10,
+										padding: "14px 14px 12px",
+										borderRadius: 12,
+										border: "1px solid #E4DDD0",
+										background: "#FCFAF5",
+									}}
+								>
+									{/* Model grid */}
+									<div className="query-lab-model-grid">
+										{PROMPT_LAB_MODEL_OPTIONS.map((option) => {
+											const checked = selectedModels.includes(option.value);
+											const disabled =
+												!allowMultipleModels &&
+												!checked &&
+												effectiveModels.length >= 1;
+											return (
+												<label
+													key={option.value}
+													style={{
+														display: "flex",
+														alignItems: "center",
+														justifyContent: "space-between",
+														gap: 8,
+														border: `1px solid ${checked ? "#8FBB93" : "#DDD0BC"}`,
+														background: checked ? "#EEF5EF" : "#FFFFFF",
+														borderRadius: 10,
+														padding: "7px 10px",
+														opacity: disabled ? 0.55 : 1,
+														cursor: disabled ? "not-allowed" : "pointer",
+													}}
+												>
+													<span
+														style={{
+															fontSize: 11,
+															color: checked ? "#2A5C2E" : "#2A3A2C",
+															fontWeight: 600,
+														}}
+													>
+														{option.label}
+													</span>
+													<input
+														type="checkbox"
+														checked={checked}
+														disabled={disabled}
+														onChange={(event) => {
+															const isChecked = event.target.checked;
+															if (!allowMultipleModels) {
+																setSelectedModels(
+																	isChecked
+																		? [option.value]
+																		: [PROMPT_LAB_MODEL_VALUES[0]],
+																);
+																return;
+															}
+															setSelectedModels((current) => {
+																if (isChecked)
+																	return dedupeModels([
+																		...current,
+																		option.value,
+																	]);
+																const next = current.filter(
+																	(model) => model !== option.value,
+																);
+																return next.length > 0
+																	? next
+																	: [PROMPT_LAB_MODEL_VALUES[0]];
+															});
+														}}
+													/>
+												</label>
+											);
+										})}
+									</div>
+
+									{/* Model actions + search context */}
+									<div
+										style={{
+											display: "flex",
+											alignItems: "center",
+											gap: 8,
+											flexWrap: "wrap",
+										}}
+									>
+										<div
+											style={{
+												display: "inline-flex",
+												alignItems: "center",
+												gap: 6,
+												cursor: "pointer",
+												userSelect: "none",
+											}}
+										>
+											<input
+												type="checkbox"
+												checked={allowMultipleModels}
+												onChange={(event) =>
+													setAllowMultipleModels(event.target.checked)
+												}
+											/>
+											<span
+												style={{
+													fontSize: 11,
+													color: "#607860",
+													fontWeight: 600,
+												}}
+											>
+												Allow multiple
+											</span>
+										</div>
+
+										<button
+											type="button"
+											onClick={() =>
+												setSelectedModels(
+													allowMultipleModels
+														? PROMPT_LAB_MODEL_VALUES
+														: [PROMPT_LAB_MODEL_VALUES[0]],
+												)
+											}
+											style={{
+												fontSize: 11,
+												fontWeight: 600,
+												color: "#2A5C2E",
+												background: "#EEF5EF",
+												border: "1px solid #C8DDC9",
+												borderRadius: 12,
+												padding: "5px 9px",
+												cursor: "pointer",
+											}}
+										>
+											Select all
+										</button>
+
+										<button
+											type="button"
+											onClick={() =>
+												setSelectedModels([PROMPT_LAB_MODEL_VALUES[0]])
+											}
+											style={{
+												fontSize: 11,
+												fontWeight: 600,
+												color: "#607860",
+												background: "#F2EDE6",
+												border: "1px solid #DDD0BC",
+												borderRadius: 12,
+												padding: "5px 9px",
+												cursor: "pointer",
+											}}
+										>
+											Reset
+										</button>
+
+										<div
+											style={{
+												width: 1,
+												height: 16,
+												background: "#E4DDD0",
+												flexShrink: 0,
+											}}
+										/>
+
+										<div
+											style={{
+												display: "inline-flex",
+												alignItems: "center",
+												gap: 6,
+												cursor: hasOpenAiModel ? "pointer" : "not-allowed",
+												opacity: hasOpenAiModel ? 1 : 0.6,
+											}}
+										>
+											<Toggle
+												active={searchContextEnabled}
+												onChange={setSearchContextEnabled}
+												disabled={!hasOpenAiModel}
+											/>
+											<span
+												style={{
+													fontSize: 11,
+													color: "#7A8E7C",
+													fontWeight: 600,
+												}}
+											>
+												Search context
+											</span>
+										</div>
+
+										<input
+											value={searchContextLocation}
+											onChange={(event) =>
+												setSearchContextLocation(event.target.value)
+											}
+											disabled={!hasOpenAiModel || !searchContextEnabled}
+											placeholder="Location"
+											style={{
+												width: 130,
+												borderRadius: 8,
+												border: "1px solid #DDD0BC",
+												background:
+													!hasOpenAiModel || !searchContextEnabled
+														? "#F2EDE6"
+														: "#FFFFFF",
+												color: "#2A3A2C",
+												fontSize: 11,
+												padding: "5px 8px",
+											}}
+										/>
+
+										<input
+											value={searchContextLanguage}
+											onChange={(event) =>
+												setSearchContextLanguage(event.target.value)
+											}
+											disabled={!hasOpenAiModel || !searchContextEnabled}
+											placeholder="Lang"
+											style={{
+												width: 60,
+												borderRadius: 8,
+												border: "1px solid #DDD0BC",
+												background:
+													!hasOpenAiModel || !searchContextEnabled
+														? "#F2EDE6"
+														: "#FFFFFF",
+												color: "#2A3A2C",
+												fontSize: 11,
+												padding: "5px 8px",
+											}}
+										/>
+
+										<span style={{ fontSize: 10, color: "#9AAE9C" }}>
+											OpenAI only
+										</span>
+									</div>
+								</div>
+							)}
+						</div>
+					</div>
+
+					{/* ── Right: response / idle / running ── */}
+					<div
+						className="query-lab-right"
+						style={{
+							display: "flex",
+							flexDirection: "column",
+							background: "#F9F8F5",
+						}}
+					>
+						{/* IDLE */}
+						{status === "idle" && (
+							<div
+								style={{
+									display: "flex",
+									flexDirection: "column",
+									flex: 1,
+									padding: "20px 20px 18px",
+									gap: 14,
+									overflowY: "auto",
+								}}
+							>
+								<div>
+									<p
+										style={{
+											fontSize: 10,
+											fontWeight: 700,
+											textTransform: "uppercase",
+											letterSpacing: "0.1em",
+											color: "#C8D6CA",
+											marginBottom: 14,
+										}}
+									>
+										Try a query
+									</p>
+									<div
+										style={{ display: "flex", flexDirection: "column", gap: 7 }}
+									>
+										{LAB_SUGGESTIONS.map((s) => (
+											<button
+												key={s}
+												type="button"
+												onClick={() => {
+													setQueryText(s);
+													setTimeout(() => textareaRef.current?.focus(), 0);
+												}}
+												style={{
+													textAlign: "left",
+													background: "transparent",
+													border: "1px solid #E8E2D8",
+													borderRadius: 10,
+													padding: "9px 13px",
+													fontSize: 12,
+													color: "#6A8070",
+													cursor: "pointer",
+													lineHeight: 1.45,
+													fontWeight: 500,
+													transition:
+														"background 0.12s, border-color 0.12s, color 0.12s",
+												}}
+												onMouseEnter={(e) => {
+													const b = e.currentTarget as HTMLButtonElement;
+													b.style.background = "#F2EDE6";
+													b.style.borderColor = "#CBBFAC";
+													b.style.color = "#3A5040";
+												}}
+												onMouseLeave={(e) => {
+													const b = e.currentTarget as HTMLButtonElement;
+													b.style.background = "transparent";
+													b.style.borderColor = "#E8E2D8";
+													b.style.color = "#6A8070";
+												}}
+											>
+												{s}
+											</button>
+										))}
+									</div>
+								</div>
+
+								{/* Tracked entities */}
+								<div style={{ borderTop: "1px solid #EDE7DA", paddingTop: 14 }}>
+									<div
+										style={{
+											display: "flex",
+											alignItems: "center",
+											justifyContent: "space-between",
+											marginBottom: 10,
+										}}
+									>
+										<div>
+											<div
+												style={{
+													fontSize: 12,
+													fontWeight: 700,
+													color: "#2A3A2C",
+													letterSpacing: "-0.01em",
+												}}
+											>
+												Tracked entities
+											</div>
+											<div
+												style={{ fontSize: 11, color: "#9AAE9C", marginTop: 2 }}
+											>
+												Companies, libraries or tools tracked in benchmarks
+											</div>
+										</div>
+										<span
+											style={{
+												fontSize: 11,
+												fontWeight: 600,
+												padding: "2px 8px",
+												borderRadius: 999,
+												background: "#FEF6ED",
+												color: "#B07030",
+												border: "1px solid #F0D4A8",
+											}}
+										>
+											{competitors.length}
+										</span>
+									</div>
+									<TagInput
+										items={competitors}
+										onChange={onCompetitorsChange}
+										placeholder="e.g. chart.js"
+										showLogos={true}
+									/>
+									{!hasHighcharts && competitors.length > 0 && (
+										<div
+											style={{
+												marginTop: 10,
+												display: "flex",
+												alignItems: "center",
+												gap: 6,
+												fontSize: 11,
+												fontWeight: 500,
+												color: "#dc2626",
+											}}
+										>
+											<svg
+												width="12"
+												height="12"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												strokeWidth="2"
+											>
+												<circle cx="12" cy="12" r="10" />
+												<line x1="12" y1="8" x2="12" y2="12" />
+												<line x1="12" y1="16" x2="12.01" y2="16" />
+											</svg>
+											"Highcharts" must be included
+										</div>
+									)}
+								</div>
+							</div>
+						)}
+
+						{/* RUNNING */}
+						{status === "running" && (
+							<div
+								style={{
+									flex: 1,
+									padding: "18px 18px 16px",
+									display: "flex",
+									flexDirection: "column",
+									gap: 10,
+								}}
+							>
+								<div
+									style={{
+										display: "flex",
+										alignItems: "center",
+										gap: 5,
+										marginBottom: 4,
+									}}
+								>
+									{[0, 0.18, 0.36].map((delay) => (
+										<span
+											key={delay}
+											style={{
+												width: 6,
+												height: 6,
+												borderRadius: "50%",
+												background: "#8FBB93",
+												display: "inline-block",
+												animation: `pulse-lab-dot 1.1s ease-in-out ${delay}s infinite`,
+											}}
+										/>
+									))}
+									<span
+										style={{ fontSize: 11, color: "#8EA890", marginLeft: 4 }}
+									>
+										Querying {effectiveModels.length} model
+										{effectiveModels.length === 1 ? "" : "s"}…
+									</span>
+								</div>
+								{[88, 72, 82, 58, 76, 48].map((w, i) => (
+									<div
+										key={i}
+										style={{
+											height: 9,
+											width: `${w}%`,
+											borderRadius: 6,
+											background: "#E8E0D4",
+											animation: "pulse 1.5s ease-in-out infinite",
+											animationDelay: `${i * 0.1}s`,
+										}}
+									/>
+								))}
+							</div>
+						)}
+
+						{/* DONE / PARTIAL — compact banner, full results shown in modal */}
+						{(status === "done" ||
+							(status === "error" && resultViews.length > 0)) && (
+							<div
+								style={{
+									flex: 1,
+									display: "flex",
+									flexDirection: "column",
+									alignItems: "center",
+									justifyContent: "center",
+									padding: 24,
+									gap: 14,
+									textAlign: "center",
+								}}
+							>
+								<div
+									style={{
+										width: 44,
+										height: 44,
+										borderRadius: "50%",
+										background: status === "error" ? "#FFF6EA" : "#EEF5EF",
+										border: `1px solid ${status === "error" ? "#F0D4A8" : "#C8DDC9"}`,
+										display: "flex",
+										alignItems: "center",
+										justifyContent: "center",
+									}}
+								>
+									{status === "error" ? (
+										<svg
+											width="18"
+											height="18"
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="#B07030"
+											strokeWidth="2.5"
+										>
+											<circle cx="12" cy="12" r="10" />
+											<line x1="12" y1="8" x2="12" y2="12" />
+											<line x1="12" y1="16" x2="12.01" y2="16" />
+										</svg>
+									) : (
+										<svg
+											width="18"
+											height="18"
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="#2C5D30"
+											strokeWidth="2.5"
+											strokeLinecap="round"
+											strokeLinejoin="round"
+										>
+											<path d="M5 13l4 4L19 7" />
+										</svg>
+									)}
+								</div>
+								<div>
+									<p
+										style={{
+											fontSize: 13,
+											fontWeight: 700,
+											color: "#2A3A2C",
+											marginBottom: 4,
+										}}
+									>
+										{resultSummary.successCount} of {resultSummary.modelCount}{" "}
+										model{resultSummary.modelCount !== 1 ? "s" : ""} succeeded
+									</p>
+									<p style={{ fontSize: 11, color: "#7A8E7C" }}>
+										{(resultSummary.totalDurationMs / 1000).toFixed(2)}s ·{" "}
+										{resultSummary.totalTokens.toLocaleString()} tokens
+									</p>
+								</div>
+								<button
+									type="button"
+									onClick={() => setResultModalOpen(true)}
+									style={{
+										display: "inline-flex",
+										alignItems: "center",
+										gap: 7,
+										padding: "9px 20px",
+										borderRadius: 10,
+										background: "#2A6032",
+										color: "#FFFFFF",
+										border: "1.5px solid #1C4826",
+										cursor: "pointer",
+										fontSize: 12,
+										fontWeight: 700,
+										boxShadow: "0 2px 10px rgba(42,96,50,0.2)",
+									}}
+								>
+									<svg
+										width="12"
+										height="12"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										strokeWidth="2.5"
+										strokeLinecap="round"
+										strokeLinejoin="round"
+									>
+										<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+										<circle cx="12" cy="12" r="3" />
+									</svg>
+									View results
+								</button>
+							</div>
+						)}
+
+						{/* ERROR */}
+						{status === "error" && resultViews.length === 0 && (
+							<div
+								style={{
+									flex: 1,
+									display: "flex",
+									flexDirection: "column",
+									alignItems: "center",
+									justifyContent: "center",
+									padding: 24,
+									textAlign: "center",
+									gap: 6,
+								}}
+							>
+								<svg
+									width="26"
+									height="26"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="1.5"
+									style={{ color: "#E09090" }}
+								>
+									<circle cx="12" cy="12" r="10" />
+									<line x1="12" y1="8" x2="12" y2="12" />
+									<line x1="12" y1="16" x2="12.01" y2="16" />
+								</svg>
+								<p style={{ fontSize: 13, fontWeight: 600, color: "#A04040" }}>
+									Run failed
+								</p>
+								{errorText && (
+									<p style={{ fontSize: 11, color: "#B34A4A", maxWidth: 360 }}>
+										{errorText}
+									</p>
+								)}
+								<button
+									type="button"
+									onClick={() => setStatus("idle")}
+									style={{
+										fontSize: 11,
+										color: "#8FBB93",
+										cursor: "pointer",
+										background: "none",
+										border: "none",
+										marginTop: 2,
+									}}
+								>
+									Dismiss
+								</button>
+							</div>
+						)}
+					</div>
+				</div>
+
+				<style>{`
+        .query-lab-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(320px, 520px);
+        }
+        .query-lab-model-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
+        @keyframes spin-lab { to { transform: rotate(360deg); } }
+        @keyframes hint-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes hint-card-in { from { opacity: 0; transform: scale(0.94) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+        @keyframes pulse-lab-dot { 0%, 100% { opacity: 0.2; transform: scale(0.7); } 50% { opacity: 1; transform: scale(1); } }
+        .query-lab-markdown { font-size: 14px; line-height: 1.7; color: #1E2E20; }
+        .query-lab-markdown h1, .query-lab-markdown h2, .query-lab-markdown h3, .query-lab-markdown h4 { font-weight: 700; color: #1A2A1C; margin: 1.1em 0 0.4em; line-height: 1.3; }
+        .query-lab-markdown h1 { font-size: 1.25em; }
+        .query-lab-markdown h2 { font-size: 1.1em; }
+        .query-lab-markdown h3 { font-size: 1em; }
+        .query-lab-markdown p { margin: 0.55em 0; }
+        .query-lab-markdown p:first-child { margin-top: 0; }
+        .query-lab-markdown p:last-child { margin-bottom: 0; }
+        .query-lab-markdown strong { font-weight: 700; color: #1A2A1C; }
+        .query-lab-markdown em { font-style: italic; }
+        .query-lab-markdown ul, .query-lab-markdown ol { margin: 0.5em 0 0.5em 1.4em; padding: 0; }
+        .query-lab-markdown li { margin: 0.3em 0; }
+        .query-lab-markdown a { color: #2A6032; text-decoration: underline; text-underline-offset: 2px; }
+        .query-lab-markdown code { font-family: monospace; font-size: 0.88em; background: #F0EDE6; border-radius: 4px; padding: 1px 5px; color: #2A3A2C; }
+        .query-lab-markdown pre { background: #F0EDE6; border-radius: 8px; padding: 12px 14px; overflow-x: auto; margin: 0.75em 0; }
+        .query-lab-markdown pre code { background: none; padding: 0; }
+        .query-lab-markdown hr { border: none; border-top: 1px solid #E4DDD0; margin: 1em 0; }
+        .query-lab-markdown blockquote { border-left: 3px solid #C8DDC9; margin: 0.6em 0; padding: 4px 12px; color: #4A6050; }
+        @media (max-width: 1100px) {
+          .query-lab-grid {
+            grid-template-columns: 1fr;
+          }
+          .query-lab-left {
+            border-right: none !important;
+            border-bottom: 1px solid #EDE7DA;
+          }
+          .query-lab-model-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+      `}</style>
+			</div>
+
+			{/* ── Results Modal ────────────────────────────────────────────────────── */}
+			{resultModalOpen &&
+				(status === "done" ||
+					(status === "error" && resultViews.length > 0)) && (
+					<div
+						style={{
+							position: "fixed",
+							inset: 0,
+							zIndex: 50,
+							display: "flex",
+							alignItems: "center",
+							justifyContent: "center",
+							background: "rgba(20,30,22,0.55)",
+							backdropFilter: "blur(5px)",
+							padding: "16px",
+						}}
+						onClick={() => setResultModalOpen(false)}
+					>
+						<div
+							style={{
+								width: "100%",
+								maxWidth: 1140,
+								height: "90vh",
+								background: "#FFFFFF",
+								borderRadius: 20,
+								boxShadow: "0 32px 80px rgba(0,0,0,0.28)",
+								display: "flex",
+								flexDirection: "column",
+								overflow: "hidden",
+							}}
+							onClick={(e) => e.stopPropagation()}
+						>
+							{/* Modal header */}
+							<div
+								style={{
+									padding: "12px 20px",
+									borderBottom: "1px solid #EDE7DA",
+									display: "flex",
+									alignItems: "center",
+									gap: 10,
+									background: "#F9F8F5",
+									flexShrink: 0,
+								}}
+							>
+								<svg
+									width="14"
+									height="14"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="#3D5C40"
+									strokeWidth="2.5"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									style={{ flexShrink: 0 }}
+								>
+									<path d="M10 2v4l-5 8a4 4 0 003.38 6h7.24A4 4 0 0019 14l-5-8V2" />
+									<path d="M8 11h8" />
+								</svg>
+								<span
+									style={{
+										fontSize: 13,
+										fontWeight: 700,
+										color: "#2A3A2C",
+										flex: 1,
+									}}
+								>
+									Query Lab Results
+								</span>
+								<div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+									<span
+										style={{
+											fontSize: 10,
+											fontWeight: 700,
+											color: "#2A3A2C",
+											background: "#FFFFFF",
+											border: "1px solid #DDD0BC",
+											borderRadius: 999,
+											padding: "2px 8px",
+										}}
+									>
+										{resultSummary.modelCount} model
+										{resultSummary.modelCount !== 1 ? "s" : ""}
+									</span>
+									<span
+										style={{
+											fontSize: 10,
+											fontWeight: 700,
+											color: "#2C5D30",
+											background: "#EEF5EF",
+											border: "1px solid #C8DDC9",
+											borderRadius: 999,
+											padding: "2px 8px",
+										}}
+									>
+										{resultSummary.successCount} succeeded
+									</span>
+									<span
+										style={{
+											fontSize: 10,
+											fontWeight: 700,
+											color: "#5A6E5D",
+											background: "#FFFFFF",
+											border: "1px solid #DDD0BC",
+											borderRadius: 999,
+											padding: "2px 8px",
+										}}
+									>
+										{resultSummary.totalTokens.toLocaleString()} tokens ·{" "}
+										{(resultSummary.totalDurationMs / 1000).toFixed(2)}s
+									</span>
+								</div>
+								<button
+									type="button"
+									onClick={() => setResultModalOpen(false)}
+									style={{
+										width: 30,
+										height: 30,
+										borderRadius: "50%",
+										border: "1px solid #DDD0BC",
+										background: "#FFFFFF",
+										cursor: "pointer",
+										fontSize: 18,
+										display: "flex",
+										alignItems: "center",
+										justifyContent: "center",
+										color: "#5A6E5D",
+										flexShrink: 0,
+										lineHeight: 1,
+									}}
+								>
+									×
+								</button>
+							</div>
+
+							{/* Modal body: chat + citations */}
+							<div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+								{/* Chat area */}
+								<div
+									style={{
+										flex: 1,
+										minWidth: 0,
+										overflowY: "auto",
+										padding: "28px 32px",
+										display: "flex",
+										flexDirection: "column",
+										gap: 24,
+										background: "#F7F5F0",
+									}}
+								>
+									{/* User query bubble */}
+									<div style={{ display: "flex", justifyContent: "flex-end" }}>
+										<div
+											style={{
+												background: "#DDE8DF",
+												borderRadius: "18px 18px 4px 18px",
+												padding: "12px 18px",
+												maxWidth: "72%",
+												fontSize: 14,
+												color: "#1E2E20",
+												lineHeight: 1.6,
+												fontWeight: 400,
+												boxShadow: "0 1px 4px rgba(30,40,25,0.08)",
+											}}
+										>
+											{queryText.trim()}
+										</div>
+									</div>
+
+									{/* Model responses */}
+									{resultViews.map((view, index) => {
+										const { result, mentions, ownedMetrics } = view;
+										const hasError = Boolean(result.error) || !result.ok;
+										const modelLabel =
+											PROMPT_LAB_MODEL_OPTIONS.find(
+												(o) => o.value === result.model,
+											)?.label ?? result.model;
+										return (
+											<div
+												key={`modal-${result.model}:${index}`}
+												style={{
+													display: "flex",
+													flexDirection: "column",
+													gap: 8,
+												}}
+											>
+												{/* Model label row */}
+												<div
+													style={{
+														display: "flex",
+														alignItems: "center",
+														gap: 8,
+														paddingLeft: 4,
+													}}
+												>
+													<div
+														style={{
+															width: 26,
+															height: 26,
+															borderRadius: "50%",
+															background: "#3D5C40",
+															display: "flex",
+															alignItems: "center",
+															justifyContent: "center",
+															flexShrink: 0,
+														}}
+													>
+														<svg
+															width="12"
+															height="12"
+															viewBox="0 0 24 24"
+															fill="none"
+															stroke="#FFFFFF"
+															strokeWidth="2.5"
+															strokeLinecap="round"
+															strokeLinejoin="round"
+														>
+															<path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+														</svg>
+													</div>
+													<span
+														style={{
+															fontSize: 12,
+															fontWeight: 700,
+															color: "#2A3A2C",
+														}}
+													>
+														{modelLabel}
+													</span>
+													<span
+														style={{
+															fontSize: 10,
+															color: "#8A7C68",
+															background: "#F2EDE6",
+															border: "1px solid #DDD0BC",
+															borderRadius: 999,
+															padding: "1px 7px",
+															fontWeight: 600,
+														}}
+													>
+														{result.provider}
+													</span>
+													{result.webSearchEnabled && (
+														<span
+															style={{
+																fontSize: 10,
+																color: "#2A5C2E",
+																background: "#EEF5EF",
+																border: "1px solid #C8DDC9",
+																borderRadius: 999,
+																padding: "1px 7px",
+																fontWeight: 600,
+															}}
+														>
+															web search
+														</span>
+													)}
+													<span
+														style={{
+															fontSize: 10,
+															color: "#9AAE9C",
+															marginLeft: "auto",
+														}}
+													>
+														{(Math.max(0, result.durationMs) / 1000).toFixed(2)}
+														s ·{" "}
+														{Math.max(
+															0,
+															result.tokens.totalTokens,
+														).toLocaleString()}{" "}
+														tokens
+													</span>
+												</div>
+
+												{/* AI response */}
+												<div style={{ maxWidth: "90%" }}>
+													{hasError ? (
+														<p
+															style={{
+																fontSize: 13,
+																color: "#B34A4A",
+																margin: 0,
+															}}
+														>
+															{result.error || "Model run failed."}
+														</p>
+													) : (
+														<div
+															className="query-lab-markdown"
+															dangerouslySetInnerHTML={{
+																__html: renderPromptLabResponseHtml(
+																	result.responseText,
+																),
+															}}
+														/>
+													)}
+												</div>
+
+												{/* Entities mentioned */}
+												{!hasError && mentions.length > 0 && (
+													<div
+														style={{
+															paddingLeft: 34,
+															display: "flex",
+															flexWrap: "wrap",
+															gap: 6,
+														}}
+													>
+														<span
+															style={{
+																fontSize: 10,
+																color: "#9AAE9C",
+																fontWeight: 600,
+																alignSelf: "center",
+															}}
+														>
+															Mentioned:
+														</span>
+														{mentions.map((mention) => {
+															const isHC =
+																mention.entity.toLowerCase() === "highcharts";
+															return (
+																<div
+																	key={mention.entity}
+																	style={{
+																		display: "flex",
+																		alignItems: "center",
+																		gap: 4,
+																		background: isHC ? "#EEF5EF" : "#F2EDE6",
+																		border: `1px solid ${isHC ? "#C8DDC9" : "#DDD0BC"}`,
+																		borderRadius: 999,
+																		padding: "3px 8px",
+																	}}
+																>
+																	{getEntityLogo(mention.entity) && (
+																		<EntityLogo
+																			entity={mention.entity}
+																			size={11}
+																		/>
+																	)}
+																	<span
+																		style={{
+																			fontSize: 10,
+																			fontWeight: 600,
+																			color: isHC ? "#2A5C30" : "#4A6050",
+																		}}
+																	>
+																		{mention.entity}
+																	</span>
+																</div>
+															);
+														})}
+													</div>
+												)}
+
+												{/* Owned source stats */}
+												{!hasError && (
+													<div
+														style={{
+															paddingLeft: 34,
+															display: "flex",
+															gap: 12,
+															flexWrap: "wrap",
+														}}
+													>
+														<span style={{ fontSize: 10, color: "#9AAE9C" }}>
+															Owned sources: {ownedMetrics.ownedSourceCount}/
+															{ownedMetrics.totalSources}
+														</span>
+														<span style={{ fontSize: 10, color: "#9AAE9C" }}>
+															First owned rank:{" "}
+															{ownedMetrics.firstOwnedRank
+																? `#${ownedMetrics.firstOwnedRank}`
+																: "—"}
+														</span>
+														<span style={{ fontSize: 10, color: "#9AAE9C" }}>
+															Owned share:{" "}
+															{ownedMetrics.ownedSharePct.toFixed(1)}%
+														</span>
+													</div>
+												)}
+											</div>
+										);
+									})}
+								</div>
+
+								{/* Citations sidebar */}
+								<div
+									style={{
+										width: 420,
+										flexShrink: 0,
+										borderLeft: "1px solid #EDE7DA",
+										overflowY: "auto",
+										padding: "20px 16px",
+										background: "#FFFFFF",
+									}}
+								>
+									<CitationSourceLeaderboard
+										items={sourceStats}
+										limit={30}
+										title="Citations"
+										subtitle="Sources cited across this run"
+										emptyText="No sources were cited."
+									/>
+								</div>
+							</div>
+						</div>
+					</div>
+				)}
+		</>
+	);
+}
+
+// ── Prompts Page ──────────────────────────────────────────────────────────────
+
+export default function Prompts({
+	queryLabOnly = false,
+}: {
+	queryLabOnly?: boolean;
+}) {
+	const qc = useQueryClient();
+	const navigate = useNavigate();
+	const hasHydratedConfigRef = useRef(false);
+
+	// ── Dashboard data (grid) ─────────────────────────────────────────────────
+	const { data, isLoading, isError, error } = useQuery({
+		queryKey: ["dashboard"],
+		queryFn: api.dashboard,
+		refetchInterval: 60_000,
+	});
+
+	const [sortKey, setSortKey] = useState<SortKey | null>(null);
+	const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+
+	const toggleMutation = useMutation({
+		mutationFn: ({ query, active }: { query: string; active: boolean }) =>
+			api.togglePromptActive(query, active),
+		onMutate: async ({ query, active }) => {
+			await qc.cancelQueries({ queryKey: ["dashboard"] });
+			const prevDashboard = qc.getQueryData<DashboardResponse>(["dashboard"]);
+			const prevQueries = queries;
+			const prevQueryTags = queryTags;
+			const normalizedQuery = normalizeQueryKey(query);
+			const matchingPrompt = prevDashboard?.promptStatus.find(
+				(prompt) => normalizeQueryKey(prompt.query) === normalizedQuery,
+			);
+			const canonicalQuery = matchingPrompt?.query ?? query;
+
+			qc.setQueryData<DashboardResponse>(["dashboard"], (old) =>
+				old
+					? {
+							...old,
+							promptStatus: old.promptStatus.map((p) =>
+								normalizeQueryKey(p.query) === normalizedQuery
+									? { ...p, isPaused: !active }
+									: p,
+							),
+						}
+					: old,
+			);
+
+			setQueries((current) => {
+				const hasQuery = current.some(
+					(existing) => normalizeQueryKey(existing) === normalizedQuery,
+				);
+				if (active) {
+					return hasQuery ? current : [...current, canonicalQuery];
+				}
+				return hasQuery
+					? current.filter(
+							(existing) => normalizeQueryKey(existing) !== normalizedQuery,
+						)
+					: current;
+			});
+
+			if (active) {
+				const tagsForQuery =
+					matchingPrompt?.tags && matchingPrompt.tags.length > 0
+						? matchingPrompt.tags
+						: inferPromptTags(canonicalQuery);
+				setQueryTags((current) => {
+					const existingKey = Object.keys(current).find(
+						(existing) => normalizeQueryKey(existing) === normalizedQuery,
+					);
+					if (existingKey) return current;
+					return {
+						...current,
+						[canonicalQuery]: normalizePromptTags(tagsForQuery, canonicalQuery),
+					};
+				});
+			}
+
+			return { prevDashboard, prevQueries, prevQueryTags };
+		},
+		onError: (_err, _vars, ctx) => {
+			if (ctx?.prevDashboard) qc.setQueryData(["dashboard"], ctx.prevDashboard);
+			if (ctx?.prevQueries) setQueries(ctx.prevQueries);
+			if (ctx?.prevQueryTags) setQueryTags(ctx.prevQueryTags);
+		},
+		onSettled: async () => {
+			await Promise.all([
+				qc.invalidateQueries({ queryKey: ["dashboard"] }),
+				qc.invalidateQueries({ queryKey: ["config"] }),
+			]);
+		},
+	});
+
+	function handleSort(key: SortKey) {
+		if (sortKey === key) {
+			setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+		} else {
+			setSortKey(key);
+			setSortDir("asc");
+		}
+	}
+
+	const prompts = data?.promptStatus ?? [];
+	const pausedCount = prompts.filter((p) => p.isPaused).length;
+
+	const sorted = useMemo(() => {
+		if (!sortKey) return prompts;
+		return [...prompts].sort((a, b) => {
+			let av: string | number | boolean | null;
+			let bv: string | number | boolean | null;
+			if (sortKey === "lead") {
+				av = a.highchartsRatePct - (a.topCompetitor?.ratePct ?? 0);
+				bv = b.highchartsRatePct - (b.topCompetitor?.ratePct ?? 0);
+			} else if (sortKey === "tags") {
+				av = a.tags.join(", ");
+				bv = b.tags.join(", ");
+			} else {
+				av = a[sortKey] as string | number | boolean | null;
+				bv = b[sortKey] as string | number | boolean | null;
+			}
+			if (av == null) av = Number.POSITIVE_INFINITY;
+			if (bv == null) bv = Number.POSITIVE_INFINITY;
+			if (typeof av === "string") av = av.toLowerCase();
+			if (typeof bv === "string") bv = bv.toLowerCase();
+			if (av < bv) return sortDir === "asc" ? -1 : 1;
+			if (av > bv) return sortDir === "asc" ? 1 : -1;
+			return 0;
+		});
+	}, [prompts, sortKey, sortDir]);
+
+	const groupedByTag = useMemo(() => {
+		const map = new Map<string, typeof sorted>();
+		for (const p of sorted) {
+			const tag = (p.tags[0] ?? "general").toLowerCase();
+			const existing = map.get(tag) ?? [];
+			existing.push(p);
+			map.set(tag, existing);
+		}
+		return [...map.entries()].sort((a, b) => b[1].length - a[1].length);
+	}, [sorted]);
+
+	// ── Config data (editors) ─────────────────────────────────────────────────
+	const configQuery = useQuery({ queryKey: ["config"], queryFn: api.config });
+
+	const [queries, setQueries] = useState<string[]>([]);
+	const [queryTags, setQueryTags] = useState<Record<string, string[]>>({});
+	const [competitors, setCompetitors] = useState<string[]>([]);
+	const [triggerToken, setTriggerToken] = useState(() =>
+		readStoredTriggerToken(),
+	);
+	const [allQueriesGrouped, setAllQueriesGrouped] = useState(true);
+	const [expandedQueryGroups, setExpandedQueryGroups] = useState<Set<string>>(
+		new Set(),
+	);
+	const [dirty, setDirty] = useState(false);
+	const [saveSuccess, setSaveSuccess] = useState(false);
+	const [saveErr, setSaveErr] = useState<string | null>(null);
+	const [saveAndRunPending, setSaveAndRunPending] = useState(false);
+	const [runNotice, setRunNotice] = useState<{
+		type: "idle" | "running" | "success" | "error";
+		text: string;
+	}>({ type: "idle", text: "" });
+	const normalizedTriggerToken = triggerToken.trim();
+	const hasTriggerToken = normalizedTriggerToken.length > 0;
+
+	useEffect(() => {
+		if (configQuery.data) {
+			if (dirty && hasHydratedConfigRef.current) {
+				return;
+			}
+			const nextQueries = configQuery.data.config.queries;
+			setQueries(nextQueries);
+			setQueryTags(
+				normalizeQueryTagsMap(nextQueries, configQuery.data.config.queryTags),
+			);
+			setCompetitors(configQuery.data.config.competitors);
+			setDirty(false);
+			hasHydratedConfigRef.current = true;
+		}
+	}, [configQuery.data, dirty]);
+
+	useEffect(() => {
+		writeStoredTriggerToken(triggerToken);
+	}, [triggerToken]);
+
+	async function invalidateBenchmarkDataQueries() {
+		await Promise.all([
+			qc.invalidateQueries({ queryKey: ["dashboard"] }),
+			qc.invalidateQueries({ queryKey: ["timeseries"] }),
+			qc.invalidateQueries({ queryKey: ["prompt-drilldown"] }),
+			qc.invalidateQueries({ queryKey: ["under-the-hood"] }),
+			qc.invalidateQueries({ queryKey: ["run-costs"] }),
+		]);
+	}
+
+	function applySavedConfig(
+		updated: Awaited<ReturnType<typeof api.updateConfig>>,
+		options?: { showSuccess?: boolean },
+	) {
+		qc.setQueryData(["config"], updated);
+		void invalidateBenchmarkDataQueries();
+		setDirty(false);
+		setSaveErr(null);
+		const showSuccess = options?.showSuccess ?? true;
+		setSaveSuccess(showSuccess);
+		if (showSuccess) {
+			setTimeout(() => setSaveSuccess(false), 3000);
+		}
+	}
+
+	async function handleQueryLabRun(rawQuery: string) {
+		const query = rawQuery.trim();
+		if (!query) return;
+
+		const latestConfigResponse = configQuery.data ?? (await api.config());
+		const latestConfig = latestConfigResponse.config;
+
+		const baseQueries = dirty ? queries : latestConfig.queries;
+		const baseQueryTags = dirty
+			? normalizeQueryTagsMap(baseQueries, queryTags)
+			: normalizeQueryTagsMap(baseQueries, latestConfig.queryTags);
+		const baseCompetitors = dirty ? competitors : latestConfig.competitors;
+
+		const alreadyTracked = baseQueries.some(
+			(candidate) => normalizeQueryKey(candidate) === normalizeQueryKey(query),
+		);
+
+		if (!alreadyTracked) {
+			const nextQueries = [...baseQueries, query];
+			const nextQueryTags = normalizeQueryTagsMap(nextQueries, {
+				...baseQueryTags,
+				[query]: inferPromptTags(query),
+			});
+
+			const updated = await api.updateConfig({
+				queries: nextQueries,
+				queryTags: nextQueryTags,
+				competitors: baseCompetitors,
+				aliases: latestConfig.aliases,
+				competitorCitationDomains: latestConfig.competitorCitationDomains,
+				pausedQueries: latestConfig.pausedQueries,
+			});
+
+			applySavedConfig(updated, { showSuccess: false });
+			setQueries(updated.config.queries);
+			setQueryTags(
+				normalizeQueryTagsMap(updated.config.queries, updated.config.queryTags),
+			);
+			setCompetitors(updated.config.competitors);
+			return;
+		}
+
+		await invalidateBenchmarkDataQueries();
+	}
+
+	const configMutation = useMutation({
+		mutationFn: (cfg: BenchmarkConfig) => api.updateConfig(cfg),
+		onSuccess: (updated) => applySavedConfig(updated),
+		onError: (e) => setSaveErr((e as Error).message),
+	});
+
+	function mark(fn: () => void) {
+		fn();
+		setDirty(true);
+		setSaveSuccess(false);
+	}
+
+	function handleQueryListChange(nextQueries: string[]) {
+		mark(() => {
+			setQueries(nextQueries);
+			setQueryTags((prev) => buildQueryTagsForQueries(nextQueries, prev));
+		});
+	}
+
+	async function handleQueryImportApply(
+		nextQueries: string[],
+		nextQueryTags: Record<string, string[]>,
+	) {
+		if (nextQueries.length === 0) {
+			throw new Error("Import must include at least one prompt.");
+		}
+
+		const payload: BenchmarkConfig = {
+			queries: nextQueries,
+			queryTags: normalizeQueryTagsMap(nextQueries, nextQueryTags),
+			competitors,
+			aliases: configQuery.data?.config.aliases ?? {},
+			competitorCitationDomains:
+				configQuery.data?.config.competitorCitationDomains,
+		};
+
+		try {
+			const updated = await api.updateConfig(payload);
+			applySavedConfig(updated, { showSuccess: false });
+			setQueries(updated.config.queries);
+			setQueryTags(
+				normalizeQueryTagsMap(updated.config.queries, updated.config.queryTags),
+			);
+			setCompetitors(updated.config.competitors);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			setSaveErr(message);
+			throw error;
+		}
+	}
+
+	const hasHighcharts = competitors.some(
+		(c) => c.toLowerCase() === "highcharts",
+	);
+	const canSaveChanges =
+		dirty &&
+		!configMutation.isPending &&
+		!saveAndRunPending &&
+		queries.length > 0 &&
+		hasHighcharts;
+	const canSaveAndRun = canSaveChanges && hasTriggerToken;
+
+	const configPayload: BenchmarkConfig = {
+		queries,
+		queryTags: normalizeQueryTagsMap(queries, queryTags),
+		competitors,
+		aliases: configQuery.data?.config.aliases ?? {},
+		competitorCitationDomains:
+			configQuery.data?.config.competitorCitationDomains,
+	};
+
+	function sleep(ms: number) {
+		return new Promise<void>((resolve) => {
+			window.setTimeout(resolve, ms);
+		});
+	}
+
+	function isWorkflowRun(
+		run: BenchmarkWorkflowRun | BenchmarkQueueRun,
+	): run is BenchmarkWorkflowRun {
+		return typeof (run as BenchmarkWorkflowRun).runNumber === "number";
+	}
+
+	async function waitForRunCompletion(
+		triggerId: string | null,
+		targetRunId: string | null,
+		initialRun: BenchmarkWorkflowRun | BenchmarkQueueRun | null,
+		triggerTokenValue: string,
+	): Promise<BenchmarkWorkflowRun | BenchmarkQueueRun> {
+		let currentRun = initialRun;
+		const deadlineMs = Date.now() + 30 * 60 * 1000;
+
+		while (Date.now() < deadlineMs) {
+			const runsResponse = await api.benchmarkRuns(triggerTokenValue);
+			const matchedByCurrentId = currentRun
+				? runsResponse.runs.find(
+						(run) => String(run.id) === String(currentRun?.id),
+					)
+				: null;
+			const matchedByRunId = targetRunId
+				? runsResponse.runs.find(
+						(run) => String(run.id) === String(targetRunId),
+					)
+				: null;
+			const matchedByTriggerId = triggerId
+				? runsResponse.runs.find(
+						(run) =>
+							isWorkflowRun(run) &&
+							run.title.toLowerCase().includes(triggerId.toLowerCase()),
+					)
+				: null;
+			const matched =
+				matchedByCurrentId ?? matchedByRunId ?? matchedByTriggerId;
+
+			if (matched) {
+				currentRun = matched;
+			}
+
+			if (currentRun) {
+				if (isWorkflowRun(currentRun)) {
+					if (currentRun.status === "completed") {
+						return currentRun;
+					}
+					const runLabel = ` · Run #${currentRun.runNumber}`;
+					setRunNotice({
+						type: "running",
+						text: `Running queries${runLabel}…`,
+					});
+				} else {
+					if (
+						currentRun.status === "completed" ||
+						currentRun.status === "failed"
+					) {
+						return currentRun;
+					}
+					const pct = currentRun.progress
+						? Math.max(
+								0,
+								Math.min(100, Math.round(currentRun.progress.completionPct)),
+							)
+						: null;
+					const runLabel = currentRun.models ?? currentRun.id.slice(0, 8);
+					setRunNotice({
+						type: "running",
+						text:
+							pct !== null
+								? `Running queries · ${runLabel} (${pct}% complete)…`
+								: `Running queries · ${runLabel}…`,
+					});
+				}
+			} else {
+				setRunNotice({ type: "running", text: "Waiting for run to start…" });
+			}
+
+			await sleep(3000);
+		}
+
+		throw new Error(
+			"Run did not complete in time. Open Runs page to check status.",
+		);
+	}
+
+	async function handleSaveAndRun() {
+		if (!canSaveAndRun) return;
+		setSaveErr(null);
+		setSaveAndRunPending(true);
+		setRunNotice({ type: "running", text: "Saving changes…" });
+
+		try {
+			if (!normalizedTriggerToken) {
+				throw new Error("Trigger token is required to run benchmarks.");
+			}
+
+			const updated = await api.updateConfig(configPayload);
+			applySavedConfig(updated);
+			setRunNotice({ type: "running", text: "Starting benchmark run…" });
+
+			const triggerResult = await api.triggerBenchmark(
+				{
+					model: "gpt-4o-mini",
+					runs: 1,
+					temperature: 0.7,
+					webSearch: true,
+					ourTerms: "Highcharts",
+				},
+				normalizedTriggerToken,
+			);
+
+			const triggerId =
+				typeof (triggerResult as { triggerId?: unknown }).triggerId === "string"
+					? ((triggerResult as { triggerId?: string }).triggerId ?? null)
+					: null;
+			const targetRunId =
+				typeof triggerResult.runId === "string" && triggerResult.runId.trim()
+					? triggerResult.runId
+					: null;
+			const initialRun = null;
+			const completedRun = await waitForRunCompletion(
+				triggerId,
+				targetRunId,
+				initialRun,
+				normalizedTriggerToken,
+			);
+			if (isWorkflowRun(completedRun)) {
+				const conclusion = (completedRun.conclusion ?? "").toLowerCase();
+				if (conclusion !== "success") {
+					throw new Error(
+						conclusion
+							? `Run finished with status: ${conclusion}. Open Runs for details.`
+							: "Run finished without success. Open Runs for details.",
+					);
+				}
+			} else if (completedRun.status !== "completed") {
+				throw new Error(
+					`Run finished with status: ${completedRun.status}. Open Runs for details.`,
+				);
+			}
+
+			for (let seconds = 5; seconds >= 1; seconds -= 1) {
+				setRunNotice({
+					type: "success",
+					text: `Run succeeded. Going to dashboard in ${seconds}s…`,
+				});
+				await sleep(1000);
+			}
+
+			navigate("/dashboard");
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			setSaveErr(message);
+			setRunNotice({ type: "error", text: message });
+		} finally {
+			setSaveAndRunPending(false);
+		}
+	}
+
+	// ── Error state ───────────────────────────────────────────────────────────
+	if (isError) {
+		return (
+			<div
+				className="rounded-xl p-5 text-sm"
+				style={{
+					background: "#fef2f2",
+					border: "1px solid #fecaca",
+					color: "#b91c1c",
+				}}
+			>
+				{(error as Error).message}
+			</div>
+		);
+	}
+
+	if (queryLabOnly) {
+		return (
+			<div className="max-w-[1360px]">
+				<QueryLab
+					trackedEntities={competitors}
+					aliasesByEntity={configQuery.data?.config.aliases ?? {}}
+					competitorCitationDomains={
+						configQuery.data?.config.competitorCitationDomains
+					}
+					onQueryRun={handleQueryLabRun}
+					competitors={competitors}
+					onCompetitorsChange={(v) => mark(() => setCompetitors(v))}
+					hasHighcharts={hasHighcharts}
+				/>
+			</div>
+		);
+	}
+
+	function renderPromptRow(p: (typeof sorted)[0], isLast: boolean) {
+		const paused = p.isPaused;
+		const deleted = p.status === "deleted";
+		const delta = p.highchartsRatePct - (p.topCompetitor?.ratePct ?? 0);
+		const isPending =
+			toggleMutation.isPending && toggleMutation.variables?.query === p.query;
+		return (
+			<tr
+				key={p.query}
+				style={{
+					borderBottom: isLast ? "none" : "1px solid #F2EDE6",
+					background: paused ? "#FDFCF8" : deleted ? "#FFF9F7" : "transparent",
+					opacity: paused ? 0.65 : deleted ? 0.78 : 1,
+					transition: "opacity 0.15s, background 0.15s",
+				}}
+				onMouseEnter={(e) => {
+					if (!paused && !deleted)
+						(e.currentTarget as HTMLTableRowElement).style.background =
+							"#F7F3EE";
+				}}
+				onMouseLeave={(e) => {
+					(e.currentTarget as HTMLTableRowElement).style.background = paused
+						? "#FDFCF8"
+						: deleted
+							? "#FFF9F7"
+							: "transparent";
+				}}
+			>
+				<td className="px-4 py-3">
+					<Toggle
+						active={!paused && !deleted}
+						onChange={(v) =>
+							toggleMutation.mutate({ query: p.query, active: v })
+						}
+						disabled={isPending || deleted}
+					/>
+				</td>
+				<td className="px-4 py-3 text-sm font-medium">
+					<Link
+						to={`/prompts/drilldown?query=${encodeURIComponent(p.query)}`}
+						className="inline-flex max-w-[320px] items-center gap-1.5"
+						style={{
+							color: paused ? "#9AAE9C" : deleted ? "#B45309" : "#2A3A2C",
+						}}
+					>
+						<span className="block truncate whitespace-nowrap">{p.query}</span>
+						<span
+							className="text-xs"
+							style={{
+								color: paused ? "#C8D0C8" : deleted ? "#F59E0B" : "#8FBB93",
+							}}
+							aria-hidden
+						>
+							↗
+						</span>
+					</Link>
+				</td>
+				<td className="px-4 py-3">
+					<PromptTagChips tags={p.tags} muted={paused} />
+				</td>
+				<td className="px-4 py-3">
+					<StatusBadge status={p.status} isPaused={paused} />
+				</td>
+				<td
+					className="px-4 py-3 text-right text-sm font-medium tabular-nums"
+					style={{ color: p.runs > 0 && !paused ? "#2A3A2C" : "#E5DDD0" }}
+				>
+					{p.runs > 0 ? p.runs : "–"}
+				</td>
+				<td
+					className="px-4 py-3 text-right text-sm font-semibold tabular-nums"
+					style={{ color: p.status === "tracked" ? "#2A5C2E" : "#E5DDD0" }}
+				>
+					{p.status === "tracked"
+						? formatUsd(p.estimatedTotalCostUsd ?? 0)
+						: "–"}
+				</td>
+				<td className="px-4 py-3">
+					{p.status === "tracked" ? (
+						<MiniBar pct={p.highchartsRatePct} muted={paused} />
+					) : (
+						<span className="text-sm" style={{ color: "#E5DDD0" }}>
+							–
+						</span>
+					)}
+				</td>
+				<td
+					className="px-4 py-3 text-right text-sm font-semibold tabular-nums"
+					style={{
+						color:
+							p.status === "tracked" && p.highchartsRank !== null
+								? p.highchartsRank === 1
+									? "#2A5C2E"
+									: paused
+										? "#9AAE9C"
+										: "#2A3A2C"
+								: "#E5DDD0",
+					}}
+				>
+					{p.status === "tracked" && p.highchartsRank !== null
+						? `${p.highchartsRank}/${p.highchartsRankOutOf}`
+						: "–"}
+				</td>
+				<td className="px-4 py-3">
+					{p.status === "tracked" ? (
+						<MiniBar pct={p.viabilityRatePct} color="#C8A87A" muted={paused} />
+					) : (
+						<span className="text-sm" style={{ color: "#E5DDD0" }}>
+							–
+						</span>
+					)}
+				</td>
+				<td className="px-4 py-3">
+					{p.status === "tracked" ? (
+						<LeadBadge delta={delta} muted={paused} />
+					) : (
+						<span className="text-sm" style={{ color: "#E5DDD0" }}>
+							–
+						</span>
+					)}
+				</td>
+				<td className="px-4 py-3">
+					{p.topCompetitor ? (
+						<div className="space-y-1">
+							<div className="flex items-center gap-1.5">
+								{getEntityLogo(p.topCompetitor.entity) && (
+									<EntityLogo entity={p.topCompetitor.entity} size={14} />
+								)}
+								<span
+									className="text-sm font-medium"
+									style={{ color: paused ? "#9AAE9C" : "#2A3A2C" }}
+								>
+									{p.topCompetitor.entity}
+								</span>
+							</div>
+							<MiniBar
+								pct={p.topCompetitor.ratePct}
+								color="#C8A87A"
+								muted={paused}
+							/>
+						</div>
+					) : (
+						<span className="text-sm" style={{ color: "#E5DDD0" }}>
+							–
+						</span>
+					)}
+				</td>
+			</tr>
+		);
+	}
+
+	return (
+		<div className="max-w-[1360px] space-y-5">
+			{/* ── Quick import ──────────────────────────────────────────────────── */}
+			<div
+				className="rounded-xl border shadow-sm"
+				style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}
+			>
+				<div className="flex items-center justify-between p-5 pb-0">
+					<div>
+						<div
+							className="text-sm font-semibold tracking-tight"
+							style={{ color: "#2A3A2C" }}
+						>
+							Import Queries
+						</div>
+						<div className="text-xs mt-0.5" style={{ color: "#7A8E7C" }}>
+							Import prompt CSV + apply tags before saving into your query list
+						</div>
+					</div>
+					<span
+						className="text-xs font-semibold tabular-nums px-2.5 py-1 rounded-full"
+						style={{
+							background: "#EEF5EF",
+							color: "#5E8A62",
+							border: "1px solid #C8DDC9",
+						}}
+					>
+						{queries.length}
+					</span>
+				</div>
+				<div className="p-5 pt-4">
+					<QueryCsvImporter
+						existingQueries={queries}
+						existingQueryTags={queryTags}
+						onApply={handleQueryImportApply}
+					/>
+				</div>
+			</div>
+
+			{/* ── Prompt tags (always visible) ──────────────────────────────────── */}
+			<div
+				className="rounded-xl border shadow-sm"
+				style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}
+			>
+				<div className="flex items-center justify-between p-5 pb-0">
+					<div>
+						<div
+							className="text-sm font-semibold tracking-tight"
+							style={{ color: "#2A3A2C" }}
+						>
+							Prompt Tags
+						</div>
+						<div className="text-xs mt-0.5" style={{ color: "#7A8E7C" }}>
+							Tags assigned to each query for filtering
+						</div>
+					</div>
+					<span
+						className="text-xs font-semibold tabular-nums px-2.5 py-1 rounded-full"
+						style={{
+							background: "#F0EEFB",
+							color: "#7B54D0",
+							border: "1px solid #D4C7F5",
+						}}
+					>
+						{queries.length}
+					</span>
+				</div>
+				<div className="p-5 pt-4">
+					<TagGroupsEditor
+						queries={queries}
+						queryTags={queryTags}
+						isLoading={configQuery.isLoading}
+						promptStats={Object.fromEntries(
+							prompts.map((p) => [
+								p.query,
+								{ runs: p.runs, highchartsRatePct: p.highchartsRatePct },
+							]),
+						)}
+						onTagChange={(query, nextTags) =>
+							mark(() =>
+								setQueryTags((prev) => ({
+									...prev,
+									[query]: normalizePromptTags(nextTags, query),
+								})),
+							)
+						}
+					/>
+				</div>
+			</div>
+
+			{/* ── Prompts data grid ──────────────────────────────────────────────── */}
+			<div className="flex flex-col items-center gap-2 pt-1">
+				<div className="flex items-center gap-3 w-full">
+					<div className="flex-1 h-px" style={{ background: "#DDD0BC" }} />
+					<span
+						className="text-xs font-semibold uppercase tracking-wider px-1"
+						style={{ color: "#9AAE9C", whiteSpace: "nowrap" }}
+					>
+						All Queries
+					</span>
+					<div className="flex-1 h-px" style={{ background: "#DDD0BC" }} />
+				</div>
+				<div
+					className="flex rounded-lg overflow-hidden"
+					style={{ border: "1px solid #DDD0BC" }}
+				>
+					<button
+						type="button"
+						onClick={() => {
+							setAllQueriesGrouped(true);
+							setExpandedQueryGroups(new Set());
+						}}
+						className="px-3 py-1.5 text-[11px] font-semibold transition-colors"
+						style={{
+							background: allQueriesGrouped ? "#2A3A2C" : "#FDFCF8",
+							color: allQueriesGrouped ? "#FFFFFF" : "#9AAE9C",
+						}}
+					>
+						By Tags
+					</button>
+					<button
+						type="button"
+						onClick={() => setAllQueriesGrouped(false)}
+						className="px-3 py-1.5 text-[11px] font-semibold transition-colors"
+						style={{
+							background: !allQueriesGrouped ? "#2A3A2C" : "#FDFCF8",
+							color: !allQueriesGrouped ? "#FFFFFF" : "#9AAE9C",
+							borderLeft: "1px solid #DDD0BC",
+						}}
+					>
+						All
+					</button>
+				</div>
+			</div>
+
+			<div
+				className="rounded-xl border shadow-sm overflow-hidden min-h-[420px]"
+				style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}
+			>
+				<div
+					className="px-4 py-2.5 text-xs"
+					style={{
+						color: "#9AAE9C",
+						background: "#FDFCF8",
+						borderBottom: "1px solid #F2EDE6",
+					}}
+				>
+					Click a query to open its drilldown dashboard.
+				</div>
+				<div className="overflow-x-auto">
+					<table className="w-full min-w-[1280px] border-collapse">
+						<thead>
+							<tr
+								style={{
+									borderBottom: "1px solid #F2EDE6",
+									background: "#FDFCF8",
+								}}
+							>
+								<th className="px-4 py-3" style={{ width: 48 }} />
+								<SortTh
+									label="Query"
+									col="query"
+									current={sortKey}
+									dir={sortDir}
+									onSort={handleSort}
+									width="320px"
+								/>
+								<SortTh
+									label="Tags"
+									col="tags"
+									current={sortKey}
+									dir={sortDir}
+									onSort={handleSort}
+									width="180px"
+								/>
+								<SortTh
+									label="Status"
+									col="status"
+									current={sortKey}
+									dir={sortDir}
+									onSort={handleSort}
+									width="130px"
+								/>
+								<SortTh
+									label="Runs"
+									col="runs"
+									current={sortKey}
+									dir={sortDir}
+									align="right"
+									onSort={handleSort}
+									width="60px"
+								/>
+								<SortTh
+									label="Est Cost"
+									col="estimatedTotalCostUsd"
+									current={sortKey}
+									dir={sortDir}
+									align="right"
+									onSort={handleSort}
+									width="120px"
+									info="Estimated API cost for this prompt in the latest tracked run."
+								/>
+								<SortTh
+									label="Highcharts %"
+									col="highchartsRatePct"
+									current={sortKey}
+									dir={sortDir}
+									onSort={handleSort}
+									width="148px"
+									infoAlign="right"
+									info="Share of responses for this prompt that mention Highcharts."
+								/>
+								<SortTh
+									label="HC Rank"
+									col="highchartsRank"
+									current={sortKey}
+									dir={sortDir}
+									align="right"
+									onSort={handleSort}
+									width="92px"
+									info="Highcharts rank for this prompt among all tracked entities, by mention rate."
+								/>
+								<SortTh
+									label="Viability %"
+									col="viabilityRatePct"
+									current={sortKey}
+									dir={sortDir}
+									onSort={handleSort}
+									width="148px"
+									info="Average competitor mention pressure for this prompt."
+								/>
+								<SortTh
+									label="Lead"
+									col="lead"
+									current={sortKey}
+									dir={sortDir}
+									onSort={handleSort}
+									width="80px"
+								/>
+								<th
+									className="px-4 py-3 text-xs font-medium"
+									style={{ color: "#7A8E7C", textAlign: "left" }}
+								>
+									Top rival
+								</th>
+							</tr>
+						</thead>
+						<tbody>
+							{isLoading
+								? Array.from({ length: 6 }).map((_, i) => (
+										<tr key={i} style={{ borderBottom: "1px solid #F2EDE6" }}>
+											{Array.from({ length: 11 }).map((__, j) => (
+												<td key={j} className="px-4 py-4">
+													<Skeleton className="h-4" />
+												</td>
+											))}
+										</tr>
+									))
+								: allQueriesGrouped
+									? groupedByTag.flatMap(([tag, groupRows]) => {
+											const s = getTagStyle(tag);
+											const isOpen =
+												expandedQueryGroups.size === 0 ||
+												expandedQueryGroups.has(tag);
+											const tracked = groupRows.filter(
+												(p) => p.status === "tracked",
+											);
+											const avgHc =
+												tracked.length > 0
+													? tracked.reduce(
+															(sum, p) => sum + p.highchartsRatePct,
+															0,
+														) / tracked.length
+													: null;
+											return [
+												<tr
+													key={`grp-${tag}`}
+													style={{
+														background: s.bg,
+														borderBottom: `1px solid ${s.border}`,
+														cursor: "pointer",
+													}}
+													onClick={() =>
+														setExpandedQueryGroups((prev) => {
+															if (prev.size === 0) {
+																// all currently open — collapse just this one by tracking all-but-this
+																return new Set(
+																	groupedByTag
+																		.map(([t]) => t)
+																		.filter((t) => t !== tag),
+																);
+															}
+															const next = new Set(prev);
+															if (next.has(tag)) next.delete(tag);
+															else next.add(tag);
+															return next;
+														})
+													}
+												>
+													<td colSpan={11} className="px-4 py-2.5">
+														<div className="flex items-center gap-2.5">
+															<svg
+																width="11"
+																height="11"
+																viewBox="0 0 24 24"
+																fill="none"
+																stroke={s.color}
+																strokeWidth="2.5"
+																strokeLinecap="round"
+																style={{
+																	transition: "transform 0.15s",
+																	transform: isOpen
+																		? "rotate(0deg)"
+																		: "rotate(-90deg)",
+																	flexShrink: 0,
+																}}
+															>
+																<polyline points="6 9 12 15 18 9" />
+															</svg>
+															<span
+																className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold"
+																style={{
+																	background: "white",
+																	color: s.color,
+																	border: `1px solid ${s.border}`,
+																}}
+															>
+																{tag}
+															</span>
+															<span
+																className="text-[11px] font-medium"
+																style={{ color: s.color, opacity: 0.7 }}
+															>
+																{groupRows.length}{" "}
+																{groupRows.length === 1 ? "query" : "queries"}
+															</span>
+															{avgHc !== null && (
+																<span
+																	className="text-[11px] tabular-nums"
+																	style={{ color: "#6B8470", marginLeft: 4 }}
+																>
+																	avg HC {avgHc.toFixed(0)}%
+																</span>
+															)}
+														</div>
+													</td>
+												</tr>,
+												...(isOpen
+													? groupRows.map((p, i) =>
+															renderPromptRow(p, i === groupRows.length - 1),
+														)
+													: []),
+											];
+										})
+									: sorted.map((p, i) =>
+											renderPromptRow(p, i === sorted.length - 1),
+										)}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</div>
+	);
+}

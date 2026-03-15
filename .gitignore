@@ -11,12 +11,18 @@ __pycache__/
 
 # Node
 node_modules/
+dist/
 
 # Local tooling
 .vscode/
 .claude/
 firebase-debug.log
+.venv/
 
 # Runtime artifacts
-output/logs/
-output/supabase_legacy_dump/
+artifacts/
+output/
+
+# Workspace installs
+apps/web/node_modules/
+apps/web/dist/

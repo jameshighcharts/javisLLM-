@@ -1,0 +1,115 @@
+/* biome-ignore-all lint/suspicious/noUnknownAtRules: Tailwind directives */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+	--background: #fdfcf8;
+	--foreground: #2a3a2c;
+	--card: #ffffff;
+	--muted: #f2ede6;
+	--muted-foreground: #7a8e7c;
+	--border: #ddd0bc;
+	--primary: #4a6b4e;
+	--radius: 0.6rem;
+
+	/* chart palette */
+	--chart-1: #8fbb93;
+	--chart-2: #c8a87a;
+	--chart-3: #d49880;
+	--chart-4: #a89cb8;
+	--chart-5: #c8b858;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html {
+	-webkit-text-size-adjust: 100%;
+	text-size-adjust: 100%;
+}
+
+body {
+	background: var(--background);
+	color: var(--foreground);
+	font-family: "Inter", system-ui, sans-serif;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+	min-height: 100dvh;
+}
+
+@media (max-width: 420px) {
+	body {
+		line-height: 1.45;
+	}
+
+	input,
+	select,
+	textarea {
+		font-size: 16px;
+	}
+}
+
+::-webkit-scrollbar {
+	width: 5px;
+	height: 5px;
+}
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+::-webkit-scrollbar-thumb {
+	background: var(--border);
+	border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+	background: #c4b09a;
+}
+
+/* Landing Page Hero Animations */
+@keyframes marqueeLeft {
+	0% {
+		transform: translateX(0);
+	}
+	100% {
+		transform: translateX(-50%);
+	}
+}
+
+.marquee-row {
+	display: flex;
+	gap: 1.5rem;
+	width: max-content;
+	animation: marqueeLeft 30s linear infinite;
+	z-index: 10;
+	position: absolute;
+}
+
+.marquee-row.top {
+	top: 35%;
+}
+.marquee-row.bottom {
+	top: 55%;
+}
+
+.chip {
+	padding: 0.5rem 1.5rem;
+	border-radius: 9999px;
+	font-family: "Inter", sans-serif;
+	font-size: 0.875rem;
+	white-space: nowrap;
+}
+
+.chip.light {
+	background-color: #f3f4f6;
+	color: #374151;
+	border: 1px solid #e5e7eb;
+}
+
+.chip.dark {
+	background-color: #1a2f23;
+	color: #ffffff;
+}

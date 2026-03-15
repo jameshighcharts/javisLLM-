@@ -1,8 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "npm install --prefix ui",
-  "buildCommand": "npm run build --prefix ui",
-  "outputDirectory": "ui/dist",
+  "installCommand": "pnpm install",
+  "buildCommand": "pnpm build",
+  "outputDirectory": "apps/web/dist",
   "headers": [
     {
       "source": "/(.*)",

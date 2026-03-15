@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "benchmark-core"
+version = "0.1.0"
+description = "Core Python benchmark, export, and sync helpers for easy_llm_benchmarker."
+requires-python = ">=3.11"
+dependencies = [
+  "anthropic>=0.34.0",
+  "openai>=1.0.0",
+  "supabase>=2.15.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

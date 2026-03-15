@@ -1,0 +1,19 @@
+{
+  "name": "easy-llm-benchmarker",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter @easy-llm-benchmarker/api --filter @easy-llm-benchmarker/web dev",
+    "dev:web": "pnpm --filter @easy-llm-benchmarker/web dev",
+    "dev:api": "pnpm --filter @easy-llm-benchmarker/api dev",
+    "build": "pnpm -r --filter @easy-llm-benchmarker/contracts --filter @easy-llm-benchmarker/api-client --filter @easy-llm-benchmarker/api --filter @easy-llm-benchmarker/web build",
+    "lint": "pnpm -r --if-present lint && uv run ruff check .",
+    "typecheck": "pnpm -r --if-present typecheck && uv run mypy packages/py/benchmark_core/src apps/worker",
+    "test": "node --test tests/*.mjs && uv run pytest -q",
+    "verify": "pnpm run lint && pnpm run typecheck && pnpm run test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.2.4"
+  }
+}

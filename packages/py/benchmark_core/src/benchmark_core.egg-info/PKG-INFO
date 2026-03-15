@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: benchmark-core
+Version: 0.1.0
+Summary: Core Python benchmark, export, and sync helpers for easy_llm_benchmarker.
+Requires-Python: >=3.11
+Requires-Dist: anthropic>=0.34.0
+Requires-Dist: openai>=1.0.0
+Requires-Dist: supabase>=2.15.0

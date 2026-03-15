@@ -1,0 +1,1 @@
+-- Seed data belongs here for local Supabase environments.

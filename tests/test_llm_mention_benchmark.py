@@ -280,6 +280,46 @@ class ProviderRoutingTests(unittest.TestCase):
         self.assertEqual(gemini_usage["completion_tokens"], 6)
         self.assertEqual(gemini_usage["total_tokens"], 15)
 
+    def test_openai_uses_openai_specific_system_prompt(self):
+        fake_client = FakeClient([{"output_text": "OpenAI response mentioning Highcharts."}])
+
+        text, citations, usage = bench.generate_with_optional_retry(
+            fake_client,
+            "openai",
+            "gpt-4o",
+            "charting libraries",
+            0.7,
+            False,
+        )
+
+        self.assertEqual(text, "OpenAI response mentioning Highcharts.")
+        self.assertEqual(citations, [])
+        self.assertEqual(usage["total_tokens"], 0)
+        self.assertEqual(len(fake_client.responses.calls), 1)
+        system_prompt = fake_client.responses.calls[0]["input"][0]["content"]
+        self.assertEqual(system_prompt, bench.OPENAI_SYSTEM_PROMPT)
+        self.assertIn("Do not reproduce song lyrics", system_prompt)
+
+    def test_anthropic_keeps_default_system_prompt(self):
+        fake_client = FakeAnthropicClient(
+            [{"content": [{"type": "text", "text": "Anthropic response."}]}]
+        )
+
+        text, citations, usage = bench.generate_with_optional_retry(
+            fake_client,
+            "anthropic",
+            "claude-3-5-sonnet-latest",
+            "charting libraries",
+            0.7,
+            False,
+        )
+
+        self.assertEqual(text, "Anthropic response.")
+        self.assertEqual(citations, [])
+        self.assertEqual(usage["total_tokens"], 0)
+        self.assertEqual(len(fake_client.messages.calls), 1)
+        self.assertEqual(fake_client.messages.calls[0]["system"], bench.SYSTEM_PROMPT)
+
 
 class CliIntegrationTests(unittest.TestCase):
     def test_main_writes_expected_outputs(self):

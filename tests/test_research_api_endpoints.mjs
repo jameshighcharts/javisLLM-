@@ -268,7 +268,11 @@ test('prompt lab run returns effectiveQuery + citationRefs while keeping legacy 
         const userContent = payload?.input?.[1]?.content ?? ''
         assert.match(
           systemContent,
-          /You are a research assistant for software and tooling questions\./,
+          /Do not reproduce song lyrics or any other copyrighted material, even if asked\./,
+        )
+        assert.match(
+          systemContent,
+          /Do not end with opt-in questions or hedging closers\./,
         )
         assert.match(
           userContent,
