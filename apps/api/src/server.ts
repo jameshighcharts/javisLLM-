@@ -96,6 +96,7 @@ const repoRoot = path.resolve(serverDir, "..", "..", "..");
 const configPath = path.join(repoRoot, "config", "benchmark", "config.json");
 const outputDir = path.join(repoRoot, "artifacts");
 const SUPABASE_PAGE_SIZE = 1000;
+const SUPABASE_IN_CLAUSE_CHUNK_SIZE = 500;
 const DASHBOARD_RECENT_RUN_SCAN_LIMIT = 25;
 const localEnvPaths = [
 	path.join(repoRoot, ".env.monthly"),
@@ -3901,6 +3902,592 @@ async function fetchRunCostsFromSupabaseViewsForServer(limit = 30) {
 	};
 }
 
+async function fetchTimeseriesFromSupabaseTablesForServer(options = {}) {
+	const client = requireSupabaseClient();
+	const selectedTags = normalizeSelectedTags(options.tags);
+	const selectedProviders = normalizeSelectedProviders(options.providers);
+	const selectedProviderSet = new Set(selectedProviders);
+	const tagFilterMode = options.mode === "all" ? "all" : "any";
+	const selectedTagSet = new Set(selectedTags);
+
+	const competitorResult = await client
+		.from("competitors")
+		.select("id,name,slug,is_primary,sort_order")
+		.eq("is_active", true)
+		.order("sort_order", { ascending: true });
+
+	if (competitorResult.error) {
+		throw asError(
+			competitorResult.error,
+			"Failed to load competitors for time series",
+		);
+	}
+
+	const competitorRows = (competitorResult.data ?? []) as Array<{
+		id: string;
+		name: string;
+		slug: string;
+		is_primary: boolean;
+		sort_order: number;
+	}>;
+	const competitors = competitorRows.map((row) => row.name);
+	if (competitorRows.length === 0) {
+		return { ok: true, competitors: [], points: [] };
+	}
+
+	const promptResultWithTags = await client
+		.from("prompt_queries")
+		.select("id,query_text,tags");
+
+	let promptQueryError = promptResultWithTags.error;
+	let promptQueryRows = (promptResultWithTags.data ?? []) as Array<{
+		id: string;
+		query_text: string;
+		tags?: string[] | null;
+	}>;
+
+	if (promptQueryError && isMissingColumn(promptQueryError)) {
+		const fallbackRows = await client
+			.from("prompt_queries")
+			.select("id,query_text");
+		promptQueryError = fallbackRows.error;
+		promptQueryRows = (
+			(fallbackRows.data ?? []) as Array<{ id: string; query_text: string }>
+		).map((row) => ({ ...row, tags: null }));
+	}
+
+	if (promptQueryError && !isMissingRelation(promptQueryError)) {
+		throw asError(
+			promptQueryError,
+			"Failed to load prompt metadata for time series tags",
+		);
+	}
+
+	const tagsByPromptId = new Map<string, string[]>();
+	for (const row of promptQueryRows) {
+		tagsByPromptId.set(row.id, normalizePromptTags(row.tags, row.query_text));
+	}
+	const shouldFilterByTags = selectedTagSet.size > 0 && tagsByPromptId.size > 0;
+
+	const runResult = await client
+		.from("benchmark_runs")
+		.select("id,created_at,run_month,overall_score")
+		.order("created_at", { ascending: true })
+		.limit(500);
+
+	if (runResult.error) {
+		if (isMissingRelation(runResult.error)) {
+			return { ok: true, competitors, points: [] };
+		}
+		throw asError(
+			runResult.error,
+			"Failed to load benchmark_runs for time series",
+		);
+	}
+
+	const runRows = (runResult.data ?? []) as Array<{
+		id: string;
+		created_at: string | null;
+		run_month: string | null;
+		overall_score: number | null;
+	}>;
+	if (runRows.length === 0) {
+		return { ok: true, competitors, points: [] };
+	}
+
+	const runIds = runRows.map((row) => row.id);
+	const responseRows: Array<{
+		id: number;
+		run_id: string;
+		query_id: string;
+		model?: string | null;
+		provider?: string | null;
+		model_owner?: string | null;
+	}> = [];
+	const runChunkSize = 100;
+
+	for (let index = 0; index < runIds.length; index += runChunkSize) {
+		const runIdChunk = runIds.slice(index, index + runChunkSize);
+		let responseOffset = 0;
+
+		while (true) {
+			const responseResultWithProvider = await client
+				.from("benchmark_responses")
+				.select("id,run_id,query_id,model,provider,model_owner")
+				.in("run_id", runIdChunk)
+				.order("id", { ascending: true })
+				.range(responseOffset, responseOffset + SUPABASE_PAGE_SIZE - 1);
+
+			let responseError = responseResultWithProvider.error;
+			let pageRows = (responseResultWithProvider.data ?? []) as Array<{
+				id: number;
+				run_id: string;
+				query_id: string;
+				model?: string | null;
+				provider?: string | null;
+				model_owner?: string | null;
+			}>;
+
+			if (responseError && isMissingColumn(responseError)) {
+				const responseResultFallback = await client
+					.from("benchmark_responses")
+					.select("id,run_id,query_id,model")
+					.in("run_id", runIdChunk)
+					.order("id", { ascending: true })
+					.range(responseOffset, responseOffset + SUPABASE_PAGE_SIZE - 1);
+				responseError = responseResultFallback.error;
+				pageRows = (
+					(responseResultFallback.data ?? []) as Array<{
+						id: number;
+						run_id: string;
+						query_id: string;
+						model?: string | null;
+					}>
+				).map((row) => ({
+					...row,
+					provider: null,
+					model_owner: null,
+				}));
+			}
+
+			if (responseError) {
+				if (isMissingRelation(responseError)) {
+					return { ok: true, competitors, points: [] };
+				}
+				throw asError(
+					responseError,
+					"Failed to load benchmark_responses for time series",
+				);
+			}
+
+			if (pageRows.length === 0) {
+				break;
+			}
+
+			for (const response of pageRows) {
+				if (
+					selectedProviderSet.size > 0 &&
+					!responseMatchesProviderFilter(response, selectedProviderSet)
+				) {
+					continue;
+				}
+				if (shouldFilterByTags) {
+					const promptTags = tagsByPromptId.get(response.query_id);
+					if (
+						!promptTags ||
+						!promptMatchesTagFilter(promptTags, selectedTagSet, tagFilterMode)
+					) {
+						continue;
+					}
+				}
+				responseRows.push(response);
+			}
+
+			responseOffset += pageRows.length;
+		}
+	}
+
+	if (responseRows.length === 0) {
+		return { ok: true, competitors, points: [] };
+	}
+
+	const responseIds = responseRows.map((row) => row.id);
+	const responseToRun = new Map<number, string>();
+	const totalsByRun = new Map<string, number>();
+	for (const response of responseRows) {
+		responseToRun.set(response.id, response.run_id);
+		totalsByRun.set(
+			response.run_id,
+			(totalsByRun.get(response.run_id) ?? 0) + 1,
+		);
+	}
+
+	const mentionRows: Array<{
+		response_id: number;
+		competitor_id: string;
+		mentioned: boolean;
+	}> = [];
+	for (
+		let index = 0;
+		index < responseIds.length;
+		index += SUPABASE_IN_CLAUSE_CHUNK_SIZE
+	) {
+		const responseChunk = responseIds.slice(
+			index,
+			index + SUPABASE_IN_CLAUSE_CHUNK_SIZE,
+		);
+		let mentionOffset = 0;
+
+		while (true) {
+			const mentionResult = await client
+				.from("response_mentions")
+				.select("response_id,competitor_id,mentioned")
+				.in("response_id", responseChunk)
+				.order("response_id", { ascending: true })
+				.order("competitor_id", { ascending: true })
+				.range(mentionOffset, mentionOffset + SUPABASE_PAGE_SIZE - 1);
+
+			if (mentionResult.error) {
+				if (isMissingRelation(mentionResult.error)) {
+					return { ok: true, competitors, points: [] };
+				}
+				throw asError(
+					mentionResult.error,
+					"Failed to load response_mentions for time series",
+				);
+			}
+
+			const pageRows = (mentionResult.data ?? []) as Array<{
+				response_id: number;
+				competitor_id: string;
+				mentioned: boolean;
+			}>;
+			if (pageRows.length === 0) {
+				break;
+			}
+
+			mentionRows.push(...pageRows);
+			mentionOffset += pageRows.length;
+		}
+	}
+
+	const activeCompetitorIds = new Set(competitorRows.map((row) => row.id));
+	const mentionsByRun = new Map<string, Map<string, number>>();
+	for (const mention of mentionRows) {
+		if (!mention.mentioned || !activeCompetitorIds.has(mention.competitor_id)) {
+			continue;
+		}
+
+		const runId = responseToRun.get(mention.response_id);
+		if (!runId) continue;
+
+		const runMentions = mentionsByRun.get(runId) ?? new Map<string, number>();
+		runMentions.set(
+			mention.competitor_id,
+			(runMentions.get(mention.competitor_id) ?? 0) + 1,
+		);
+		mentionsByRun.set(runId, runMentions);
+	}
+
+	const highchartsCompetitor =
+		competitorRows.find((row) => row.is_primary) ??
+		competitorRows.find((row) => row.slug === "highcharts") ??
+		null;
+	const rivalCompetitors = competitorRows.filter(
+		(row) => row.id !== highchartsCompetitor?.id,
+	);
+
+	const points = runRows
+		.map((run) => {
+			const total = totalsByRun.get(run.id) ?? 0;
+			if (total < 1) {
+				return null;
+			}
+
+			const fallbackDate =
+				run.run_month && /^\d{4}-\d{2}$/.test(run.run_month)
+					? `${run.run_month}-01`
+					: new Date().toISOString().slice(0, 10);
+			const timestamp = run.created_at ?? `${fallbackDate}T12:00:00Z`;
+			const runMentions = mentionsByRun.get(run.id);
+			const highchartsMentions = highchartsCompetitor
+				? (runMentions?.get(highchartsCompetitor.id) ?? 0)
+				: 0;
+			const highchartsRatePct =
+				total > 0 ? (highchartsMentions / total) * 100 : 0;
+			const totalMentionsAcrossEntities = competitorRows.reduce(
+				(sum, competitor) => sum + (runMentions?.get(competitor.id) ?? 0),
+				0,
+			);
+			const highchartsSovPct =
+				totalMentionsAcrossEntities > 0
+					? (highchartsMentions / totalMentionsAcrossEntities) * 100
+					: 0;
+			const derivedAiVisibility =
+				0.7 * highchartsRatePct + 0.3 * highchartsSovPct;
+			const storedAiVisibility =
+				selectedTagSet.size === 0 &&
+				selectedProviderSet.size === 0 &&
+				typeof run.overall_score === "number" &&
+				Number.isFinite(run.overall_score)
+					? run.overall_score
+					: null;
+			const rivalMentionCount = rivalCompetitors.reduce(
+				(sum, competitor) => sum + (runMentions?.get(competitor.id) ?? 0),
+				0,
+			);
+			const combviDenominator = total * rivalCompetitors.length;
+			const combviPct =
+				combviDenominator > 0
+					? (rivalMentionCount / combviDenominator) * 100
+					: 0;
+
+			return {
+				date: timestamp.slice(0, 10),
+				timestamp,
+				total,
+				aiVisibilityScore: roundTo(
+					storedAiVisibility ?? derivedAiVisibility,
+					2,
+				),
+				combviPct: roundTo(combviPct, 2),
+				rates: Object.fromEntries(
+					competitorRows.map((competitor) => {
+						const mentions = runMentions?.get(competitor.id) ?? 0;
+						const mentionRatePct = total > 0 ? (mentions / total) * 100 : 0;
+						return [competitor.name, roundTo(mentionRatePct, 2)];
+					}),
+				),
+			};
+		})
+		.filter((point): point is NonNullable<typeof point> => point !== null)
+		.sort((left, right) => {
+			const leftMs = Date.parse(left.timestamp ?? `${left.date}T12:00:00Z`);
+			const rightMs = Date.parse(right.timestamp ?? `${right.date}T12:00:00Z`);
+			return leftMs - rightMs;
+		});
+
+	return {
+		ok: true,
+		competitors,
+		points,
+	};
+}
+
+async function fetchTimeseriesFromSupabaseViewsForServer(options = {}) {
+	const client = requireSupabaseClient();
+	const selectedTags = normalizeSelectedTags(options.tags);
+	const selectedProviderSet = new Set(
+		normalizeSelectedProviders(options.providers),
+	);
+	const selectedTagSet = new Set(selectedTags);
+	const tagFilterMode = options.mode === "all" ? "all" : "any";
+
+	const competitorResult = await client
+		.from("competitors")
+		.select("id,name,slug,is_primary,sort_order")
+		.eq("is_active", true)
+		.order("sort_order", { ascending: true });
+
+	if (competitorResult.error) {
+		throw asError(
+			competitorResult.error,
+			"Failed to load competitors for time series",
+		);
+	}
+
+	const competitorRows = (competitorResult.data ?? []) as Array<{
+		id: string;
+		name: string;
+		slug: string;
+		is_primary: boolean;
+		sort_order: number;
+	}>;
+	const competitors = competitorRows.map((row) => row.name);
+	if (competitorRows.length === 0) {
+		return { ok: true, competitors: [], points: [] };
+	}
+
+	const promptResultWithTags = await client
+		.from("prompt_queries")
+		.select("id,query_text,tags");
+
+	let promptRowsError = promptResultWithTags.error;
+	let promptRows = (promptResultWithTags.data ?? []) as Array<{
+		id: string;
+		query_text: string;
+		tags?: string[] | null;
+	}>;
+	if (promptRowsError && isMissingColumn(promptRowsError)) {
+		const fallbackRows = await client
+			.from("prompt_queries")
+			.select("id,query_text");
+		promptRowsError = fallbackRows.error;
+		promptRows = (
+			(fallbackRows.data ?? []) as Array<{ id: string; query_text: string }>
+		).map((row) => ({ ...row, tags: null }));
+	}
+	if (promptRowsError && !isMissingRelation(promptRowsError)) {
+		throw asError(
+			promptRowsError,
+			"Failed to load prompt tags for time series",
+		);
+	}
+
+	const tagsByPromptId = new Map<string, string[]>();
+	for (const row of promptRows) {
+		tagsByPromptId.set(row.id, normalizePromptTags(row.tags, row.query_text));
+	}
+	const shouldFilterByTags = selectedTagSet.size > 0 && tagsByPromptId.size > 0;
+
+	const runResult = await client
+		.from("mv_run_summary")
+		.select("run_id,run_month,run_kind,cohort_tag,created_at,overall_score")
+		.order("created_at", { ascending: true })
+		.limit(500);
+
+	if (runResult.error) {
+		if (isMissingRelation(runResult.error)) {
+			return { ok: true, competitors, points: [] };
+		}
+		throw asError(
+			runResult.error,
+			"Failed to load mv_run_summary for time series",
+		);
+	}
+
+	const runRows = (runResult.data ?? []) as Array<{
+		run_id: string;
+		run_month: string | null;
+		created_at: string | null;
+		overall_score: number | null;
+	}>;
+	if (runRows.length === 0) {
+		return { ok: true, competitors, points: [] };
+	}
+
+	const mentionRows = await fetchMentionRateRowsByRunIds(
+		runRows.map((row) => row.run_id),
+		{ overallOnly: false },
+	);
+
+	const highchartsCompetitor =
+		competitorRows.find((row) => row.is_primary) ??
+		competitorRows.find((row) => row.slug === "highcharts") ??
+		null;
+	const rivals = competitorRows.filter(
+		(row) => row.id !== highchartsCompetitor?.id,
+	);
+
+	const runBuckets = new Map<
+		string,
+		{
+			queryTotals: Map<string, number>;
+			mentionsByCompetitor: Map<string, number>;
+		}
+	>();
+
+	for (const row of mentionRows) {
+		const queryId = row.query_id;
+		if (!queryId) continue;
+		if (shouldFilterByTags) {
+			const promptTags =
+				tagsByPromptId.get(queryId) ?? inferPromptTags(row.query_text);
+			if (!promptMatchesTagFilter(promptTags, selectedTagSet, tagFilterMode)) {
+				continue;
+			}
+		}
+
+		const bucket = runBuckets.get(row.run_id) ?? {
+			queryTotals: new Map<string, number>(),
+			mentionsByCompetitor: new Map<string, number>(),
+		};
+		if (!bucket.queryTotals.has(queryId)) {
+			bucket.queryTotals.set(
+				queryId,
+				Math.max(0, Math.round(asNumber(row.response_count))),
+			);
+		}
+		bucket.mentionsByCompetitor.set(
+			row.competitor_id,
+			(bucket.mentionsByCompetitor.get(row.competitor_id) ?? 0) +
+				Math.max(0, Math.round(asNumber(row.mentions_count))),
+		);
+		runBuckets.set(row.run_id, bucket);
+	}
+
+	const points = runRows
+		.map((run) => {
+			const bucket = runBuckets.get(run.run_id);
+			if (!bucket) return null;
+
+			const total = [...bucket.queryTotals.values()].reduce(
+				(sum, value) => sum + value,
+				0,
+			);
+			if (total <= 0) return null;
+
+			const rates = Object.fromEntries(
+				competitorRows.map((competitor) => {
+					const mentions = bucket.mentionsByCompetitor.get(competitor.id) ?? 0;
+					const mentionRatePct = total > 0 ? (mentions / total) * 100 : 0;
+					return [competitor.name, roundTo(mentionRatePct, 2)];
+				}),
+			);
+
+			const highchartsMentions = highchartsCompetitor
+				? (bucket.mentionsByCompetitor.get(highchartsCompetitor.id) ?? 0)
+				: 0;
+			const highchartsRatePct =
+				total > 0 ? (highchartsMentions / total) * 100 : 0;
+			const totalMentionsAcrossEntities = competitorRows.reduce(
+				(sum, competitor) =>
+					sum + (bucket.mentionsByCompetitor.get(competitor.id) ?? 0),
+				0,
+			);
+			const highchartsSovPct =
+				totalMentionsAcrossEntities > 0
+					? (highchartsMentions / totalMentionsAcrossEntities) * 100
+					: 0;
+			const derivedAiVisibility =
+				0.7 * highchartsRatePct + 0.3 * highchartsSovPct;
+			const rivalMentionCount = rivals.reduce(
+				(sum, competitor) =>
+					sum + (bucket.mentionsByCompetitor.get(competitor.id) ?? 0),
+				0,
+			);
+			const combviDenominator = total * rivals.length;
+			const combviPct =
+				combviDenominator > 0
+					? (rivalMentionCount / combviDenominator) * 100
+					: 0;
+			const timestamp =
+				run.created_at ??
+				(run.run_month && /^\d{4}-\d{2}$/.test(run.run_month)
+					? `${run.run_month}-01T12:00:00Z`
+					: new Date().toISOString());
+			const storedAiVisibility =
+				selectedTagSet.size === 0 &&
+				selectedProviderSet.size === 0 &&
+				typeof run.overall_score === "number" &&
+				Number.isFinite(run.overall_score)
+					? run.overall_score
+					: null;
+
+			return {
+				date: timestamp.slice(0, 10),
+				timestamp,
+				total,
+				aiVisibilityScore: roundTo(
+					storedAiVisibility ?? derivedAiVisibility,
+					2,
+				),
+				combviPct: roundTo(combviPct, 2),
+				rates,
+			};
+		})
+		.filter((point): point is NonNullable<typeof point> => point !== null)
+		.sort((left, right) => {
+			const leftMs = Date.parse(left.timestamp ?? `${left.date}T12:00:00Z`);
+			const rightMs = Date.parse(right.timestamp ?? `${right.date}T12:00:00Z`);
+			return leftMs - rightMs;
+		});
+
+	return {
+		ok: true,
+		competitors,
+		points,
+	};
+}
+
+async function fetchTimeseriesFromSupabaseForServer(options = {}) {
+	const selectedProviders = normalizeSelectedProviders(options.providers);
+	if (selectedProviders.length > 0) {
+		return fetchTimeseriesFromSupabaseTablesForServer(options);
+	}
+	return fetchTimeseriesFromSupabaseViewsForServer(options);
+}
+
 app.get(
 	"/api/benchmark/runs",
 	invokeServerlessHandler(benchmarkRunsHandler, { requireTriggerToken: true }),
@@ -4791,15 +5378,27 @@ app.get(["/api/dashboard", "/api/analytics/dashboard"], async (_req, res) => {
 
 app.get(["/api/timeseries", "/api/analytics/timeseries"], async (req, res) => {
 	try {
+		const selectedTags = normalizeSelectedTags(req.query.tags);
+		const selectedProviders = normalizeSelectedProviders(req.query.providers);
+		const tagFilterMode: "any" | "all" =
+			String(req.query.mode ?? "any").toLowerCase() === "all" ? "all" : "any";
+
+		if (shouldUseSupabaseDashboardSource()) {
+			const payload = await fetchTimeseriesFromSupabaseForServer({
+				tags: selectedTags,
+				mode: tagFilterMode,
+				providers: selectedProviders,
+			});
+			res.json(payload);
+			return;
+		}
+
 		const [config, jsonlRows] = await Promise.all([
 			loadConfig(),
 			readJsonl(dashboardFiles.jsonl),
 		]);
 
-		const selectedTags = normalizeSelectedTags(req.query.tags);
 		const selectedTagSet = new Set(selectedTags);
-		const tagFilterMode: "any" | "all" =
-			String(req.query.mode ?? "any").toLowerCase() === "all" ? "all" : "any";
 		const shouldFilterByTags = selectedTagSet.size > 0;
 		const queryTags = normalizeQueryTagsMap(config.queries, config.queryTags);
 		const tagsByQuery = new Map(
