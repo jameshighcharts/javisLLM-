@@ -1,3 +1,11 @@
+// Keep these files in the serverless bundle. The API app expects the nested
+// package metadata and benchmark config to exist at runtime.
+require("../apps/api/package.json");
+require("../apps/api/dist/handlers/package.json");
+require("../config/benchmark/config.json");
+
+let appPromise;
+
 module.exports = async function sharedApiEntry(req, res) {
   const baseUrl = `https://${req.headers.host || "localhost"}`;
   const requestUrl = new URL(req.url || "/api/entry", baseUrl);
@@ -16,7 +24,8 @@ module.exports = async function sharedApiEntry(req, res) {
   const nextQuery = requestUrl.searchParams.toString();
   req.url = nextQuery ? `${normalizedPath}?${nextQuery}` : normalizedPath;
 
-  const mod = await import("../apps/api/dist/server.js");
+  appPromise ||= import("../apps/api/dist/server.js");
+  const mod = await appPromise;
   const app = mod.app || mod.default;
   return app(req, res);
 };

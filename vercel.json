@@ -3,15 +3,6 @@
   "installCommand": "pnpm install",
   "buildCommand": "pnpm build",
   "outputDirectory": "apps/web/dist",
-  "functions": {
-    "api/entry.js": {
-      "includeFiles": [
-        "apps/api/package.json",
-        "apps/api/dist/**",
-        "config/benchmark/config.json"
-      ]
-    }
-  },
   "headers": [
     {
       "source": "/(.*)",
