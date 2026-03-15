@@ -2,6 +2,18 @@
 // package metadata and benchmark config to exist at runtime.
 require("../apps/api/package.json");
 require("../apps/api/dist/handlers/package.json");
+require("../apps/api/dist/handlers/benchmark/trigger.js");
+require("../apps/api/dist/handlers/benchmark/runs.js");
+require("../apps/api/dist/handlers/benchmark/stop.js");
+require("../apps/api/dist/handlers/prompt-lab/run.js");
+require("../apps/api/dist/handlers/research/competitors/run.js");
+require("../apps/api/dist/handlers/research/sitemap/sync.js");
+require("../apps/api/dist/handlers/research/gaps/refresh.js");
+require("../apps/api/dist/handlers/research/gaps.js");
+require("../apps/api/dist/handlers/research/gaps/[id]/status.js");
+require("../apps/api/dist/handlers/research/briefs/generate.js");
+require("../apps/api/dist/handlers/research/prompt-cohorts.js");
+require("../apps/api/dist/handlers/research/prompt-cohorts/[id]/progress.js");
 require("../config/benchmark/config.json");
 
 let appPromise;
