@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import benchmarkTriggerHandler from '../api/benchmark/trigger.js'
-import promptLabRunHandler from '../api/prompt-lab/run.js'
-import competitorResearchHandler from '../api/research/competitors/run.js'
-import briefGenerateHandler from '../api/research/briefs/generate.js'
-import promptCohortsHandler from '../api/research/prompt-cohorts.js'
-import shared from '../api/research/_shared.js'
+import benchmarkTriggerHandler from '../apps/api/src/handlers/benchmark/trigger.js'
+import promptLabRunHandler from '../apps/api/src/handlers/prompt-lab/run.js'
+import competitorResearchHandler from '../apps/api/src/handlers/research/competitors/run.js'
+import briefGenerateHandler from '../apps/api/src/handlers/research/briefs/generate.js'
+import promptCohortsHandler from '../apps/api/src/handlers/research/prompt-cohorts.js'
+import shared from '../apps/api/src/handlers/research/_shared.js'
 
 const { runOpenAiJsonWithRetry } = shared
 

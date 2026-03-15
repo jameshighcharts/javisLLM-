@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import shared from '../api/research/_shared.js'
+import shared from '../apps/api/src/handlers/research/_shared.js'
 
 const {
   inferDomainCandidates,
