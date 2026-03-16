@@ -15,6 +15,7 @@ import type {
 	ContentGapItem,
 	ContentGapStatus,
 	DashboardModelStat,
+	DashboardOverviewResponse,
 	DashboardResponse,
 	DiagnosticsCheck,
 	DiagnosticsResponse,
@@ -6416,6 +6417,25 @@ export const api = {
 		const suffix = params.size > 0 ? `?${params.toString()}` : "";
 
 		return json<DashboardResponse>(`/analytics/dashboard${suffix}`);
+	},
+
+	async dashboardOverview(optionsOrContext?: DashboardOptions | unknown) {
+		const options =
+			optionsOrContext &&
+			typeof optionsOrContext === "object" &&
+			!Array.isArray(optionsOrContext) &&
+			!("queryKey" in optionsOrContext)
+				? (optionsOrContext as DashboardOptions)
+				: {};
+		const normalizedProviders = normalizeSelectedProviders(options.providers);
+		const params = new URLSearchParams();
+		params.set("prompt_detail", "summary");
+		if (normalizedProviders.length > 0) {
+			params.set("providers", normalizedProviders.join(","));
+		}
+		return json<DashboardOverviewResponse>(
+			`/analytics/dashboard?${params.toString()}`,
+		);
 	},
 
 	async underTheHood(

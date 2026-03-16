@@ -4,35 +4,34 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "./components/AuthProvider";
 import Layout from "./components/Layout";
 import { ProtectedRoute } from "./components/ProtectedRoute";
-import Askill from "./pages/Askill";
-import CitationLinks from "./pages/CitationLinks";
-import CompetitorBlogs from "./pages/CompetitorBlogs";
-import Competitors from "./pages/Competitors";
-import Dashboard from "./pages/Dashboard";
-import Logics from "./pages/Logics";
 import Login from "./pages/Login";
-import ProductMentions from "./pages/ProductMentions";
-import PromptDrilldown from "./pages/PromptDrilldown";
-import PromptDrilldownHub from "./pages/PromptDrilldownHub";
-import PromptResearch from "./pages/PromptResearch";
-import Prompts from "./pages/Prompts";
-import Runs from "./pages/Runs";
-import UnderTheHood from "./pages/UnderTheHood";
 
 type PageModule = { default: ComponentType<any> };
-const pageModules = import.meta.glob("./pages/{Gantt,KR23,OKR}.tsx") as Record<
-	string,
-	() => Promise<PageModule>
->;
+const pageModules = import.meta.glob(
+	"./pages/{Askill,CitationLinks,CompetitorBlogs,Competitors,Dashboard,Gantt,KR23,Logics,OKR,ProductMentions,PromptDrilldown,PromptDrilldownHub,PromptResearch,Prompts,Runs,UnderTheHood}.tsx",
+) as Record<string, () => Promise<PageModule>>;
 
 function resolveLazyPage(path: string): ElementType | null {
 	const loader = pageModules[path];
 	return loader ? lazy(loader) : null;
 }
 
+const Askill = resolveLazyPage("./pages/Askill.tsx");
+const CitationLinks = resolveLazyPage("./pages/CitationLinks.tsx");
+const CompetitorBlogs = resolveLazyPage("./pages/CompetitorBlogs.tsx");
+const Competitors = resolveLazyPage("./pages/Competitors.tsx");
+const Dashboard = resolveLazyPage("./pages/Dashboard.tsx");
 const Gantt = resolveLazyPage("./pages/Gantt.tsx");
 const KR23 = resolveLazyPage("./pages/KR23.tsx");
+const Logics = resolveLazyPage("./pages/Logics.tsx");
 const OKR = resolveLazyPage("./pages/OKR.tsx");
+const ProductMentions = resolveLazyPage("./pages/ProductMentions.tsx");
+const PromptDrilldown = resolveLazyPage("./pages/PromptDrilldown.tsx");
+const PromptDrilldownHub = resolveLazyPage("./pages/PromptDrilldownHub.tsx");
+const PromptResearch = resolveLazyPage("./pages/PromptResearch.tsx");
+const Prompts = resolveLazyPage("./pages/Prompts.tsx");
+const Runs = resolveLazyPage("./pages/Runs.tsx");
+const UnderTheHood = resolveLazyPage("./pages/UnderTheHood.tsx");
 
 function LazyPageFallback() {
 	return (
@@ -67,16 +66,19 @@ function MissingPageFallback({ label }: { label: string }) {
 function LazyPageRoute({
 	Page,
 	label,
+	pageProps,
 }: {
 	Page: ElementType | null;
 	label: string;
+	pageProps?: Record<string, unknown>;
 }) {
 	if (!Page) {
 		return <MissingPageFallback label={label} />;
 	}
+	const ResolvedPage = Page;
 	return (
 		<Suspense fallback={<LazyPageFallback />}>
-			<Page />
+			<ResolvedPage {...pageProps} />
 		</Suspense>
 	);
 }
@@ -113,7 +115,12 @@ export default function App() {
 							<ProtectedRoute>
 								<Layout>
 									<Routes>
-										<Route path="/dashboard" element={<Dashboard />} />
+										<Route
+											path="/dashboard"
+											element={
+												<LazyPageRoute Page={Dashboard} label="Dashboard" />
+											}
+										/>
 										<Route
 											path="/okr/kr-2-1"
 											element={<LazyPageRoute Page={OKR} label="KR 2.1" />}
@@ -122,41 +129,108 @@ export default function App() {
 											path="/okr/kr-2-3"
 											element={<LazyPageRoute Page={KR23} label="KR 2.3" />}
 										/>
-										<Route path="/runs" element={<Runs />} />
+										<Route
+											path="/runs"
+											element={<LazyPageRoute Page={Runs} label="Runs" />}
+										/>
 										<Route
 											path="/gantt"
 											element={<LazyPageRoute Page={Gantt} label="Gantt" />}
 										/>
-										<Route path="/prompts" element={<Prompts />} />
+										<Route
+											path="/prompts"
+											element={<LazyPageRoute Page={Prompts} label="Prompts" />}
+										/>
 										<Route
 											path="/prompt-research"
-											element={<PromptResearch />}
+											element={
+												<LazyPageRoute
+													Page={PromptResearch}
+													label="Prompt Research"
+												/>
+											}
 										/>
 										<Route
 											path="/product-mentions"
-											element={<ProductMentions />}
+											element={
+												<LazyPageRoute
+													Page={ProductMentions}
+													label="Product Mentions"
+												/>
+											}
 										/>
 										<Route
 											path="/query-lab"
-											element={<Prompts queryLabOnly />}
+											element={
+												<LazyPageRoute
+													Page={Prompts}
+													label="Query Lab"
+													pageProps={{ queryLabOnly: true }}
+												/>
+											}
 										/>
 										<Route
 											path="/prompt-drilldown"
-											element={<PromptDrilldownHub />}
+											element={
+												<LazyPageRoute
+													Page={PromptDrilldownHub}
+													label="Prompt Drilldown"
+												/>
+											}
 										/>
 										<Route
 											path="/prompts/drilldown"
-											element={<PromptDrilldown />}
+											element={
+												<LazyPageRoute
+													Page={PromptDrilldown}
+													label="Prompt Drilldown"
+												/>
+											}
 										/>
-										<Route path="/competitors" element={<Competitors />} />
+										<Route
+											path="/competitors"
+											element={
+												<LazyPageRoute
+													Page={Competitors}
+													label="Competitors"
+												/>
+											}
+										/>
 										<Route
 											path="/competitor-blogs"
-											element={<CompetitorBlogs />}
+											element={
+												<LazyPageRoute
+													Page={CompetitorBlogs}
+													label="Competitor Blogs"
+												/>
+											}
 										/>
-										<Route path="/citation-links" element={<CitationLinks />} />
-										<Route path="/askill" element={<Askill />} />
-										<Route path="/logics" element={<Logics />} />
-										<Route path="/under-the-hood" element={<UnderTheHood />} />
+										<Route
+											path="/citation-links"
+											element={
+												<LazyPageRoute
+													Page={CitationLinks}
+													label="Citation Links"
+												/>
+											}
+										/>
+										<Route
+											path="/askill"
+											element={<LazyPageRoute Page={Askill} label="Askill" />}
+										/>
+										<Route
+											path="/logics"
+											element={<LazyPageRoute Page={Logics} label="Logics" />}
+										/>
+										<Route
+											path="/under-the-hood"
+											element={
+												<LazyPageRoute
+													Page={UnderTheHood}
+													label="Under The Hood"
+												/>
+											}
+										/>
 									</Routes>
 								</Layout>
 							</ProtectedRoute>

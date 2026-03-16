@@ -4,13 +4,14 @@ import { useQuery } from "@tanstack/react-query";
 import Highcharts from "highcharts";
 import HighchartsReact from "highcharts-react-official";
 import type { CSSProperties, ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { startTransition, useDeferredValue, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import type {
 	CompetitorSeries,
 	PromptCompetitorRate,
 	PromptStatus,
+	PromptStatusSummary,
 	TimeSeriesPoint,
 } from "../types";
 
@@ -279,7 +280,7 @@ function promptMatchesTagFilter(
 	return false;
 }
 
-function buildTagSummary(prompts: PromptStatus[]): TagSummary[] {
+function buildTagSummary(prompts: PromptStatusSummary[]): TagSummary[] {
 	const counts = new Map<string, number>();
 
 	for (const prompt of prompts) {
@@ -296,7 +297,7 @@ function buildTagSummary(prompts: PromptStatus[]): TagSummary[] {
 		});
 }
 
-function resolvePromptSampleSize(prompt: PromptStatus): number | null {
+function resolvePromptSampleSize(prompt: PromptStatusSummary): number | null {
 	if (
 		typeof prompt.latestRunResponseCount === "number" &&
 		Number.isFinite(prompt.latestRunResponseCount) &&
@@ -318,7 +319,7 @@ function resolvePromptSampleSize(prompt: PromptStatus): number | null {
 }
 
 function buildFilteredCompetitorSeries(
-	prompts: PromptStatus[],
+	prompts: PromptStatusSummary[],
 	baseline: CompetitorSeries[],
 ): CompetitorSeries[] {
 	const tracked = prompts.filter((prompt) => prompt.status === "tracked");
@@ -430,7 +431,7 @@ function buildFilteredCompetitorSeries(
 }
 
 function buildTagStrengthSlices(
-	prompts: PromptStatus[],
+	prompts: PromptStatusSummary[],
 	allowedTags?: Set<string>,
 ): TagStrengthSlice[] {
 	const tracked = prompts.filter((prompt) => prompt.status === "tracked");
@@ -639,12 +640,13 @@ function DashboardTagFilterBar({
 }) {
 	const [isOpen, setIsOpen] = useState(false);
 	const [search, setSearch] = useState("");
+	const deferredSearch = useDeferredValue(search);
 
 	const visibleTags = useMemo(() => {
-		const needle = search.trim().toLowerCase();
+		const needle = deferredSearch.trim().toLowerCase();
 		if (!needle) return tags;
 		return tags.filter((entry) => entry.tag.includes(needle));
-	}, [tags, search]);
+	}, [tags, deferredSearch]);
 
 	const hasActiveFilter = selectedTags.length > 0;
 	const hasActiveProviderFilter = selectedProviders.length > 0;
@@ -2466,6 +2468,7 @@ function PromptStatusTable({
 	const [sortKey, setSortKey] = useState<SortKey | null>(null);
 	const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 	const [search, setSearch] = useState("");
+	const deferredSearch = useDeferredValue(search);
 
 	function handleSort(key: SortKey) {
 		if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -2498,7 +2501,7 @@ function PromptStatusTable({
 	}, [data, sortKey, sortDir]);
 
 	const rows = useMemo(() => {
-		const needle = search.trim().toLowerCase();
+		const needle = deferredSearch.trim().toLowerCase();
 		if (!needle) return sorted;
 
 		return sorted.filter((prompt) => {
@@ -2517,7 +2520,7 @@ function PromptStatusTable({
 				.toLowerCase();
 			return haystack.includes(needle);
 		});
-	}, [sorted, search]);
+	}, [sorted, deferredSearch]);
 
 	return (
 		<div
@@ -2894,8 +2897,10 @@ export default function Dashboard() {
 	);
 
 	const { data, isLoading, isError, error } = useQuery({
-		queryKey: ["dashboard", normalizedSelectedProviders.join(",")],
-		queryFn: () => api.dashboard({ providers: normalizedSelectedProviders }),
+		queryKey: ["dashboard", "overview", normalizedSelectedProviders.join(",")],
+		queryFn: () =>
+			api.dashboardOverview({ providers: normalizedSelectedProviders }),
+		placeholderData: (previousData) => previousData,
 		refetchInterval: 60_000,
 	});
 
@@ -2912,6 +2917,7 @@ export default function Dashboard() {
 				mode: tagFilterMode,
 				providers: normalizedSelectedProviders,
 			}),
+		placeholderData: (previousData) => previousData,
 		retry: false,
 		staleTime: 30_000,
 		refetchInterval: 60_000,
@@ -2986,60 +2992,76 @@ export default function Dashboard() {
 
 	function toggleTag(tag: string) {
 		const normalized = tag.trim().toLowerCase();
-		setHidden(new Set());
-		setSelectedTags((prev) => {
-			const next = new Set(normalizeTagList(prev));
-			if (next.has(normalized)) next.delete(normalized);
-			else next.add(normalized);
-			return [...next].sort();
+		startTransition(() => {
+			setHidden(new Set());
+			setSelectedTags((prev) => {
+				const next = new Set(normalizeTagList(prev));
+				if (next.has(normalized)) next.delete(normalized);
+				else next.add(normalized);
+				return [...next].sort();
+			});
 		});
 	}
 
 	function clearTagFilter() {
-		setHidden(new Set());
-		setSelectedTags([]);
+		startTransition(() => {
+			setHidden(new Set());
+			setSelectedTags([]);
+		});
 	}
 
 	function toggleProvider(provider: ProviderFilterValue) {
-		setHidden(new Set());
-		setSelectedProviders((prev) => {
-			const next = new Set(normalizeProviderList(prev));
-			if (next.has(provider)) next.delete(provider);
-			else next.add(provider);
-			return [...next].sort((left, right) =>
-				left.localeCompare(right),
-			) as ProviderFilterValue[];
+		startTransition(() => {
+			setHidden(new Set());
+			setSelectedProviders((prev) => {
+				const next = new Set(normalizeProviderList(prev));
+				if (next.has(provider)) next.delete(provider);
+				else next.add(provider);
+				return [...next].sort((left, right) =>
+					left.localeCompare(right),
+				) as ProviderFilterValue[];
+			});
 		});
 	}
 
 	function clearProviderFilter() {
-		setHidden(new Set());
-		setSelectedProviders([]);
+		startTransition(() => {
+			setHidden(new Set());
+			setSelectedProviders([]);
+		});
 	}
 
 	function changeTagFilterMode(nextMode: TagFilterMode) {
-		setHidden(new Set());
-		setTagFilterMode(nextMode);
+		startTransition(() => {
+			setHidden(new Set());
+			setTagFilterMode(nextMode);
+		});
 	}
 
 	function toggleCompetitor(name: string) {
-		setHidden((prev) => {
-			const next = new Set(prev);
-			if (next.has(name)) {
-				next.delete(name);
-			} else {
-				next.add(name);
-			}
-			return next;
+		startTransition(() => {
+			setHidden((prev) => {
+				const next = new Set(prev);
+				if (next.has(name)) {
+					next.delete(name);
+				} else {
+					next.add(name);
+				}
+				return next;
+			});
 		});
 	}
 
 	function showHighchartsOnly() {
-		setHidden(new Set(nonHighchartsEntities));
+		startTransition(() => {
+			setHidden(new Set(nonHighchartsEntities));
+		});
 	}
 
 	function showAllCompetitors() {
-		setHidden(new Set());
+		startTransition(() => {
+			setHidden(new Set());
+		});
 	}
 
 	const timeseriesPoints = useMemo((): TimeSeriesPoint[] => {
@@ -3181,31 +3203,6 @@ export default function Dashboard() {
 						<CompetitorRanking data={competitorSeries} />
 					)}
 				</Card>
-			</div>
-
-			{/* Prompts table */}
-			<div>
-				<div className="flex items-center justify-between mb-2">
-					<div>
-						<div
-							className="text-sm font-semibold tracking-tight"
-							style={{ color: "#2A3A2C" }}
-						>
-							Prompt Performance
-						</div>
-						<div className="text-xs mt-0.5" style={{ color: "#9AAE9C" }}>
-							Mention &amp; viability rates per query — scoped by selected
-							segments
-						</div>
-					</div>
-				</div>
-				<PromptStatusTable
-					data={promptStatus}
-					isLoading={isLoading}
-					activeTags={normalizedSelectedTags}
-					matchMode={tagFilterMode}
-					onClearTagFilter={clearTagFilter}
-				/>
 			</div>
 
 			{/* Data file status */}

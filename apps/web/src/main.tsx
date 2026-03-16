@@ -1,14 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import Highcharts from "highcharts";
-import HighchartsMore from "highcharts/highcharts-more";
-import SolidGauge from "highcharts/modules/solid-gauge";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
-
-HighchartsMore(Highcharts);
-SolidGauge(Highcharts);
 
 // warm pastel cream/sage/tan chart theme
 Highcharts.setOptions({

@@ -3778,6 +3778,41 @@ function emptyDashboardFromConfig(config: BenchmarkConfig) {
 	};
 }
 
+function summarizePromptStatusForDashboard(promptStatus = []) {
+	return promptStatus.map((prompt) => ({
+		query: prompt.query,
+		tags: Array.isArray(prompt.tags) ? prompt.tags : [],
+		isPaused: Boolean(prompt.isPaused),
+		status: prompt.status,
+		runs: Math.max(0, Math.round(asNumber(prompt.runs))),
+		highchartsRatePct: roundTo(asNumber(prompt.highchartsRatePct), 2),
+		latestRunResponseCount:
+			typeof prompt.latestRunResponseCount === "number" &&
+			Number.isFinite(prompt.latestRunResponseCount)
+				? Math.max(0, Math.round(prompt.latestRunResponseCount))
+				: null,
+		competitorRates: Array.isArray(prompt.competitorRates)
+			? prompt.competitorRates.map((rate) => ({
+					entity: String(rate?.entity ?? ""),
+					entityKey: String(rate?.entityKey ?? ""),
+					isHighcharts: Boolean(rate?.isHighcharts),
+					ratePct: roundTo(asNumber(rate?.ratePct), 2),
+					mentions:
+						typeof rate?.mentions === "number" && Number.isFinite(rate.mentions)
+							? Math.max(0, Math.round(rate.mentions))
+							: undefined,
+				}))
+			: [],
+	}));
+}
+
+function toDashboardOverviewPayload(payload) {
+	return {
+		...payload,
+		promptStatus: summarizePromptStatusForDashboard(payload?.promptStatus ?? []),
+	};
+}
+
 async function fetchDashboardFromSupabaseTablesForServer(
 	config: BenchmarkConfig,
 	options: { providers?: unknown } = {},
@@ -6404,6 +6439,10 @@ app.get("/api/run-costs", async (req, res) => {
 
 app.get(["/api/dashboard", "/api/analytics/dashboard"], async (req, res) => {
 	try {
+		const promptDetail =
+			String(req.query.prompt_detail ?? "full").toLowerCase() === "summary"
+				? "summary"
+				: "full";
 		const config = await loadConfig();
 		if (shouldUseSupabaseDashboardSource()) {
 			const selectedProviders = normalizeSelectedProviders(req.query.providers);
@@ -6413,7 +6452,11 @@ app.get(["/api/dashboard", "/api/analytics/dashboard"], async (req, res) => {
 							providers: selectedProviders,
 						})
 					: await fetchDashboardFromSupabaseViewsForServer(config);
-			res.json(payload);
+			res.json(
+				promptDetail === "summary"
+					? toDashboardOverviewPayload(payload)
+					: payload,
+			);
 			return;
 		}
 
@@ -6692,7 +6735,7 @@ app.get(["/api/dashboard", "/api/analytics/dashboard"], async (req, res) => {
 		const durationTotals = inferredWindow.durationTotals;
 		const modelStats = inferredWindow.modelStats;
 
-		res.json({
+		const payload = {
 			generatedAt: new Date().toISOString(),
 			summary: {
 				overallScore: Number(
@@ -6723,7 +6766,12 @@ app.get(["/api/dashboard", "/api/analytics/dashboard"], async (req, res) => {
 				kpiPresent: kpi !== null,
 				llmOutputsPresent: jsonlRows.length > 0,
 			},
-		});
+		};
+		res.json(
+			promptDetail === "summary"
+				? toDashboardOverviewPayload(payload)
+				: payload,
+		);
 	} catch (error) {
 		sendApiError(res, 500, "Unable to build dashboard response.", error);
 	}

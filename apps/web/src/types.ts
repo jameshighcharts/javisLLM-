@@ -104,6 +104,17 @@ export interface PromptCompetitorRate {
 	mentions?: number;
 }
 
+export interface PromptStatusSummary {
+	query: string;
+	tags: string[];
+	isPaused: boolean;
+	status: "tracked" | "awaiting_run" | "deleted";
+	runs: number;
+	highchartsRatePct: number;
+	latestRunResponseCount?: number | null;
+	competitorRates?: PromptCompetitorRate[];
+}
+
 export interface DashboardResponse {
 	generatedAt: string;
 	summary: DashboardSummary;
@@ -117,6 +128,11 @@ export interface DashboardResponse {
 		kpiPresent: boolean;
 		llmOutputsPresent: boolean;
 	};
+}
+
+export interface DashboardOverviewResponse
+	extends Omit<DashboardResponse, "promptStatus"> {
+	promptStatus: PromptStatusSummary[];
 }
 
 export type UnderTheHoodRange = "1d" | "7d" | "30d" | "all";
