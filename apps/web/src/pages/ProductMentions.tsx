@@ -12,7 +12,7 @@ import {
 } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import type { PromptStatus } from "../types";
+import type { CitationLinksSourceStat, PromptStatus } from "../types";
 
 type ProductKey = "core" | "stock" | "maps" | "gantt" | "dashboards" | "grid";
 type FrameworkTag = "javascript" | "react" | "general";
@@ -911,6 +911,25 @@ export default function ProductMentions() {
 		refetchInterval: 60_000,
 	});
 
+	const citationQuery = useQuery({
+		queryKey: ["citation-links"],
+		queryFn: () => api.citationLinks({}),
+		staleTime: 5 * 60 * 1000,
+	});
+
+	const isInternal = (host: string) =>
+		host === "highcharts.com" || host.endsWith(".highcharts.com");
+
+	const citationDomainSplit = useMemo(() => {
+		const sources: CitationLinksSourceStat[] = citationQuery.data?.sources ?? [];
+		const internal = sources.filter((s) => isInternal(s.host));
+		const external = sources.filter((s) => !isInternal(s.host));
+		const totalCitations = sources.reduce((sum, s) => sum + s.citationCount, 0);
+		const internalCitations = internal.reduce((sum, s) => sum + s.citationCount, 0);
+		const externalCitations = external.reduce((sum, s) => sum + s.citationCount, 0);
+		return { internal, external, totalCitations, internalCitations, externalCitations };
+	}, [citationQuery.data]);
+
 	useEffect(() => {
 		if (!copyMessage) return;
 		const timeoutId = window.setTimeout(() => setCopyMessage(""), 1800);
@@ -1228,813 +1247,213 @@ export default function ProductMentions() {
 		[visibleCoverage],
 	);
 
+
+	const hcRateChartOptions: Highcharts.Options = useMemo(
+		() => ({
+			chart: {
+				type: "bar",
+				backgroundColor: "transparent",
+				height: 300,
+				spacing: [8, 8, 8, 8],
+				style: { fontFamily: "'Inter', system-ui, sans-serif" },
+			},
+			title: { text: undefined },
+			credits: { enabled: false },
+			legend: { enabled: false },
+			xAxis: {
+				categories: productCoverage.map((row) => PRODUCT_META[row.product].shortName),
+				lineColor: "#DDD0BC",
+				tickColor: "#DDD0BC",
+				labels: { style: { color: "#5C6E5D", fontSize: "11px" } },
+			},
+			yAxis: {
+				min: 0,
+				max: 100,
+				title: { text: undefined },
+				gridLineColor: "#EEE5D8",
+				labels: {
+					style: { color: "#8C9B8D", fontSize: "10px" },
+					formatter() { return `${this.value}%` },
+				},
+			},
+			tooltip: {
+				backgroundColor: "#FFFFFF",
+				borderColor: "#DDD0BC",
+				borderRadius: 10,
+				shadow: false,
+				style: { color: "#263628", fontSize: "12px" },
+				formatter() {
+					return `<b>${this.x}</b><br/>Avg HC mention: <b>${(this.y ?? 0).toFixed(1)}%</b>`;
+				},
+			},
+			plotOptions: {
+				bar: { borderWidth: 0, borderRadius: 4, dataLabels: { enabled: true, format: "{y:.0f}%", style: { color: "#3D5C40", fontSize: "11px", fontWeight: "600", textOutline: "none" } } },
+			},
+			series: [
+				{
+					type: "bar",
+					name: "Avg HC%",
+					data: productCoverage.map((row) => row.avgHighchartsRate),
+					color: "#486F4D",
+				},
+			],
+		}),
+		[productCoverage],
+	);
+
+	const formatGeneratedAt = (ts: string | undefined) =>
+		ts ? new Date(ts).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—";
+
 	async function copyVisibleQueries() {
 		const lines = filteredPrompts.map((item) => item.prompt.query);
 		const uniqueLines = unique(lines);
-
-		if (uniqueLines.length === 0) {
-			setCopyMessage("Nothing to copy");
-			return;
-		}
-
+		if (uniqueLines.length === 0) { setCopyMessage("Nothing to copy"); return; }
 		try {
 			await navigator.clipboard.writeText(uniqueLines.join("\n"));
-			setCopyMessage(`Copied ${uniqueLines.length} live queries`);
-		} catch (error) {
-			console.error("Failed to copy live product mention queries", error);
-			setCopyMessage("Copy failed");
-		}
-	}
-
-	async function copySuggestedQueries() {
-		const lines = visibleSuggestions.map((item) => item.query);
-		const uniqueLines = unique(lines);
-
-		if (uniqueLines.length === 0) {
-			setSuggestionCopyMessage("Nothing to copy");
-			return;
-		}
-
-		try {
-			await navigator.clipboard.writeText(uniqueLines.join("\n"));
-			setSuggestionCopyMessage(
-				`Copied ${uniqueLines.length} suggested queries`,
-			);
-		} catch (error) {
-			console.error("Failed to copy suggested product mention queries", error);
-			setSuggestionCopyMessage("Copy failed");
-		}
+			setCopyMessage(`Copied ${uniqueLines.length} queries`);
+		} catch { setCopyMessage("Copy failed"); }
 	}
 
 	if (dashboardQuery.isLoading) {
-		return (
-			<div className="max-w-[1480px] space-y-5">
-				<LoadingCard />
-			</div>
-		);
+		return <div className="max-w-5xl space-y-4"><LoadingCard /></div>;
 	}
 
 	if (dashboardQuery.isError) {
 		return (
-			<div
-				className="rounded-[26px] border p-5"
-				style={{
-					background: "#FFF7F6",
-					borderColor: "#F4CACA",
-					color: "#8F2D2D",
-				}}
-			>
-				<div className="flex items-center gap-2 text-base font-semibold">
-					<AlertTriangle size={18} />
-					Product mention data failed to load
-				</div>
-				<p className="mt-2 text-sm leading-relaxed">
-					{String(
-						dashboardQuery.error instanceof Error
-							? dashboardQuery.error.message
-							: dashboardQuery.error,
-					)}
-				</p>
+			<div className="rounded-2xl border p-5" style={{ background: "#FFF7F6", borderColor: "#F4CACA", color: "#8F2D2D" }}>
+				<div className="flex items-center gap-2 font-semibold"><AlertTriangle size={18} />Failed to load</div>
 			</div>
 		);
 	}
 
 	return (
-		<div className="max-w-[1480px] space-y-5">
-			<section
-				className="relative overflow-hidden rounded-[28px] border p-5 sm:p-6"
-				style={{
-					background:
-						"linear-gradient(135deg, #FFFDF6 0%, #F8F1E6 44%, #EEF6EF 100%)",
-					borderColor: "#DDD0BC",
-					boxShadow: "0 22px 48px rgba(42,58,44,0.08)",
-				}}
-			>
-				<div
-					aria-hidden="true"
-					style={{
-						position: "absolute",
-						inset: 0,
-						backgroundImage:
-							"radial-gradient(circle at 18% 18%, rgba(143,187,147,0.18), transparent 28%), radial-gradient(circle at 82% 10%, rgba(200,168,122,0.16), transparent 24%), linear-gradient(rgba(61,92,64,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(61,92,64,0.05) 1px, transparent 1px)",
-						backgroundSize: "auto, auto, 26px 26px, 26px 26px",
-						pointerEvents: "none",
-					}}
-				/>
-
-				<div className="relative space-y-6">
-					<div className="flex flex-wrap items-start justify-between gap-4">
-						<div className="max-w-3xl space-y-4">
-							<div className="flex flex-wrap gap-2">
-								<span
-									className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold"
-									style={{
-										background: "#FFFFFF",
-										color: "#47604A",
-										border: "1px solid #DDD0BC",
-									}}
-								>
-									<Sparkles size={14} />
-									Live prompt data
-								</span>
-								<span
-									className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold"
-									style={{
-										background: "#FFFFFF",
-										color: "#47604A",
-										border: "1px solid #DDD0BC",
-									}}
-								>
-									<Layers size={14} />
-									Product mention routing
-								</span>
-							</div>
-
-							<div>
-								<h2
-									className="text-3xl sm:text-[34px] font-semibold tracking-tight"
-									style={{ color: "#223124" }}
-								>
-									Highcharts product mention planner
-								</h2>
-								<p
-									className="mt-2 max-w-2xl text-sm sm:text-[15px] leading-relaxed"
-									style={{ color: "#5A6F5D" }}
-								>
-									This board now classifies the live prompt inventory from
-									benchmark data. Each prompt is routed to the Highcharts
-									product it implies, then measured against current Highcharts
-									mention performance.
-								</p>
-							</div>
-
-							<div className="text-xs font-medium" style={{ color: "#6E8170" }}>
-								Last updated{" "}
-								{formatGeneratedAt(dashboardQuery.data?.generatedAt)}
-							</div>
-						</div>
-
-						<div className="flex flex-col items-stretch gap-2 min-w-[220px]">
-							<button
-								type="button"
-								onClick={() => {
-									void copyVisibleQueries();
-								}}
-								className="inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold"
-								style={{
-									background: "#2F4F34",
-									color: "#FDFCF8",
-									border: "1px solid #2F4F34",
-								}}
-							>
-								<Copy size={15} />
-								Copy live queries
-							</button>
-							<Link
-								to="/query-lab"
-								className="inline-flex items-center justify-center rounded-2xl px-4 py-3 text-sm font-semibold"
-								style={{
-									background: "#FFFFFF",
-									color: "#3E5541",
-									border: "1px solid #DDD0BC",
-								}}
-							>
-								Open Query Lab
-							</Link>
-							<div
-								className="h-5 text-center text-xs font-medium"
-								style={{ color: "#6E8170" }}
-							>
-								{copyMessage}
-							</div>
-						</div>
-					</div>
-
-					<div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-						<StatCard
-							label="Live Queries"
-							value={String(totalLiveQueries)}
-							sub="Prompt rows classified from the current dashboard dataset."
-						/>
-						<StatCard
-							label="Tracked"
-							value={String(activeTrackedPrompts.length)}
-							sub="Active prompts with historical run data behind them."
-						/>
-						<StatCard
-							label="Avg HC Mention"
-							value={formatPct(avgHighchartsRate)}
-							sub="Average Highcharts mention rate across active tracked prompts."
-						/>
-						<StatCard
-							label="Bundle Opportunities"
-							value={String(bundleOpportunities)}
-							sub="Live prompts that imply multiple Highcharts products in one answer."
-						/>
-					</div>
+		<div className="max-w-5xl space-y-4">
+			{/* Header */}
+			<div className="flex items-center justify-between">
+				<div>
+					<h2 className="text-xl font-semibold tracking-tight" style={{ color: "#223124" }}>Product Mentions</h2>
+					<p className="text-xs mt-0.5" style={{ color: "#8A9B8C" }}>Last updated {formatGeneratedAt(dashboardQuery.data?.generatedAt)}</p>
 				</div>
-			</section>
-
-			<section
-				className="rounded-[26px] border p-5"
-				style={{
-					background: "#FFFFFF",
-					borderColor: "#DDD0BC",
-					boxShadow: "0 16px 40px rgba(42,58,44,0.05)",
-				}}
-			>
-				<div className="flex flex-wrap items-center justify-between gap-3">
-					<div>
-						<h3
-							className="text-lg font-semibold tracking-tight"
-							style={{ color: "#243325" }}
-						>
-							Product routing rules with live coverage
-						</h3>
-						<p className="text-sm mt-1" style={{ color: "#6B7C6D" }}>
-							Static rules define what each query should trigger. Live metrics
-							show whether current prompts already cover that product well.
-						</p>
-					</div>
-					<div className="text-xs font-medium" style={{ color: "#879888" }}>
-						Coverage is based on the current prompt inventory, not hardcoded
-						demo rows.
-					</div>
-				</div>
-
-				<div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-3">
-					{productCoverage.map((coverage) => {
-						const meta = PRODUCT_META[coverage.product];
-						return (
-							<article
-								key={coverage.product}
-								className="rounded-[22px] border p-4 space-y-3"
-								style={{ background: meta.surface, borderColor: meta.border }}
-							>
-								<div className="flex items-center justify-between gap-3">
-									<div>
-										<div
-											className="text-xs uppercase tracking-[0.16em]"
-											style={{ color: "#7A8D7C" }}
-										>
-											{meta.shortName}
-										</div>
-										<div
-											className="text-base font-semibold tracking-tight"
-											style={{ color: meta.accent }}
-										>
-											{meta.name}
-										</div>
-									</div>
-									<div
-										className="h-10 w-10 rounded-2xl"
-										style={{
-											background: meta.accent,
-											boxShadow: "inset 0 1px 0 rgba(255,255,255,0.22)",
-										}}
-									/>
-								</div>
-
-								<p
-									className="text-sm leading-relaxed"
-									style={{ color: "#516452" }}
-								>
-									{meta.summary}
-								</p>
-
-								<div className="grid grid-cols-3 gap-2">
-									<div
-										className="rounded-2xl border px-3 py-2"
-										style={{
-											background: "#FFFFFF",
-											borderColor: "rgba(255,255,255,0.58)",
-										}}
-									>
-										<div
-											className="text-[10px] uppercase tracking-[0.16em]"
-											style={{ color: "#8A9B8C" }}
-										>
-											Queries
-										</div>
-										<div
-											className="mt-1 text-sm font-semibold"
-											style={{ color: "#253325" }}
-										>
-											{coverage.totalQueries}
-										</div>
-									</div>
-									<div
-										className="rounded-2xl border px-3 py-2"
-										style={{
-											background: "#FFFFFF",
-											borderColor: "rgba(255,255,255,0.58)",
-										}}
-									>
-										<div
-											className="text-[10px] uppercase tracking-[0.16em]"
-											style={{ color: "#8A9B8C" }}
-										>
-											Tracked
-										</div>
-										<div
-											className="mt-1 text-sm font-semibold"
-											style={{ color: "#253325" }}
-										>
-											{coverage.trackedQueries}
-										</div>
-									</div>
-									<div
-										className="rounded-2xl border px-3 py-2"
-										style={{
-											background: "#FFFFFF",
-											borderColor: "rgba(255,255,255,0.58)",
-										}}
-									>
-										<div
-											className="text-[10px] uppercase tracking-[0.16em]"
-											style={{ color: "#8A9B8C" }}
-										>
-											Avg HC
-										</div>
-										<div
-											className="mt-1 text-sm font-semibold"
-											style={{ color: "#253325" }}
-										>
-											{formatPct(coverage.avgHighchartsRate)}
-										</div>
-									</div>
-								</div>
-
-								<div
-									className="rounded-2xl px-3 py-3 text-sm leading-relaxed"
-									style={{
-										background: "#FFFFFF",
-										border: "1px solid rgba(255,255,255,0.58)",
-									}}
-								>
-									<div className="font-semibold" style={{ color: "#334635" }}>
-										Trigger
-									</div>
-									<div style={{ color: "#617262" }}>{meta.trigger}</div>
-								</div>
-
-								<div
-									className="rounded-2xl px-3 py-3 text-sm leading-relaxed"
-									style={{
-										background: "rgba(255,255,255,0.76)",
-										border: "1px solid rgba(255,255,255,0.58)",
-									}}
-								>
-									<div className="font-semibold" style={{ color: "#334635" }}>
-										Expand with
-									</div>
-									<div style={{ color: "#617262" }}>{meta.expandWith}</div>
-								</div>
-							</article>
-						);
-					})}
-				</div>
-			</section>
-
-			<section className="grid grid-cols-1 gap-4 xl:grid-cols-[0.92fr_1.08fr]">
-				<div className="space-y-4">
-					<div
-						className="rounded-[26px] border p-5"
-						style={{
-							background: "#FFFFFF",
-							borderColor: "#DDD0BC",
-							boxShadow: "0 16px 40px rgba(42,58,44,0.05)",
-						}}
-					>
-						<div className="flex items-center gap-2">
-							<Search size={16} color="#627463" />
-							<div
-								className="text-sm font-semibold"
-								style={{ color: "#243325" }}
-							>
-								Filter live prompts
-							</div>
-						</div>
-
-						<div className="mt-4 space-y-4">
-							<label className="block">
-								<span
-									className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em]"
-									style={{ color: "#8A9B8C" }}
-								>
-									Search
-								</span>
-								<input
-									value={search}
-									onChange={(event) => setSearch(event.target.value)}
-									placeholder="financial, maps, gantt, dashboard, grid..."
-									className="w-full rounded-2xl px-4 py-3 text-sm"
-									style={{
-										border: "1px solid #DDD0BC",
-										background: "#FDFBF7",
-										color: "#243325",
-									}}
-								/>
-							</label>
-
-							<div>
-								<div
-									className="mb-2 text-xs font-semibold uppercase tracking-[0.14em]"
-									style={{ color: "#8A9B8C" }}
-								>
-									Framework
-								</div>
-								<div className="flex flex-wrap gap-2">
-									<FilterPill
-										active={frameworkFilter === "all"}
-										label="All"
-										onClick={() =>
-											startTransition(() => setFrameworkFilter("all"))
-										}
-									/>
-									<FilterPill
-										active={frameworkFilter === "javascript"}
-										label="JavaScript"
-										onClick={() =>
-											startTransition(() => setFrameworkFilter("javascript"))
-										}
-									/>
-									<FilterPill
-										active={frameworkFilter === "react"}
-										label="React"
-										onClick={() =>
-											startTransition(() => setFrameworkFilter("react"))
-										}
-									/>
-									<FilterPill
-										active={frameworkFilter === "general"}
-										label="General"
-										onClick={() =>
-											startTransition(() => setFrameworkFilter("general"))
-										}
-									/>
-								</div>
-							</div>
-
-							<div>
-								<div
-									className="mb-2 text-xs font-semibold uppercase tracking-[0.14em]"
-									style={{ color: "#8A9B8C" }}
-								>
-									Product mention
-								</div>
-								<div className="flex flex-wrap gap-2">
-									<FilterPill
-										active={productFilter === "all"}
-										label="All products"
-										onClick={() =>
-											startTransition(() => setProductFilter("all"))
-										}
-									/>
-									{PRODUCT_ORDER.map((product) => (
-										<FilterPill
-											key={product}
-											active={productFilter === product}
-											label={PRODUCT_META[product].shortName}
-											onClick={() =>
-												startTransition(() => setProductFilter(product))
-											}
-										/>
-									))}
-								</div>
-							</div>
-
-							<div>
-								<div
-									className="mb-2 text-xs font-semibold uppercase tracking-[0.14em]"
-									style={{ color: "#8A9B8C" }}
-								>
-									Status
-								</div>
-								<div className="flex flex-wrap gap-2">
-									<FilterPill
-										active={statusFilter === "all"}
-										label="All"
-										onClick={() =>
-											startTransition(() => setStatusFilter("all"))
-										}
-									/>
-									<FilterPill
-										active={statusFilter === "tracked"}
-										label="Tracked"
-										onClick={() =>
-											startTransition(() => setStatusFilter("tracked"))
-										}
-									/>
-									<FilterPill
-										active={statusFilter === "awaiting_run"}
-										label="Awaiting"
-										onClick={() =>
-											startTransition(() => setStatusFilter("awaiting_run"))
-										}
-									/>
-									<FilterPill
-										active={statusFilter === "paused"}
-										label="Paused"
-										onClick={() =>
-											startTransition(() => setStatusFilter("paused"))
-										}
-									/>
-									<FilterPill
-										active={statusFilter === "deleted"}
-										label="Deleted"
-										onClick={() =>
-											startTransition(() => setStatusFilter("deleted"))
-										}
-									/>
-								</div>
-							</div>
-						</div>
-					</div>
-
-					<div
-						className="rounded-[26px] border p-5"
-						style={{
-							background: "#FFFFFF",
-							borderColor: "#DDD0BC",
-							boxShadow: "0 16px 40px rgba(42,58,44,0.05)",
-						}}
-					>
-						<div>
-							<h3
-								className="text-lg font-semibold tracking-tight"
-								style={{ color: "#243325" }}
-							>
-								Visible coverage
-							</h3>
-							<p className="text-sm mt-1" style={{ color: "#6B7C6D" }}>
-								Framework counts by lead product for the current filter.
-								JavaScript and React counts can overlap on mixed prompts.
-							</p>
-						</div>
-						<div className="mt-4">
-							<HighchartsReact highcharts={Highcharts} options={chartOptions} />
-						</div>
-					</div>
-				</div>
-
-				<div
-					className="rounded-[26px] border p-5"
-					style={{
-						background: "#FFFFFF",
-						borderColor: "#DDD0BC",
-						boxShadow: "0 16px 40px rgba(42,58,44,0.05)",
-					}}
+				<button
+					type="button"
+					onClick={() => { void copyVisibleQueries(); }}
+					className="inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold"
+					style={{ background: "#2F4F34", color: "#FDFCF8", border: "1px solid #2F4F34" }}
 				>
-					<div className="flex flex-wrap items-center justify-between gap-3">
-						<div>
-							<h3
-								className="text-lg font-semibold tracking-tight"
-								style={{ color: "#243325" }}
-							>
-								Live prompt inventory
-							</h3>
-							<p className="text-sm mt-1" style={{ color: "#6B7C6D" }}>
-								{filteredPrompts.length} prompts visible, with{" "}
-								{visibleTrackedCount} active tracked prompts in the current
-								filter.
-							</p>
-						</div>
-						<Link
-							to="/prompts"
-							className="inline-flex items-center rounded-full px-3 py-1.5 text-xs font-semibold"
-							style={{
-								background: "#F5EFE5",
-								color: "#5C6F5F",
-								border: "1px solid #E5D6C2",
-							}}
-						>
-							Open Prompts
-						</Link>
+					<Copy size={14} />
+					{copyMessage || "Copy queries"}
+				</button>
+			</div>
+
+			{/* Stat cards */}
+			<div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+				{[
+					{ label: "Live Queries", value: String(totalLiveQueries) },
+					{ label: "Tracked", value: String(activeTrackedPrompts.length) },
+					{ label: "Avg HC Mention", value: formatPct(avgHighchartsRate) },
+					{ label: "Bundle Opportunities", value: String(bundleOpportunities) },
+				].map(({ label, value }) => (
+					<div key={label} className="rounded-2xl border p-4" style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}>
+						<div className="text-[10px] uppercase tracking-[0.12em] font-semibold mb-1" style={{ color: "#8A9B8C" }}>{label}</div>
+						<div className="text-2xl font-semibold tracking-tight" style={{ color: "#223124" }}>{value}</div>
 					</div>
+				))}
+			</div>
 
-					{groupedPrompts.length === 0 ? (
-						<div
-							className="mt-4 rounded-2xl border px-4 py-5 text-sm"
-							style={{
-								background: "#FBF7F0",
-								borderColor: "#E7DAC8",
-								color: "#6A7C6B",
-							}}
-						>
-							No live prompts match the current filter.
-						</div>
-					) : (
-						<div className="mt-5 space-y-5">
-							{groupedPrompts.map((group) => (
-								<section key={group.product} className="space-y-3">
-									<div className="flex flex-wrap items-center justify-between gap-3">
-										<div className="flex items-center gap-3">
-											<div
-												className="h-11 w-11 rounded-2xl"
-												style={{
-													background: PRODUCT_META[group.product].accent,
-													boxShadow: "inset 0 1px 0 rgba(255,255,255,0.2)",
-												}}
-											/>
-											<div>
-												<div
-													className="text-lg font-semibold tracking-tight"
-													style={{ color: "#243325" }}
-												>
-													{PRODUCT_META[group.product].name}
-												</div>
-												<div className="text-sm" style={{ color: "#6A7C6B" }}>
-													{group.items.length} live prompts routed here
-												</div>
-											</div>
-										</div>
-										<ProductChip product={group.product} />
-									</div>
+			{/* Charts */}
+			<div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+				<div className="rounded-2xl border p-4" style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}>
+					<div className="text-sm font-semibold mb-3" style={{ color: "#3A4D3C" }}>Queries per product</div>
+					<HighchartsReact highcharts={Highcharts} options={chartOptions} />
+				</div>
+				<div className="rounded-2xl border p-4" style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}>
+					<div className="text-sm font-semibold mb-3" style={{ color: "#3A4D3C" }}>Avg HC mention rate</div>
+					<HighchartsReact highcharts={Highcharts} options={hcRateChartOptions} />
+				</div>
+			</div>
 
-									<div className="grid grid-cols-1 gap-3">
-										{group.items.map((item) => (
-											<QueryCard key={item.prompt.query} item={item} />
-										))}
-									</div>
-								</section>
-							))}
+			{/* Citation domain split */}
+		<div className="rounded-2xl border overflow-hidden" style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}>
+			<div className="px-4 py-3 border-b" style={{ borderColor: "#EDE7DC", background: "#FDFCF9" }}>
+				<div className="text-sm font-semibold" style={{ color: "#3A4D3C" }}>Citation sources — internal vs external</div>
+				<div className="text-xs mt-0.5" style={{ color: "#9AAE9C" }}>
+					{citationQuery.isLoading ? "Loading…" : `${citationDomainSplit.totalCitations.toLocaleString()} total citations`}
+				</div>
+			</div>
+			<div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x" style={{ borderColor: "#EDE7DC" }}>
+				{/* Internal */}
+				<div className="p-4">
+					<div className="flex items-center gap-2 mb-3">
+						<span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: "#4A8C50" }} />
+						<span className="text-xs font-semibold uppercase tracking-wide" style={{ color: "#4A8C50" }}>Highcharts.com (internal)</span>
+						<span className="ml-auto text-xs font-semibold tabular-nums" style={{ color: "#4A5E4C" }}>
+							{citationDomainSplit.internalCitations.toLocaleString()} citations
+						</span>
+					</div>
+					{citationDomainSplit.internal.slice(0, 8).map((s) => (
+						<div key={s.key} className="flex items-center gap-2 py-1.5 border-t" style={{ borderColor: "#F0EBE2" }}>
+							<span className="flex-1 text-[12px] truncate" style={{ color: "#3A4D3C" }}>{s.host}{s.title && s.title !== s.host ? ` · ${s.title}` : ""}</span>
+							<span className="text-[11px] tabular-nums font-medium flex-shrink-0" style={{ color: "#8A9B8C" }}>{s.citationCount}</span>
 						</div>
+					))}
+					{citationDomainSplit.internal.length === 0 && !citationQuery.isLoading && (
+						<p className="text-xs" style={{ color: "#B5C4B7" }}>No internal citations found</p>
 					)}
 				</div>
-			</section>
-
-			<section
-				className="rounded-[26px] border p-5"
-				style={{
-					background: "#FFFFFF",
-					borderColor: "#DDD0BC",
-					boxShadow: "0 16px 40px rgba(42,58,44,0.05)",
-				}}
-			>
-				<div className="flex flex-wrap items-center justify-between gap-3">
-					<div>
-						<h3
-							className="text-lg font-semibold tracking-tight"
-							style={{ color: "#243325" }}
-						>
-							Dynamic coverage gaps
-						</h3>
-						<p className="text-sm mt-1" style={{ color: "#6B7C6D" }}>
-							These recommendations are generated from live coverage gaps, not a
-							fixed page mockup.
-						</p>
+				{/* External */}
+				<div className="p-4">
+					<div className="flex items-center gap-2 mb-3">
+						<span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: "#C7A456" }} />
+						<span className="text-xs font-semibold uppercase tracking-wide" style={{ color: "#9A7A30" }}>External domains</span>
+						<span className="ml-auto text-xs font-semibold tabular-nums" style={{ color: "#4A5E4C" }}>
+							{citationDomainSplit.externalCitations.toLocaleString()} citations
+						</span>
 					</div>
-					<div className="flex flex-col items-end gap-1">
-						<button
-							type="button"
-							onClick={() => {
-								void copySuggestedQueries();
-							}}
-							className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold"
-							style={{
-								background: "#2F4F34",
-								color: "#FDFCF8",
-								border: "1px solid #2F4F34",
-							}}
-						>
-							<Copy size={13} />
-							Copy suggested gaps
-						</button>
-						<div
-							className="h-4 text-xs font-medium"
-							style={{ color: "#6E8170" }}
-						>
-							{suggestionCopyMessage}
+					{citationDomainSplit.external.slice(0, 8).map((s) => (
+						<div key={s.key} className="flex items-center gap-2 py-1.5 border-t" style={{ borderColor: "#F0EBE2" }}>
+							<span className="flex-1 text-[12px] truncate" style={{ color: "#3A4D3C" }}>{s.host}</span>
+							<span className="text-[11px] tabular-nums font-medium flex-shrink-0" style={{ color: "#8A9B8C" }}>{s.citationCount}</span>
 						</div>
-					</div>
+					))}
+					{citationDomainSplit.external.length === 0 && !citationQuery.isLoading && (
+						<p className="text-xs" style={{ color: "#B5C4B7" }}>No external citations found</p>
+					)}
 				</div>
+			</div>
+		</div>
 
-				{visibleSuggestions.length === 0 ? (
-					<div
-						className="mt-4 rounded-2xl border px-4 py-5 text-sm"
-						style={{
-							background: "#EEF6EF",
-							borderColor: "#C9DDCA",
-							color: "#356A3D",
-						}}
-					>
-						No current gaps under this filter. The live dataset already covers
-						these product and framework combinations reasonably well.
-					</div>
-				) : (
-					<div className="mt-5 grid grid-cols-1 gap-3 xl:grid-cols-2">
-						{visibleSuggestions.map((suggestion) => (
-							<article
-								key={suggestion.id}
-								className="rounded-[24px] border p-4 space-y-3"
-								style={{
-									background:
-										"linear-gradient(180deg, #FFFDF8 0%, #F7F1E8 100%)",
-									borderColor: "#E5D8C6",
-								}}
-							>
-								<div className="flex flex-wrap items-start justify-between gap-3">
-									<div className="space-y-2">
-										<div className="flex flex-wrap items-center gap-2">
-											<ProductChip product={suggestion.product} />
-											<FrameworkChip framework={suggestion.framework} />
-											<SuggestionBadge state={suggestion.state} />
-										</div>
-										<div
-											className="text-base font-semibold tracking-tight"
-											style={{ color: "#243325" }}
-										>
-											{suggestion.query}
-										</div>
-									</div>
-									<div
-										className="rounded-2xl px-3 py-2 text-right"
-										style={{
-											background: "#FFFFFF",
-											border: "1px solid #E5D6C2",
-										}}
-									>
-										<div
-											className="text-[10px] uppercase tracking-[0.16em]"
-											style={{ color: "#809282" }}
-										>
-											Live coverage
-										</div>
-										<div
-											className="text-xs font-semibold"
-											style={{ color: "#253325" }}
-										>
-											{suggestion.existingCount} queries
-										</div>
-									</div>
-								</div>
-
-								<p
-									className="text-sm leading-relaxed"
-									style={{ color: "#5E7260" }}
-								>
-									{suggestion.rationale}
-								</p>
-
-								<div className="grid grid-cols-3 gap-2">
-									<div
-										className="rounded-2xl border px-3 py-2"
-										style={{ background: "#FFFFFF", borderColor: "#E5D6C2" }}
-									>
-										<div
-											className="text-[10px] uppercase tracking-[0.16em]"
-											style={{ color: "#8A9B8C" }}
-										>
-											Existing
-										</div>
-										<div
-											className="mt-1 text-sm font-semibold"
-											style={{ color: "#253325" }}
-										>
-											{suggestion.existingCount}
-										</div>
-									</div>
-									<div
-										className="rounded-2xl border px-3 py-2"
-										style={{ background: "#FFFFFF", borderColor: "#E5D6C2" }}
-									>
-										<div
-											className="text-[10px] uppercase tracking-[0.16em]"
-											style={{ color: "#8A9B8C" }}
-										>
-											Tracked
-										</div>
-										<div
-											className="mt-1 text-sm font-semibold"
-											style={{ color: "#253325" }}
-										>
-											{suggestion.trackedCount}
-										</div>
-									</div>
-									<div
-										className="rounded-2xl border px-3 py-2"
-										style={{ background: "#FFFFFF", borderColor: "#E5D6C2" }}
-									>
-										<div
-											className="text-[10px] uppercase tracking-[0.16em]"
-											style={{ color: "#8A9B8C" }}
-										>
-											Avg HC
-										</div>
-										<div
-											className="mt-1 text-sm font-semibold"
-											style={{ color: "#253325" }}
-										>
-											{formatPct(suggestion.avgHighchartsRate)}
-										</div>
-									</div>
-								</div>
-							</article>
-						))}
-					</div>
-				)}
-			</section>
+		{/* Per-product table */}
+			<div className="rounded-2xl border overflow-hidden" style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}>
+				<table className="w-full text-sm">
+					<thead>
+						<tr style={{ borderBottom: "1px solid #EDE7DC", background: "#FDFCF9" }}>
+							{["Product", "Queries", "Tracked", "Avg HC%"].map((h) => (
+								<th key={h} className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide" style={{ color: "#8A9B8C" }}>{h}</th>
+							))}
+						</tr>
+					</thead>
+					<tbody>
+						{productCoverage.map((row, i) => {
+							const meta = PRODUCT_META[row.product];
+							return (
+								<tr key={row.product} style={{ borderTop: i === 0 ? "none" : "1px solid #F0EBE2" }}>
+									<td className="px-4 py-3 font-medium" style={{ color: "#223124" }}>
+										<span className="inline-flex items-center gap-2">
+											<span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: meta.accent }} />
+											{meta.name}
+										</span>
+									</td>
+									<td className="px-4 py-3 tabular-nums" style={{ color: "#4A5E4C" }}>{row.totalQueries}</td>
+									<td className="px-4 py-3 tabular-nums" style={{ color: "#4A5E4C" }}>{row.trackedQueries}</td>
+									<td className="px-4 py-3 tabular-nums font-semibold" style={{ color: row.avgHighchartsRate >= 50 ? "#2F7A3B" : row.avgHighchartsRate >= 20 ? "#7A6E2A" : "#9A3A3A" }}>
+										{formatPct(row.avgHighchartsRate)}
+									</td>
+								</tr>
+							);
+						})}
+					</tbody>
+				</table>
+			</div>
 		</div>
 	);
 }
