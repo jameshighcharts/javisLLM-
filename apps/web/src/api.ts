@@ -38,6 +38,7 @@ import {
 } from "./utils/modelPricing";
 
 const BASE = "/api";
+const TRIGGER_TOKEN_STORAGE_KEY = "benchmark_trigger_token";
 const SUPABASE_PAGE_SIZE = 1000;
 const SUPABASE_IN_CLAUSE_CHUNK_SIZE = 500;
 const DASHBOARD_RECENT_RUN_SCAN_LIMIT = 25;
@@ -1465,6 +1466,20 @@ async function fetchAllSupabasePages<T>(
 		rows: [],
 		error: new Error("Supabase pagination exceeded maximum page limit"),
 	};
+}
+
+function canUseSessionStorage(): boolean {
+	return (
+		typeof window !== "undefined" &&
+		typeof window.sessionStorage !== "undefined"
+	);
+}
+
+function readStoredTriggerToken(): string {
+	if (!canUseSessionStorage()) {
+		return "";
+	}
+	return window.sessionStorage.getItem(TRIGGER_TOKEN_STORAGE_KEY)?.trim() ?? "";
 }
 
 function withOptionalTriggerToken(
@@ -6297,9 +6312,16 @@ export const api = {
 		return json<ConfigResponse>("/config/benchmark");
 	},
 
-	async togglePromptActive(query: string, active: boolean) {
+	async togglePromptActive(
+		query: string,
+		active: boolean,
+		triggerToken?: string,
+	) {
 		return json<{ ok: boolean }>("/prompts/toggle", {
 			method: "PATCH",
+			headers: withOptionalTriggerToken(
+				triggerToken ?? readStoredTriggerToken(),
+			),
 			body: JSON.stringify({ query, active }),
 		});
 	},
@@ -6489,9 +6511,12 @@ export const api = {
 		);
 	},
 
-	async updateConfig(data: BenchmarkConfig) {
+	async updateConfig(data: BenchmarkConfig, triggerToken?: string) {
 		return json<ConfigResponse>("/config/benchmark", {
 			method: "PUT",
+			headers: withOptionalTriggerToken(
+				triggerToken ?? readStoredTriggerToken(),
+			),
 			body: JSON.stringify(data),
 		});
 	},

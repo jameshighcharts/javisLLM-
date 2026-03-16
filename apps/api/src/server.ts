@@ -21,6 +21,7 @@ type BenchmarkConfig = {
 	queryTags: Record<string, string[]>;
 	competitors: string[];
 	aliases: Record<string, string[]>;
+	competitorCitationDomains?: Record<string, string[]>;
 	pausedQueries: string[];
 };
 
@@ -169,6 +170,7 @@ const dashboardFiles = {
 	kpi: path.join(outputDir, "looker_kpi.csv"),
 	jsonl: path.join(outputDir, "llm_outputs.jsonl"),
 };
+const COMPETITOR_CITATION_DOMAINS_SETTING_KEY = "competitor_citation_domains";
 
 const configSchema = z.object({
 	queries: z.array(z.string().min(1)).min(1),
@@ -178,6 +180,9 @@ const configSchema = z.object({
 		.default({}),
 	competitors: z.array(z.string().min(1)).min(1),
 	aliases: z.record(z.string(), z.array(z.string().min(1))).default({}),
+	competitorCitationDomains: z
+		.record(z.string(), z.array(z.string().min(1)))
+		.optional(),
 	pausedQueries: z.array(z.string()).optional().default([]),
 });
 
@@ -300,7 +305,9 @@ const allowedCorsOrigins =
 				"http://localhost:4173",
 				"http://127.0.0.1:4173",
 			];
-const writeToken = String(process.env.UI_API_WRITE_TOKEN ?? "").trim();
+const writeToken = String(
+	process.env.UI_API_WRITE_TOKEN ?? process.env.BENCHMARK_TRIGGER_TOKEN ?? "",
+).trim();
 const cjsRequire = createRequire(import.meta.url);
 const benchmarkTriggerHandler = cjsRequire("./handlers/benchmark/trigger.js");
 const benchmarkRunsHandler = cjsRequire("./handlers/benchmark/runs.js");
@@ -459,6 +466,8 @@ function uniqueNonEmpty(values: string[]): string[] {
 	return [...new Set(normalized)];
 }
 
+const DELETED_PROMPT_TAG = "__deleted__";
+
 function inferPromptTags(query: string): string[] {
 	const normalized = query.toLowerCase();
 	const tags: string[] = [];
@@ -476,7 +485,7 @@ function inferPromptTags(query: string): string[] {
 	return tags;
 }
 
-function normalizePromptTags(rawTags: unknown, query: string): string[] {
+function parsePromptTagList(rawTags: unknown): string[] {
 	const candidates =
 		typeof rawTags === "string"
 			? rawTags.split(",")
@@ -484,11 +493,29 @@ function normalizePromptTags(rawTags: unknown, query: string): string[] {
 				? rawTags.map((value) => String(value))
 				: [];
 
-	const normalized = uniqueNonEmpty(
+	return uniqueNonEmpty(
 		candidates.map((value) => {
 			const normalizedTag = value.trim().toLowerCase();
 			return normalizedTag === "generic" ? "general" : normalizedTag;
 		}),
+	);
+}
+
+function hasDeletedPromptTag(rawTags: unknown): boolean {
+	return parsePromptTagList(rawTags).includes(DELETED_PROMPT_TAG);
+}
+
+function withDeletedPromptTag(rawTags: unknown, query: string): string[] {
+	const baseTags = normalizePromptTags(rawTags, query);
+	return uniqueNonEmpty([
+		...baseTags.filter((tag) => tag !== DELETED_PROMPT_TAG),
+		DELETED_PROMPT_TAG,
+	]);
+}
+
+function normalizePromptTags(rawTags: unknown, query: string): string[] {
+	const normalized = parsePromptTagList(rawTags).filter(
+		(tag) => tag !== DELETED_PROMPT_TAG,
 	);
 	return normalized.length > 0 ? normalized : inferPromptTags(query);
 }
@@ -1809,13 +1836,22 @@ function normalizeConfig(rawConfig: BenchmarkConfig): BenchmarkConfig {
 			[];
 		aliases[competitor] = uniqueNonEmpty([competitor, ...candidateAliases]);
 	}
+	const queryKeySet = new Set(
+		queries.map((query) => query.trim().toLowerCase()),
+	);
+	const pausedQueries = uniqueNonEmpty(rawConfig.pausedQueries ?? []).filter(
+		(query) => queryKeySet.has(query.trim().toLowerCase()),
+	);
 
 	return {
 		queries,
 		queryTags,
 		competitors,
 		aliases,
-		pausedQueries: uniqueNonEmpty(rawConfig.pausedQueries ?? []),
+		competitorCitationDomains: normalizeCompetitorCitationDomains(
+			rawConfig.competitorCitationDomains,
+		),
+		pausedQueries,
 	};
 }
 
@@ -2144,6 +2180,565 @@ function roundTo(value: number, decimals = 2): number {
 	return Math.round(value * factor) / factor;
 }
 
+async function fetchAllSupabasePages<T>(
+	fetchPage: (
+		from: number,
+		to: number,
+	) => PromiseLike<{ data: T[] | null; error: unknown }>,
+): Promise<{ rows: T[]; error: unknown | null }> {
+	const rows: T[] = [];
+	let offset = 0;
+	let pageCount = 0;
+	const maxPages = 10_000;
+
+	while (pageCount < maxPages) {
+		const pageResult = await fetchPage(offset, offset + SUPABASE_PAGE_SIZE - 1);
+		if (pageResult.error) {
+			return { rows: [], error: pageResult.error };
+		}
+
+		const pageRows = (pageResult.data ?? []) as T[];
+		if (pageRows.length === 0) {
+			return { rows, error: null };
+		}
+
+		rows.push(...pageRows);
+		offset += pageRows.length;
+		pageCount += 1;
+	}
+
+	return {
+		rows: [],
+		error: new Error("Supabase pagination exceeded maximum page limit"),
+	};
+}
+
+async function fetchConfigFromSupabaseForServer() {
+	const client = requireSupabaseClient();
+
+	const promptRowsWithTags = await fetchAllSupabasePages<{
+		id: string;
+		query_text: string;
+		sort_order: number;
+		is_active: boolean;
+		tags?: string[] | null;
+		updated_at?: string | null;
+	}>((from, to) =>
+		client
+			.from("prompt_queries")
+			.select("id,query_text,sort_order,is_active,tags,updated_at")
+			.order("sort_order", { ascending: true })
+			.range(from, to),
+	);
+
+	let promptRowsError = promptRowsWithTags.error;
+	let promptRows = promptRowsWithTags.rows;
+	if (promptRowsError && isMissingColumn(promptRowsError)) {
+		const promptRowsFallback = await fetchAllSupabasePages<{
+			id: string;
+			query_text: string;
+			sort_order: number;
+			is_active: boolean;
+			updated_at?: string | null;
+		}>((from, to) =>
+			client
+				.from("prompt_queries")
+				.select("id,query_text,sort_order,is_active,updated_at")
+				.order("sort_order", { ascending: true })
+				.range(from, to),
+		);
+		promptRowsError = promptRowsFallback.error;
+		promptRows = promptRowsFallback.rows.map((row) => ({
+			...row,
+			tags: null,
+		}));
+	}
+	if (promptRowsError) {
+		throw asError(
+			promptRowsError,
+			"Failed to read prompt_queries from Supabase",
+		);
+	}
+
+	const competitorRowsWithAliases = await fetchAllSupabasePages<{
+		id: string;
+		name: string;
+		slug: string;
+		is_primary: boolean;
+		sort_order: number;
+		is_active: boolean;
+		updated_at?: string | null;
+		competitor_aliases?: Array<{ alias: string }>;
+	}>((from, to) =>
+		client
+			.from("competitors")
+			.select(
+				"id,name,slug,is_primary,sort_order,is_active,updated_at,competitor_aliases(alias)",
+			)
+			.eq("is_active", true)
+			.order("sort_order", { ascending: true })
+			.range(from, to),
+	);
+
+	let competitorRowsError = competitorRowsWithAliases.error;
+	let competitorRows = competitorRowsWithAliases.rows;
+	if (competitorRowsError && isMissingRelation(competitorRowsError)) {
+		const competitorRowsFallback = await fetchAllSupabasePages<{
+			id: string;
+			name: string;
+			slug: string;
+			is_primary: boolean;
+			sort_order: number;
+			is_active: boolean;
+			updated_at?: string | null;
+		}>((from, to) =>
+			client
+				.from("competitors")
+				.select("id,name,slug,is_primary,sort_order,is_active,updated_at")
+				.eq("is_active", true)
+				.order("sort_order", { ascending: true })
+				.range(from, to),
+		);
+		competitorRowsError = competitorRowsFallback.error;
+		competitorRows = competitorRowsFallback.rows.map((row) => ({
+			...row,
+			competitor_aliases: [],
+		}));
+	}
+	if (competitorRowsError) {
+		throw asError(
+			competitorRowsError,
+			"Failed to read competitors from Supabase",
+		);
+	}
+
+	const visiblePromptRows = promptRows.filter(
+		(row) => !hasDeletedPromptTag(row.tags),
+	);
+	const queries = visiblePromptRows.map((row) => row.query_text);
+	const queryTags = Object.fromEntries(
+		visiblePromptRows.map((row) => [
+			row.query_text,
+			normalizePromptTags(row.tags, row.query_text),
+		]),
+	);
+	const pausedQueries = visiblePromptRows
+		.filter((row) => !row.is_active)
+		.map((row) => row.query_text);
+	const competitors = competitorRows.map((row) => row.name);
+
+	const aliases: Record<string, string[]> = {};
+	for (const row of competitorRows) {
+		const aliasValues = (row.competitor_aliases ?? []).map(
+			(aliasRow) => aliasRow.alias,
+		);
+		aliases[row.name] = uniqueNonEmpty([row.name, ...aliasValues]);
+	}
+
+	let competitorCitationDomains = defaultCompetitorCitationDomains();
+	const appSettingsResult = await client
+		.from("app_settings")
+		.select("value_json")
+		.eq("key", COMPETITOR_CITATION_DOMAINS_SETTING_KEY)
+		.limit(1);
+	if (appSettingsResult.error) {
+		if (
+			!isMissingRelation(appSettingsResult.error) &&
+			!isMissingColumn(appSettingsResult.error)
+		) {
+			throw asError(
+				appSettingsResult.error,
+				`Failed to read app_settings.${COMPETITOR_CITATION_DOMAINS_SETTING_KEY}`,
+			);
+		}
+	} else {
+		const row = ((appSettingsResult.data ?? [])[0] ?? null) as {
+			value_json?: unknown;
+		} | null;
+		const valueJson = row?.value_json;
+		const bySlug =
+			valueJson && typeof valueJson === "object" && !Array.isArray(valueJson)
+				? (valueJson as { by_competitor_slug?: unknown }).by_competitor_slug
+				: null;
+		competitorCitationDomains = mergeCompetitorCitationDomains(bySlug);
+	}
+
+	const updatedAt = [
+		...visiblePromptRows.map((row) => row.updated_at).filter(Boolean),
+		...competitorRows.map((row) => row.updated_at).filter(Boolean),
+	]
+		.map((value) => String(value))
+		.sort()
+		.at(-1);
+
+	return {
+		config: {
+			queries,
+			queryTags,
+			competitors,
+			aliases,
+			competitorCitationDomains,
+			pausedQueries,
+		},
+		meta: {
+			source:
+				"supabase://public.prompt_queries+public.competitors+public.competitor_aliases+public.app_settings",
+			updatedAt: updatedAt ?? new Date().toISOString(),
+			queries: queries.length,
+			competitors: competitors.length,
+		},
+	};
+}
+
+async function updateConfigInSupabaseForServer(config: BenchmarkConfig) {
+	const client = requireSupabaseClient();
+	const normalized = normalizeConfig(config);
+	const queries = normalized.queries;
+	const competitors = normalized.competitors;
+	const pausedQuerySet = new Set(
+		(normalized.pausedQueries ?? []).map((query) => query.trim().toLowerCase()),
+	);
+
+	const aliasesByName: Record<string, string[]> = {};
+	for (const competitor of competitors) {
+		aliasesByName[competitor] = uniqueNonEmpty([
+			competitor,
+			...(normalized.aliases[competitor] ??
+				normalized.aliases[competitor.toLowerCase()] ??
+				[]),
+		]);
+	}
+
+	const queryTags = normalizeQueryTagsMap(queries, normalized.queryTags);
+	const promptPayload = queries.map((queryText, index) => ({
+		query_text: queryText,
+		sort_order: index + 1,
+		is_active: !pausedQuerySet.has(queryText.trim().toLowerCase()),
+		tags: queryTags[queryText] ?? inferPromptTags(queryText),
+	}));
+
+	let promptUpsert = await client
+		.from("prompt_queries")
+		.upsert(promptPayload, { onConflict: "query_text" });
+	if (promptUpsert.error && isMissingColumn(promptUpsert.error)) {
+		const promptPayloadWithoutTags = promptPayload.map(
+			({ tags: _tags, ...rest }) => rest,
+		);
+		promptUpsert = await client
+			.from("prompt_queries")
+			.upsert(promptPayloadWithoutTags, { onConflict: "query_text" });
+	}
+	if (promptUpsert.error) {
+		throw asError(
+			promptUpsert.error,
+			"Unable to save prompts. Check RLS write policy for prompt_queries",
+		);
+	}
+
+	let promptTagsColumnAvailable = true;
+	const allPromptRowsWithTags = await fetchAllSupabasePages<{
+		id: string;
+		query_text: string;
+		is_active: boolean;
+		tags?: string[] | null;
+	}>((from, to) =>
+		client
+			.from("prompt_queries")
+			.select("id,query_text,is_active,tags")
+			.order("id", { ascending: true })
+			.range(from, to),
+	);
+	let allPromptRowsError = allPromptRowsWithTags.error;
+	let allPromptRowsData = allPromptRowsWithTags.rows;
+
+	if (allPromptRowsError && isMissingColumn(allPromptRowsError)) {
+		promptTagsColumnAvailable = false;
+		const fallbackRows = await fetchAllSupabasePages<{
+			id: string;
+			query_text: string;
+			is_active: boolean;
+		}>((from, to) =>
+			client
+				.from("prompt_queries")
+				.select("id,query_text,is_active")
+				.order("id", { ascending: true })
+				.range(from, to),
+		);
+		allPromptRowsError = fallbackRows.error;
+		allPromptRowsData = fallbackRows.rows.map((row) => ({
+			...row,
+			tags: null,
+		}));
+	}
+
+	if (allPromptRowsError) {
+		throw asError(allPromptRowsError, "Unable to refresh prompt list");
+	}
+
+	const trackedQuerySet = new Set(
+		queries.map((query) => query.trim().toLowerCase()),
+	);
+	const trackedQueryByKey = new Map(
+		queries.map((query) => [query.trim().toLowerCase(), query]),
+	);
+	for (const row of allPromptRowsData) {
+		const rowKey = row.query_text.trim().toLowerCase();
+		const shouldKeep = trackedQuerySet.has(rowKey);
+		const shouldBeActive = shouldKeep && !pausedQuerySet.has(rowKey);
+		const shouldMarkDeleted =
+			promptTagsColumnAvailable &&
+			!shouldKeep &&
+			!hasDeletedPromptTag(row.tags);
+		const shouldRestoreTracked =
+			promptTagsColumnAvailable && shouldKeep && hasDeletedPromptTag(row.tags);
+
+		if (
+			row.is_active !== shouldBeActive ||
+			shouldMarkDeleted ||
+			shouldRestoreTracked
+		) {
+			const promptUpdatePayload: Record<string, unknown> = {
+				is_active: shouldBeActive,
+			};
+			if (promptTagsColumnAvailable) {
+				if (!shouldKeep) {
+					promptUpdatePayload.tags = withDeletedPromptTag(
+						row.tags,
+						row.query_text,
+					);
+				} else {
+					const canonicalQuery =
+						trackedQueryByKey.get(rowKey) ?? row.query_text;
+					promptUpdatePayload.tags =
+						queryTags[canonicalQuery] ?? inferPromptTags(canonicalQuery);
+				}
+			}
+
+			const updateResult = await client
+				.from("prompt_queries")
+				.update(promptUpdatePayload)
+				.eq("id", row.id);
+			if (updateResult.error) {
+				throw asError(
+					updateResult.error,
+					"Unable to update prompt active state",
+				);
+			}
+		}
+	}
+
+	const competitorPayload = competitors.map((name, index) => ({
+		name,
+		slug: slugifyEntity(name),
+		is_primary: name.toLowerCase() === "highcharts",
+		sort_order: index + 1,
+		is_active: true,
+	}));
+
+	const competitorUpsert = await client
+		.from("competitors")
+		.upsert(competitorPayload, { onConflict: "slug" });
+	if (competitorUpsert.error) {
+		throw asError(
+			competitorUpsert.error,
+			"Unable to save competitors. Check RLS write policy for competitors",
+		);
+	}
+
+	const allCompetitors = await client
+		.from("competitors")
+		.select("id,name,slug,is_active");
+	if (allCompetitors.error) {
+		throw asError(allCompetitors.error, "Unable to refresh competitor list");
+	}
+
+	const activeCompetitorSlugSet = new Set(
+		competitors.map((name) => slugifyEntity(name)),
+	);
+	for (const row of (allCompetitors.data ?? []) as Array<{
+		id: string;
+		name: string;
+		slug: string;
+		is_active: boolean;
+	}>) {
+		const shouldBeActive = activeCompetitorSlugSet.has(row.slug);
+		if (row.is_active !== shouldBeActive) {
+			const updateResult = await client
+				.from("competitors")
+				.update({ is_active: shouldBeActive })
+				.eq("id", row.id);
+			if (updateResult.error) {
+				throw asError(
+					updateResult.error,
+					"Unable to update competitor active state",
+				);
+			}
+		}
+	}
+
+	const activeCompetitors = await client
+		.from("competitors")
+		.select("id,name,slug")
+		.eq("is_active", true);
+	if (activeCompetitors.error) {
+		throw asError(
+			activeCompetitors.error,
+			"Unable to read active competitors for alias sync",
+		);
+	}
+
+	for (const competitor of (activeCompetitors.data ?? []) as Array<{
+		id: string;
+		name: string;
+		slug: string;
+	}>) {
+		const desiredAliases = uniqueNonEmpty([
+			competitor.name,
+			...(aliasesByName[competitor.name] ??
+				aliasesByName[competitor.name.toLowerCase()] ??
+				[]),
+		]);
+
+		if (desiredAliases.length > 0) {
+			const aliasUpsert = await client.from("competitor_aliases").upsert(
+				desiredAliases.map((alias) => ({
+					competitor_id: competitor.id,
+					alias,
+				})),
+				{ onConflict: "competitor_id,alias" },
+			);
+			if (aliasUpsert.error) {
+				throw asError(
+					aliasUpsert.error,
+					`Unable to upsert aliases for ${competitor.name}. Check RLS policy for competitor_aliases`,
+				);
+			}
+		}
+
+		const existingAliases = await client
+			.from("competitor_aliases")
+			.select("alias")
+			.eq("competitor_id", competitor.id);
+		if (existingAliases.error) {
+			throw asError(
+				existingAliases.error,
+				`Unable to read aliases for ${competitor.name}`,
+			);
+		}
+
+		const desiredSet = new Set(
+			desiredAliases.map((value) => value.toLowerCase()),
+		);
+		const extras = (existingAliases.data ?? [])
+			.map((row) => String((row as { alias: string }).alias))
+			.filter((alias) => !desiredSet.has(alias.toLowerCase()));
+
+		for (const alias of extras) {
+			const deleteResult = await client
+				.from("competitor_aliases")
+				.delete()
+				.eq("competitor_id", competitor.id)
+				.eq("alias", alias);
+			if (deleteResult.error) {
+				throw asError(
+					deleteResult.error,
+					`Unable to delete stale alias ${alias}`,
+				);
+			}
+		}
+	}
+
+	if (
+		Object.hasOwn(normalized, "competitorCitationDomains") &&
+		normalized.competitorCitationDomains !== undefined
+	) {
+		const normalizedDomains = normalizeCompetitorCitationDomains(
+			normalized.competitorCitationDomains,
+		);
+		const upsertResult = await client.from("app_settings").upsert(
+			{
+				key: COMPETITOR_CITATION_DOMAINS_SETTING_KEY,
+				value_json: {
+					version: 1,
+					by_competitor_slug: normalizedDomains,
+				},
+			},
+			{ onConflict: "key" },
+		);
+		if (
+			upsertResult.error &&
+			!isMissingRelation(upsertResult.error) &&
+			!isMissingColumn(upsertResult.error)
+		) {
+			throw asError(
+				upsertResult.error,
+				`Unable to save app_settings.${COMPETITOR_CITATION_DOMAINS_SETTING_KEY}`,
+			);
+		}
+	}
+
+	return fetchConfigFromSupabaseForServer();
+}
+
+async function togglePromptInSupabaseForServer(
+	query: string,
+	active: boolean,
+): Promise<void> {
+	const client = requireSupabaseClient();
+
+	const promptRowWithTags = await client
+		.from("prompt_queries")
+		.select("id,query_text,tags")
+		.eq("query_text", query)
+		.limit(1);
+
+	let promptTagsColumnAvailable = true;
+	let promptRowError = promptRowWithTags.error;
+	let promptRow = ((promptRowWithTags.data ?? [])[0] ?? null) as {
+		id: string;
+		query_text: string;
+		tags?: string[] | null;
+	} | null;
+
+	if (promptRowError && isMissingColumn(promptRowError)) {
+		promptTagsColumnAvailable = false;
+		const fallbackRow = await client
+			.from("prompt_queries")
+			.select("id,query_text")
+			.eq("query_text", query)
+			.limit(1);
+		promptRowError = fallbackRow.error;
+		promptRow = ((fallbackRow.data ?? [])[0] ?? null) as {
+			id: string;
+			query_text: string;
+		} | null;
+	}
+
+	if (promptRowError) {
+		throw asError(promptRowError, "Failed to load prompt metadata for toggle");
+	}
+	if (!promptRow) {
+		throw new Error(`Prompt not found: ${query}`);
+	}
+
+	const updatePayload: Record<string, unknown> = { is_active: active };
+	if (promptTagsColumnAvailable) {
+		updatePayload.tags = normalizePromptTags(
+			promptRow.tags,
+			promptRow.query_text,
+		);
+	}
+
+	const updateResult = await client
+		.from("prompt_queries")
+		.update(updatePayload)
+		.eq("id", promptRow.id);
+
+	if (updateResult.error) {
+		throw asError(updateResult.error, "Failed to toggle prompt active state");
+	}
+}
+
 function hasRunResponses(responseCount: unknown): boolean {
 	return Math.max(0, Math.round(asNumber(responseCount))) > 0;
 }
@@ -2240,6 +2835,54 @@ function normalizeCitationHost(value: string): string {
 				.trim() || ""
 		);
 	}
+}
+
+function normalizeDomainCandidate(value: unknown): string | null {
+	const host = normalizeCitationHost(String(value ?? ""));
+	return host || null;
+}
+
+function normalizeCompetitorCitationDomains(
+	raw: unknown,
+): Record<string, string[]> {
+	if (!raw || typeof raw !== "object") {
+		return {};
+	}
+
+	const input = raw as Record<string, unknown>;
+	const output: Record<string, string[]> = {};
+	for (const [key, value] of Object.entries(input)) {
+		const slug = String(key).trim().toLowerCase();
+		if (!slug) continue;
+		const candidates = Array.isArray(value) ? value : [value];
+		const normalized = [
+			...new Set(
+				candidates
+					.map((candidate) => normalizeDomainCandidate(candidate))
+					.filter((candidate): candidate is string => Boolean(candidate)),
+			),
+		];
+		if (normalized.length > 0) {
+			output[slug] = normalized;
+		}
+	}
+	return output;
+}
+
+function defaultCompetitorCitationDomains(): Record<string, string[]> {
+	return { highcharts: ["highcharts.com"] };
+}
+
+function mergeCompetitorCitationDomains(
+	rawDomains: unknown,
+	fallback: Record<string, string[]> = defaultCompetitorCitationDomains(),
+): Record<string, string[]> {
+	const normalized = normalizeCompetitorCitationDomains(rawDomains);
+	const merged: Record<string, string[]> = { ...fallback };
+	for (const [slug, domains] of Object.entries(normalized)) {
+		merged[slug] = domains;
+	}
+	return merged;
 }
 
 function normalizeCitationProvider(
@@ -4567,6 +5210,12 @@ app.get("/api/health", (_req, res) => {
 
 app.get(["/api/config", "/api/config/benchmark"], async (_req, res) => {
 	try {
+		if (shouldUseSupabaseDashboardSource()) {
+			const payload = await fetchConfigFromSupabaseForServer();
+			res.json(payload);
+			return;
+		}
+
 		const [config, stats] = await Promise.all([
 			loadConfig(),
 			fs.stat(configPath),
@@ -4592,6 +5241,13 @@ app.put(
 		try {
 			const parsed = configSchema.parse(req.body);
 			const normalized = normalizeConfig(parsed);
+
+			if (shouldUseSupabaseDashboardSource()) {
+				const payload = await updateConfigInSupabaseForServer(normalized);
+				res.json(payload);
+				return;
+			}
+
 			await fs.writeFile(
 				configPath,
 				`${JSON.stringify(normalized, null, 2)}\n`,
@@ -4622,6 +5278,13 @@ app.put(
 app.patch("/api/prompts/toggle", requireWriteAccess, async (req, res) => {
 	try {
 		const { query, active } = toggleSchema.parse(req.body);
+
+		if (shouldUseSupabaseDashboardSource()) {
+			await togglePromptInSupabaseForServer(query, active);
+			res.json({ ok: true, query, active });
+			return;
+		}
+
 		const raw = await fs.readFile(configPath, "utf8");
 		const config = JSON.parse(raw) as Record<string, unknown>;
 		const paused = (config.pausedQueries as string[] | undefined) ?? [];
