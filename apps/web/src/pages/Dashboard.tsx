@@ -9,7 +9,6 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import type {
 	CompetitorSeries,
-	DashboardResponse,
 	PromptCompetitorRate,
 	PromptStatus,
 	TimeSeriesPoint,
@@ -155,12 +154,31 @@ const RIVAL_COLORS = [
 	"#90A878",
 ];
 
+const TAG_SLICE_COLORS = [
+	HC_COLOR,
+	"#7AABB8",
+	"#C8A87A",
+	"#A89CB8",
+	"#D49880",
+	"#90A878",
+	"#C8B858",
+	"#C89878",
+];
+
 function rivalColor(indexAmongRivals: number) {
 	return RIVAL_COLORS[indexAmongRivals % RIVAL_COLORS.length];
 }
 
 function truncate(s: string, n = 26) {
-	return s.length > n ? s.slice(0, n) + "…" : s;
+	return s.length > n ? `${s.slice(0, n)}…` : s;
+}
+
+function formatTagLabel(tag: string) {
+	return tag
+		.split(/[\s_-]+/)
+		.filter(Boolean)
+		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+		.join(" ");
 }
 
 // ── Shared chart defaults ────────────────────────────────────────────────────
@@ -189,6 +207,16 @@ type TagFilterMode = "any" | "all";
 type TagSummary = {
 	tag: string;
 	count: number;
+};
+
+type TagStrengthSlice = {
+	tag: string;
+	queryCount: number;
+	coverageSharePct: number;
+	mentionRatePct: number;
+	shareOfVoicePct: number;
+	strengthIndexPct: number;
+	strengthSharePct: number;
 };
 
 type ProviderFilterValue = "chatgpt" | "claude" | "gemini";
@@ -401,6 +429,127 @@ function buildFilteredCompetitorSeries(
 	}));
 }
 
+function buildTagStrengthSlices(
+	prompts: PromptStatus[],
+	allowedTags?: Set<string>,
+): TagStrengthSlice[] {
+	const tracked = prompts.filter((prompt) => prompt.status === "tracked");
+	if (tracked.length === 0) return [];
+
+	const useWeightedCoverage = tracked.every((prompt) => {
+		const sampleSize = resolvePromptSampleSize(prompt);
+		return (
+			typeof sampleSize === "number" &&
+			Number.isFinite(sampleSize) &&
+			sampleSize > 0
+		);
+	});
+
+	const buckets = new Map<
+		string,
+		{
+			queryCount: number;
+			coverageUnits: number;
+			highchartsMentions: number;
+			totalMentions: number;
+		}
+	>();
+	let totalCoverageUnits = 0;
+
+	for (const prompt of tracked) {
+		const promptTags = normalizeTagList(prompt.tags);
+		const promptTagList = promptTags.length > 0 ? promptTags : ["general"];
+		const tags =
+			allowedTags && allowedTags.size > 0
+				? promptTagList.filter((tag) => allowedTags.has(tag))
+				: promptTagList;
+		if (tags.length === 0) continue;
+		const attributionWeight = 1 / tags.length;
+		const resolvedSampleSize = resolvePromptSampleSize(prompt);
+		const coverageUnits =
+			useWeightedCoverage && resolvedSampleSize ? resolvedSampleSize : 1;
+		const highchartsRatePct = Math.max(0, prompt.highchartsRatePct);
+		const totalMentionRatePct = Math.max(
+			highchartsRatePct,
+			(prompt.competitorRates ?? []).reduce(
+				(sum, rate) => sum + Math.max(0, rate.ratePct),
+				0,
+			),
+		);
+		const highchartsMentions = (highchartsRatePct / 100) * coverageUnits;
+		const totalMentions = (totalMentionRatePct / 100) * coverageUnits;
+
+		totalCoverageUnits += coverageUnits;
+
+		for (const tag of tags) {
+			const bucket = buckets.get(tag) ?? {
+				queryCount: 0,
+				coverageUnits: 0,
+				highchartsMentions: 0,
+				totalMentions: 0,
+			};
+			bucket.queryCount += 1;
+			bucket.coverageUnits += coverageUnits * attributionWeight;
+			bucket.highchartsMentions += highchartsMentions * attributionWeight;
+			bucket.totalMentions += totalMentions * attributionWeight;
+			buckets.set(tag, bucket);
+		}
+	}
+
+	const indexedSlices = [...buckets.entries()].map(([tag, bucket]) => {
+		const mentionRatePct =
+			bucket.coverageUnits > 0
+				? (bucket.highchartsMentions / bucket.coverageUnits) * 100
+				: 0;
+		const shareOfVoicePct =
+			bucket.totalMentions > 0
+				? (bucket.highchartsMentions / bucket.totalMentions) * 100
+				: 0;
+		const strengthIndexPct = 0.7 * mentionRatePct + 0.3 * shareOfVoicePct;
+
+		return {
+			tag,
+			queryCount: bucket.queryCount,
+			coverageUnits: bucket.coverageUnits,
+			coverageSharePct:
+				totalCoverageUnits > 0
+					? (bucket.coverageUnits / totalCoverageUnits) * 100
+					: 0,
+			mentionRatePct,
+			shareOfVoicePct,
+			strengthIndexPct,
+			strengthUnits: strengthIndexPct * bucket.coverageUnits,
+		};
+	});
+
+	const totalStrengthUnits = indexedSlices.reduce(
+		(sum, slice) => sum + slice.strengthUnits,
+		0,
+	);
+
+	return indexedSlices
+		.map((slice) => ({
+			tag: slice.tag,
+			queryCount: slice.queryCount,
+			coverageSharePct: Number(slice.coverageSharePct.toFixed(1)),
+			mentionRatePct: Number(slice.mentionRatePct.toFixed(1)),
+			shareOfVoicePct: Number(slice.shareOfVoicePct.toFixed(1)),
+			strengthIndexPct: Number(slice.strengthIndexPct.toFixed(1)),
+			strengthSharePct:
+				totalStrengthUnits > 0
+					? Number(
+							((slice.strengthUnits / totalStrengthUnits) * 100).toFixed(1),
+						)
+					: 0,
+		}))
+		.sort((left, right) => {
+			if (right.strengthSharePct !== left.strengthSharePct) {
+				return right.strengthSharePct - left.strengthSharePct;
+			}
+			return left.tag.localeCompare(right.tag);
+		});
+}
+
 // ── Skeleton ─────────────────────────────────────────────────────────────────
 
 function Skeleton({
@@ -501,6 +650,7 @@ function DashboardTagFilterBar({
 	const hasActiveProviderFilter = selectedProviders.length > 0;
 	const hasAnyFilter = hasActiveFilter || hasActiveProviderFilter;
 	const allSelected = selectedTags.length === 0;
+	const promptCountLabel = hasAnyFilter ? matchedCount : totalCount;
 
 	return (
 		<div
@@ -573,7 +723,13 @@ function DashboardTagFilterBar({
 				)}
 				{!hasActiveFilter && (
 					<span className="text-xs" style={{ color: "#B0A898" }}>
-						{totalCount} prompts
+						{promptCountLabel} prompts
+					</span>
+				)}
+				{hasAnyFilter && (
+					<span className="text-xs" style={{ color: "#B0A898" }}>
+						{matchedCount} matched
+						{trackedCount > 0 ? ` · ${trackedCount} tracked` : ""}
 					</span>
 				)}
 				<span className="text-xs" style={{ color: "#D2C7B8" }}>
@@ -733,7 +889,7 @@ function DashboardTagFilterBar({
 												color: allSelected ? "#FEFAE8" : "#7A8E7C",
 											}}
 										>
-											{totalCount}
+											{promptCountLabel}
 										</span>
 									</button>
 									{visibleTags.length > 0 ? (
@@ -1079,171 +1235,97 @@ function ScoreStatCard({
 	);
 }
 
-// ── Snapshot trend (AI Visibility + COMBVI) ──────────────────────────────────
+// ── Tag strength share ───────────────────────────────────────────────────────
 
-function SnapshotTrendCard({
-	points,
-	hcEntity,
+function TagStrengthShareCard({
+	data,
 	isLoading,
-	useDerivedAiVisibility,
 }: {
-	points: TimeSeriesPoint[];
-	hcEntity: string | null;
+	data: TagStrengthSlice[];
 	isLoading: boolean;
-	useDerivedAiVisibility: boolean;
 }) {
-	const resolvedHcEntity = useMemo(() => {
-		if (hcEntity) return hcEntity;
-		for (const point of points) {
-			const fallback = Object.keys(point.rates).find(
-				(name) => name.toLowerCase() === "highcharts",
-			);
-			if (fallback) return fallback;
-		}
-		return null;
-	}, [points, hcEntity]);
-
-	const snapshots = useMemo(
-		() =>
-			points
-				.map((point) => {
-					const timestampMs = Date.parse(
-						point.timestamp ?? `${point.date}T12:00:00Z`,
-					);
-					if (!Number.isFinite(timestampMs)) return null;
-
-					const hcKey =
-						resolvedHcEntity ??
-						Object.keys(point.rates).find(
-							(name) => name.toLowerCase() === "highcharts",
-						) ??
-						null;
-					const hcRatePct = hcKey ? Math.max(0, point.rates[hcKey] ?? 0) : 0;
-					const entries = Object.entries(point.rates);
-					const totalMentionRatePct = entries.reduce(
-						(sum, [, rate]) => sum + Math.max(0, rate),
-						0,
-					);
-					const shareOfVoicePct =
-						totalMentionRatePct > 0
-							? (hcRatePct / totalMentionRatePct) * 100
-							: 0;
-
-					const rivalRates = entries
-						.filter(([name]) => (hcKey ? name !== hcKey : true))
-						.map(([, rate]) => Math.max(0, rate));
-					const derivedCombviPct =
-						rivalRates.length > 0
-							? rivalRates.reduce((sum, rate) => sum + rate, 0) /
-								rivalRates.length
-							: 0;
-					const derivedAiVisibilityPct =
-						0.7 * hcRatePct + 0.3 * shareOfVoicePct;
-					const storedAiVisibility =
-						typeof point.aiVisibilityScore === "number" &&
-						Number.isFinite(point.aiVisibilityScore)
-							? point.aiVisibilityScore
-							: null;
-					const aiVisibilityPct =
-						!useDerivedAiVisibility && storedAiVisibility !== null
-							? storedAiVisibility
-							: derivedAiVisibilityPct;
-
-					return {
-						x: timestampMs,
-						aiVisibilityPct: Number(aiVisibilityPct.toFixed(2)),
-						combviPct: Number(
-							(typeof point.combviPct === "number"
-								? point.combviPct
-								: derivedCombviPct
-							).toFixed(2),
-						),
-					};
-				})
-				.filter((point): point is NonNullable<typeof point> => point !== null),
-		[points, resolvedHcEntity, useDerivedAiVisibility],
-	);
-
-	const aiSeries = useMemo(
-		() => snapshots.map((point) => [point.x, point.aiVisibilityPct]),
-		[snapshots],
-	);
-	const combviSeries = useMemo(
-		() => snapshots.map((point) => [point.x, point.combviPct]),
-		[snapshots],
-	);
-
-	const latestAi = (aiSeries.at(-1)?.[1] as number | undefined) ?? 0;
-	const prevAi = (aiSeries.at(-2)?.[1] as number | undefined) ?? null;
-	const aiDelta = prevAi !== null ? latestAi - prevAi : null;
-
-	const latestCombvi = (combviSeries.at(-1)?.[1] as number | undefined) ?? 0;
-	const prevCombvi = (combviSeries.at(-2)?.[1] as number | undefined) ?? null;
-	const combviDelta = prevCombvi !== null ? latestCombvi - prevCombvi : null;
-
-	const hasData = snapshots.length > 0;
-
-	const aiColor = HC_COLOR;
-	const combviColor = "#C8A87A";
+	const hasData = data.length > 0;
 
 	const options = useMemo(
 		(): Highcharts.Options => ({
 			chart: {
-				type: "line",
-				height: 78,
+				type: "pie",
+				height: 240,
 				backgroundColor: "transparent",
-				margin: [4, 6, 6, 6],
-				spacing: [0, 0, 0, 0],
-				animation: { duration: 400 },
+				spacing: [8, 8, 8, 8],
 				style: { fontFamily: CHART_FONT },
 			},
 			credits: CHART_CREDITS,
 			title: { text: undefined },
-			xAxis: { visible: false, type: "datetime" },
-			yAxis: { visible: false, min: 0 },
 			legend: { enabled: false },
 			tooltip: {
 				...TOOLTIP_BASE,
-				enabled: true,
-				shared: true,
 				useHTML: true,
-				xDateFormat: "%b %e, %Y",
-				headerFormat:
-					'<div style="margin-bottom:5px;font-size:11px;color:#7A8E7C;font-weight:600">{point.key}</div>',
-				pointFormat:
-					'<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">' +
-					'<span style="display:inline-block;width:7px;height:7px;border-radius:999px;background:{point.color}"></span>' +
-					'<span style="color:#2A3A2C">{series.name}</span>' +
-					'<span style="margin-left:auto;font-weight:600;color:#2A3A2C">{point.y:.1f}</span>' +
-					"</div>",
+				formatter: function () {
+					const point = this.point as Highcharts.Point & {
+						options: Highcharts.PointOptionsObject & {
+							custom?: TagStrengthSlice;
+						};
+					};
+					const slice = point.options.custom;
+					if (!slice) return "";
+					return (
+						`<div style="margin-bottom:6px;font-size:11px;color:#7A8E7C;font-weight:600">${point.name}</div>` +
+						`<div style="display:grid;grid-template-columns:auto auto;gap:4px 12px">` +
+						`<span style="color:#6E8472">Strength share</span><span style="text-align:right;font-weight:600;color:#2A3A2C">${slice.strengthSharePct.toFixed(1)}%</span>` +
+						`<span style="color:#6E8472">Index</span><span style="text-align:right;font-weight:600;color:#2A3A2C">${slice.strengthIndexPct.toFixed(1)}</span>` +
+						`<span style="color:#6E8472">Mention rate</span><span style="text-align:right;font-weight:600;color:#2A3A2C">${slice.mentionRatePct.toFixed(1)}%</span>` +
+						`<span style="color:#6E8472">Share of voice</span><span style="text-align:right;font-weight:600;color:#2A3A2C">${slice.shareOfVoicePct.toFixed(1)}%</span>` +
+						`<span style="color:#6E8472">Coverage share</span><span style="text-align:right;font-weight:600;color:#2A3A2C">${slice.coverageSharePct.toFixed(1)}%</span>` +
+						`<span style="color:#6E8472">Queries</span><span style="text-align:right;font-weight:600;color:#2A3A2C">${slice.queryCount}</span>` +
+						`</div>`
+					);
+				},
 			},
 			plotOptions: {
-				series: {
-					lineWidth: 2,
-					marker: {
-						enabled: false,
-						states: { hover: { enabled: true, radius: 3 } },
+				pie: {
+					innerSize: "58%",
+					size: "96%",
+					center: ["50%", "50%"],
+					borderWidth: 0,
+					dataLabels: {
+						enabled: true,
+						useHTML: true,
+						distance: 8,
+						formatter: function () {
+							const point = this.point as Highcharts.Point;
+							const percentage =
+								typeof point.percentage === "number" ? point.percentage : 0;
+							if (percentage < 10) return "";
+							return (
+								`<div style="text-align:center">` +
+								`<span style="display:block;font-size:10px;font-weight:600;color:#4A6050">${point.name}</span>` +
+								`<span style="display:block;font-size:11px;font-weight:700;color:#2A3A2C">${percentage.toFixed(0)}%</span>` +
+								`</div>`
+							);
+						},
+						style: {
+							fontSize: "10px",
+							fontWeight: "600",
+							textOutline: "none",
+						},
 					},
-					states: { hover: { lineWidthPlus: 0 } },
 				},
 			},
 			series: [
 				{
-					type: "line",
-					name: "AI Visibility",
-					data: aiSeries,
-					color: aiColor,
-				},
-				{
-					type: "line",
-					name: "COMBVI",
-					data: combviSeries,
-					color: combviColor,
-					dashStyle: "ShortDash",
+					type: "pie",
+					name: "Tag strength share",
+					data: data.map((slice, index) => ({
+						name: formatTagLabel(slice.tag),
+						y: slice.strengthSharePct,
+						color: TAG_SLICE_COLORS[index % TAG_SLICE_COLORS.length],
+						custom: slice,
+					})),
 				},
 			],
 		}),
-		[aiSeries, combviSeries],
+		[data],
 	);
 
 	return (
@@ -1252,12 +1334,12 @@ function SnapshotTrendCard({
 			style={{ background: "#FEFCF9", borderColor: "#DDD0BC" }}
 		>
 			{/* Header */}
-			<div className="px-5 pt-4 pb-0 flex items-center justify-between">
+			<div className="px-5 pt-4 pb-3 flex items-center justify-between">
 				<span
 					className="text-[10px] font-semibold uppercase tracking-widest"
 					style={{ color: "#6B8470" }}
 				>
-					AI Visibility Score Over Time
+					Tag Strength
 				</span>
 				<div className="relative group">
 					<button
@@ -1268,12 +1350,12 @@ function SnapshotTrendCard({
 							borderColor: "#D8CEC0",
 							background: "#FEFCF9",
 						}}
-						aria-label="About AI Visibility Score Over Time"
+						aria-label="About tag strength"
 					>
 						i
 					</button>
 					<div
-						className="pointer-events-none absolute right-0 top-5 z-20 w-56 rounded-lg border px-3 py-2.5 text-[10px] opacity-0 transition-opacity shadow-sm group-hover:opacity-100 group-focus-within:opacity-100"
+						className="pointer-events-none absolute right-0 top-5 z-20 w-64 rounded-lg border px-3 py-2.5 text-[10px] opacity-0 transition-opacity shadow-sm group-hover:opacity-100 group-focus-within:opacity-100"
 						style={{
 							background: "#FFFFFF",
 							borderColor: "#DDD0BC",
@@ -1284,36 +1366,15 @@ function SnapshotTrendCard({
 							className="font-semibold text-[11px] mb-2"
 							style={{ color: "#2A3A2C" }}
 						>
-							AI Visibility · per run
+							Standardized per tag
 						</p>
 						{(
 							[
-								["Presence", "mentions ÷ responses"],
-								["Share of Voice", "HC ÷ all mentions"],
-								["Score", "0.7 × Presence + 0.3 × SoV"],
-							] as [string, string][]
-						).map(([label, val]) => (
-							<div
-								key={label}
-								className="flex items-baseline justify-between gap-3 mt-2"
-							>
-								<span>{label}</span>
-								<span className="text-right" style={{ color: "#4A6050" }}>
-									{val}
-								</span>
-							</div>
-						))}
-						<div className="my-2" style={{ borderTop: "1px solid #EDE8DF" }} />
-						<p
-							className="font-semibold text-[11px] mb-1.5"
-							style={{ color: "#2A3A2C" }}
-						>
-							COMBVI (dashed)
-						</p>
-						{(
-							[
-								["Formula", "avg rival mention rate"],
-								["Net Advantage", "AI Visibility − COMBVI"],
+								["Mention rate", "HC mentions ÷ responses"],
+								["Share of voice", "HC mentions ÷ all tracked mentions"],
+								["Index", "0.7 × mention rate + 0.3 × SoV"],
+								["Pie share", "index × tag coverage, normalized to 100"],
+								["Multi-tag prompts", "split evenly across their tags"],
 							] as [string, string][]
 						).map(([label, val]) => (
 							<div
@@ -1330,90 +1391,23 @@ function SnapshotTrendCard({
 				</div>
 			</div>
 
-			{/* Latest values + deltas */}
-			<div className="px-5 pt-2 pb-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
+			{/* Pie chart — full width, centred */}
+			<div
+				className="flex-1 flex items-center justify-center px-3 pb-4"
+				style={{ minHeight: 220 }}
+			>
 				{isLoading ? (
-					<>
-						<Skeleton className="h-8 w-24" />
-						<Skeleton className="h-8 w-24" />
-					</>
-				) : (
-					<>
-						<div className="flex flex-col">
-							<span
-								className="text-[10px] font-semibold uppercase tracking-wide"
-								style={{ color: "#6B8470" }}
-							>
-								AI Visibility
-							</span>
-							<div className="flex items-baseline gap-1.5">
-								<span
-									className="text-2xl font-bold tracking-tight leading-none"
-									style={{ color: aiColor }}
-								>
-									{latestAi.toFixed(1)}
-								</span>
-								{aiDelta !== null && (
-									<span
-										className="text-[10px] font-semibold"
-										style={{ color: aiDelta >= 0 ? "#16A34A" : "#DC2626" }}
-									>
-										{aiDelta >= 0 ? "▲" : "▼"} {Math.abs(aiDelta).toFixed(1)}
-									</span>
-								)}
-							</div>
-						</div>
-						<div className="flex flex-col">
-							<span
-								className="text-[10px] font-semibold uppercase tracking-wide"
-								style={{ color: "#6B8470" }}
-							>
-								COMBVI
-							</span>
-							<span className="text-[9px]" style={{ color: "#9AAE9C" }}>
-								all competitors avg
-							</span>
-							<div className="flex items-baseline gap-1.5">
-								<span
-									className="text-2xl font-bold tracking-tight leading-none"
-									style={{ color: combviColor }}
-								>
-									{latestCombvi.toFixed(1)}
-								</span>
-								{combviDelta !== null && (
-									<span
-										className="text-[10px] font-semibold"
-										style={{ color: combviDelta >= 0 ? "#16A34A" : "#DC2626" }}
-									>
-										{combviDelta >= 0 ? "▲" : "▼"}{" "}
-										{Math.abs(combviDelta).toFixed(1)}
-									</span>
-								)}
-							</div>
-						</div>
-					</>
-				)}
-			</div>
-
-			{/* Sparkline */}
-			<div className="flex-1 px-1 pb-0">
-				{isLoading ? (
-					<Skeleton className="h-16 mx-4" />
+					<Skeleton className="h-[220px] w-full rounded-xl" />
 				) : hasData ? (
 					<HighchartsReact highcharts={Highcharts} options={options} />
 				) : (
 					<div
-						className="h-16 flex items-center justify-center text-xs"
-						style={{ color: "#C8D4C8" }}
+						className="h-[220px] w-full flex items-center justify-center rounded-xl border border-dashed text-xs"
+						style={{ color: "#C8D4C8", borderColor: "#DDD0BC" }}
 					>
-						No historical data yet
+						No tag segments yet
 					</div>
 				)}
-			</div>
-
-			{/* Footer */}
-			<div className="px-5 pb-4 text-[10px]" style={{ color: "#6B8470" }}>
-				AI Visibility + COMBVI snapshots · run history
 			</div>
 		</div>
 	);
@@ -2928,11 +2922,6 @@ export default function Dashboard() {
 	const promptStatusAll = data?.promptStatus ?? [];
 	const competitorSeriesAll = data?.competitorSeries ?? [];
 
-	const tagSummary = useMemo(
-		() => buildTagSummary(promptStatusAll),
-		[promptStatusAll],
-	);
-
 	const promptStatus = useMemo(() => {
 		if (selectedTagSet.size === 0) return promptStatusAll;
 		return promptStatusAll.filter((prompt) =>
@@ -2940,12 +2929,22 @@ export default function Dashboard() {
 		);
 	}, [promptStatusAll, selectedTagSet, tagFilterMode]);
 
+	const tagSummary = useMemo(
+		() =>
+			buildTagSummary(selectedTagSet.size > 0 ? promptStatus : promptStatusAll),
+		[selectedTagSet, promptStatus, promptStatusAll],
+	);
+
 	const competitorSeries = useMemo(() => {
 		if (selectedTagSet.size === 0) return competitorSeriesAll;
 		return buildFilteredCompetitorSeries(promptStatus, competitorSeriesAll);
 	}, [selectedTagSet, promptStatus, competitorSeriesAll]);
 
 	const tracked = promptStatus.filter((p) => p.status === "tracked");
+	const tagStrengthSlices = useMemo(
+		() => buildTagStrengthSlices(promptStatus, selectedTagSet),
+		[promptStatus, selectedTagSet],
+	);
 
 	const hcEntry = competitorSeries.find((s) => s.isHighcharts);
 	const hcRate = hcEntry?.mentionRatePct ?? 0;
@@ -2956,11 +2955,6 @@ export default function Dashboard() {
 	const overallScore = hasSegmentFilters
 		? derivedOverallScore
 		: (s?.overallScore ?? derivedOverallScore);
-	const avgPromptHighcharts =
-		tracked.length > 0
-			? tracked.reduce((sum, p) => sum + p.highchartsRatePct, 0) /
-				tracked.length
-			: 0;
 
 	const visible = useMemo(
 		() =>
@@ -2992,6 +2986,7 @@ export default function Dashboard() {
 
 	function toggleTag(tag: string) {
 		const normalized = tag.trim().toLowerCase();
+		setHidden(new Set());
 		setSelectedTags((prev) => {
 			const next = new Set(normalizeTagList(prev));
 			if (next.has(normalized)) next.delete(normalized);
@@ -3001,10 +2996,12 @@ export default function Dashboard() {
 	}
 
 	function clearTagFilter() {
+		setHidden(new Set());
 		setSelectedTags([]);
 	}
 
 	function toggleProvider(provider: ProviderFilterValue) {
+		setHidden(new Set());
 		setSelectedProviders((prev) => {
 			const next = new Set(normalizeProviderList(prev));
 			if (next.has(provider)) next.delete(provider);
@@ -3016,7 +3013,13 @@ export default function Dashboard() {
 	}
 
 	function clearProviderFilter() {
+		setHidden(new Set());
 		setSelectedProviders([]);
+	}
+
+	function changeTagFilterMode(nextMode: TagFilterMode) {
+		setHidden(new Set());
+		setTagFilterMode(nextMode);
 	}
 
 	function toggleCompetitor(name: string) {
@@ -3073,7 +3076,7 @@ export default function Dashboard() {
 				mode={tagFilterMode}
 				onToggleTag={toggleTag}
 				onToggleProvider={toggleProvider}
-				onModeChange={setTagFilterMode}
+				onModeChange={changeTagFilterMode}
 				onClear={clearTagFilter}
 				onClearProviders={clearProviderFilter}
 				totalCount={promptStatusAll.length}
@@ -3082,22 +3085,20 @@ export default function Dashboard() {
 				isLoading={isLoading}
 			/>
 
-			{/* KPI row: score (2) + trend chart (2) + sov (1) + prompt avg (1) */}
+			{/* KPI row: score (2) + tag strength (2) + prompts (1) + actions (1) */}
 			<div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3 sm:gap-4">
 				<div className="sm:col-span-1 xl:col-span-2">
 					<ScoreStatCard score={overallScore} isLoading={isLoading} />
 				</div>
 				<div className="sm:col-span-1 xl:col-span-2">
-					<SnapshotTrendCard
-						points={timeseriesPoints}
-						hcEntity={hcEntry?.entity ?? null}
-						isLoading={isLoading || isTimeseriesLoading}
-						useDerivedAiVisibility={hasSegmentFilters}
+					<TagStrengthShareCard
+						data={tagStrengthSlices}
+						isLoading={isLoading}
 					/>
 				</div>
 				<TotalPromptsCard
 					count={tracked.length}
-					totalRuns={promptStatusAll.reduce((sum, p) => sum + p.runs, 0)}
+					totalRuns={timeseriesPoints.length}
 					totalResponses={s?.totalResponses ?? 0}
 					isLoading={isLoading}
 				/>

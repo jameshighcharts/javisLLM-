@@ -2473,8 +2473,8 @@ async function fetchDashboardFromSupabase(
 		generatedAt: new Date().toISOString(),
 		summary: {
 			overallScore,
-			queryCount: config.queries.length,
-			competitorCount: config.competitors.length,
+			queryCount: queryRows.length,
+			competitorCount: competitorRows.length,
 			totalResponses,
 			models,
 			modelOwners,
@@ -4275,32 +4275,33 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
 		);
 	}
 
-	const recentRunsResult = await supabase
-		.from("mv_run_summary")
-		.select(
-			"run_id,run_month,model,run_kind,cohort_tag,models,models_csv,model_owners,model_owners_csv,model_owner_map,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,query_count,competitor_count,input_tokens,output_tokens,total_tokens,total_duration_ms,avg_duration_ms",
-		)
-		.order("created_at", { ascending: false })
-		.limit(DASHBOARD_RECENT_RUN_SCAN_LIMIT);
+	const runResult = await fetchAllSupabasePages<MvRunSummaryRow>((from, to) => {
+		return supabase
+			.from("mv_run_summary")
+			.select(
+				"run_id,run_month,model,run_kind,cohort_tag,models,models_csv,model_owners,model_owners_csv,model_owner_map,web_search_enabled,overall_score,created_at,started_at,ended_at,response_count,query_count,competitor_count,input_tokens,output_tokens,total_tokens,total_duration_ms,avg_duration_ms",
+			)
+			.order("created_at", { ascending: false })
+			.range(from, to);
+	});
 
-	if (recentRunsResult.error) {
-		if (isMissingRelation(recentRunsResult.error)) {
+	if (runResult.error) {
+		if (isMissingRelation(runResult.error)) {
 			return emptyDashboard(config);
 		}
 		throw asError(
-			recentRunsResult.error,
+			runResult.error,
 			"Failed to load mv_run_summary for dashboard",
 		);
 	}
 
-	const latestRun = selectDashboardRun(
-		(recentRunsResult.data ?? []) as MvRunSummaryRow[],
-	);
-	if (!latestRun) {
+	const selectedRuns = runResult.rows;
+	const latestRun = selectDashboardRun(selectedRuns);
+	if (!latestRun || selectedRuns.length === 0) {
 		return emptyDashboard(config);
 	}
 
-	const runId = latestRun.run_id;
+	const runIds = selectedRuns.map((run) => run.run_id);
 	const allQueryRows = queryRows as Array<{
 		id: string;
 		query_text: string;
@@ -4317,14 +4318,24 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
 	}>;
 
 	const [mentionRows, modelRows, historicalRunsByQuery] = await Promise.all([
-		fetchMentionRateRowsByRunIds([runId]),
-		fetchModelPerformanceRowsByRunIds([runId]),
+		fetchMentionRateRowsByRunIds(runIds),
+		fetchModelPerformanceRowsByRunIds(runIds),
 		fetchHistoricalRunsByQueryIds(allQueryRows.map((row) => row.id)),
 	]);
 
 	const modelSummary = buildModelSummaryFromViewRows(modelRows);
-	const runModels = resolveRunModels(latestRun);
-	const runModelOwners = resolveRunModelOwners(latestRun);
+	const aggregatedModels = new Set<string>();
+	for (const run of selectedRuns) {
+		for (const model of resolveRunModels(run)) {
+			aggregatedModels.add(model);
+		}
+	}
+	const runModels = [...aggregatedModels].sort((left, right) =>
+		left.localeCompare(right),
+	);
+	const runModelOwners = selectedRuns.flatMap((run) =>
+		resolveRunModelOwners(run),
+	);
 	const ownerMapFromRun = parseModelOwnerMap(latestRun.model_owner_map);
 	const modelOwnerMap =
 		Object.keys(modelSummary.modelOwnerMap).length > 0
@@ -4345,39 +4356,6 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
 				: [...new Set(Object.values(modelOwnerMap))].sort((a, b) =>
 						a.localeCompare(b),
 					);
-
-	const mentionRowsForRun = mentionRows.filter((row) => row.run_id === runId);
-	const mentionByQueryAndCompetitor = new Map<
-		string,
-		MvCompetitorMentionRateRow
-	>();
-	const overallByCompetitorId = new Map<string, MvCompetitorMentionRateRow>();
-	for (const row of mentionRowsForRun) {
-		if (row.is_overall_row) {
-			overallByCompetitorId.set(row.competitor_id, row);
-			continue;
-		}
-		if (row.query_id) {
-			mentionByQueryAndCompetitor.set(
-				`${row.query_id}:${row.competitor_id}`,
-				row,
-			);
-		}
-	}
-
-	const competitorSeries = competitorRows.map((competitor) => {
-		const row = overallByCompetitorId.get(competitor.id);
-		return {
-			entity: competitor.name,
-			entityKey: competitor.slug,
-			isHighcharts:
-				Boolean(row?.is_highcharts) ||
-				competitor.is_primary ||
-				competitor.slug === "highcharts",
-			mentionRatePct: roundTo(toFiniteNumber(row?.mentions_rate_pct), 2),
-			shareOfVoicePct: roundTo(toFiniteNumber(row?.share_of_voice_rate_pct), 2),
-		};
-	});
 
 	const highchartsCompetitor =
 		competitorRows.find((row) => row.is_primary) ??
@@ -4414,16 +4392,183 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
 	const blendedOutputCostPerToken =
 		pricedOutputTokens > 0 ? pricedOutputCostUsd / pricedOutputTokens : 0;
 
-	const promptStatus = allQueryRows.map((queryRow) => {
-		const competitorRatesAll = competitorRows.map((competitor) => {
-			const row = mentionByQueryAndCompetitor.get(
-				`${queryRow.id}:${competitor.id}`,
-			);
-			const mentions = Math.max(
+	const runTimestamps = selectedRuns
+		.map((run) => pickTimestamp(run.started_at, run.created_at, run.ended_at))
+		.filter((value): value is string => Boolean(toValidTimestamp(value)))
+		.sort((left, right) => Date.parse(left) - Date.parse(right));
+	const webSearchStates = new Set(
+		selectedRuns
+			.map((run) => run.web_search_enabled)
+			.filter((value): value is boolean => typeof value === "boolean"),
+	);
+	const webSearchEnabled =
+		webSearchStates.size === 0
+			? null
+			: webSearchStates.size === 1
+				? webSearchStates.has(true)
+					? "yes"
+					: "no"
+				: "mixed";
+	const totalsFromRuns = selectedRuns.reduce(
+		(totals, run) => {
+			totals.responses += Math.max(
 				0,
-				Math.round(toFiniteNumber(row?.mentions_count)),
+				Math.round(toFiniteNumber(run.response_count)),
 			);
-			const ratePct = roundTo(toFiniteNumber(row?.mentions_rate_pct), 2);
+			totals.inputTokens += Math.max(
+				0,
+				Math.round(toFiniteNumber(run.input_tokens)),
+			);
+			totals.outputTokens += Math.max(
+				0,
+				Math.round(toFiniteNumber(run.output_tokens)),
+			);
+			totals.totalTokens += Math.max(
+				0,
+				Math.round(toFiniteNumber(run.total_tokens)),
+			);
+			totals.totalDurationMs += Math.max(
+				0,
+				Math.round(toFiniteNumber(run.total_duration_ms)),
+			);
+			return totals;
+		},
+		{
+			responses: 0,
+			inputTokens: 0,
+			outputTokens: 0,
+			totalTokens: 0,
+			totalDurationMs: 0,
+		},
+	);
+
+	const overallMentionsByCompetitorId = new Map<string, number>();
+	const fallbackMentionsByCompetitorId = new Map<string, number>();
+	const responseCountsByQuery = new Map<string, Map<string, number>>();
+	const mentionsByQueryAndCompetitor = new Map<string, number>();
+	const queryTokensByRun = new Map<
+		string,
+		Map<string, { input: number; output: number; total: number }>
+	>();
+
+	for (const row of mentionRows) {
+		const mentions = Math.max(
+			0,
+			Math.round(toFiniteNumber(row.mentions_count)),
+		);
+
+		if (row.is_overall_row) {
+			overallMentionsByCompetitorId.set(
+				row.competitor_id,
+				(overallMentionsByCompetitorId.get(row.competitor_id) ?? 0) + mentions,
+			);
+			continue;
+		}
+
+		if (!row.query_id) continue;
+
+		const queryId = row.query_id;
+		const runId = row.run_id;
+		const queryRunResponseCounts =
+			responseCountsByQuery.get(queryId) ?? new Map<string, number>();
+		if (!queryRunResponseCounts.has(runId)) {
+			queryRunResponseCounts.set(
+				runId,
+				Math.max(0, Math.round(toFiniteNumber(row.response_count))),
+			);
+			responseCountsByQuery.set(queryId, queryRunResponseCounts);
+		}
+
+		const queryCompetitorKey = `${queryId}:${row.competitor_id}`;
+		mentionsByQueryAndCompetitor.set(
+			queryCompetitorKey,
+			(mentionsByQueryAndCompetitor.get(queryCompetitorKey) ?? 0) + mentions,
+		);
+		fallbackMentionsByCompetitorId.set(
+			row.competitor_id,
+			(fallbackMentionsByCompetitorId.get(row.competitor_id) ?? 0) + mentions,
+		);
+
+		const tokensByRun = queryTokensByRun.get(queryId) ?? new Map();
+		const tokenBucket = tokensByRun.get(runId) ?? {
+			input: 0,
+			output: 0,
+			total: 0,
+		};
+		tokenBucket.input = Math.max(
+			tokenBucket.input,
+			Math.max(0, Math.round(toFiniteNumber(row.input_tokens))),
+		);
+		tokenBucket.output = Math.max(
+			tokenBucket.output,
+			Math.max(0, Math.round(toFiniteNumber(row.output_tokens))),
+		);
+		tokenBucket.total = Math.max(
+			tokenBucket.total,
+			Math.max(0, Math.round(toFiniteNumber(row.total_tokens))),
+		);
+		tokensByRun.set(runId, tokenBucket);
+		queryTokensByRun.set(queryId, tokensByRun);
+	}
+
+	const competitorSeries = competitorRows.map((competitor) => {
+		const mentionsCount =
+			overallMentionsByCompetitorId.get(competitor.id) ??
+			fallbackMentionsByCompetitorId.get(competitor.id) ??
+			0;
+		return {
+			entity: competitor.name,
+			entityKey: competitor.slug,
+			isHighcharts: competitor.is_primary || competitor.slug === "highcharts",
+			mentionRatePct:
+				totalsFromRuns.responses > 0
+					? roundTo((mentionsCount / totalsFromRuns.responses) * 100, 2)
+					: 0,
+			shareOfVoicePct: 0,
+			mentionsCount,
+		};
+	});
+	const totalMentionsAcrossEntities = competitorSeries.reduce(
+		(sum, series) => sum + series.mentionsCount,
+		0,
+	);
+	for (const series of competitorSeries) {
+		series.shareOfVoicePct =
+			totalMentionsAcrossEntities > 0
+				? roundTo((series.mentionsCount / totalMentionsAcrossEntities) * 100, 2)
+				: 0;
+	}
+
+	const promptStatus = allQueryRows.map((queryRow) => {
+		const queryResponseCounts =
+			responseCountsByQuery.get(queryRow.id) ?? new Map();
+		const latestRunResponseCount = [...queryResponseCounts.values()].reduce(
+			(sum, value) => sum + value,
+			0,
+		);
+		const tokenTotalsByRun = queryTokensByRun.get(queryRow.id) ?? new Map();
+		const latestInputTokens = [...tokenTotalsByRun.values()].reduce(
+			(sum, value) => sum + value.input,
+			0,
+		);
+		const latestOutputTokens = [...tokenTotalsByRun.values()].reduce(
+			(sum, value) => sum + value.output,
+			0,
+		);
+		const latestTotalTokens = [...tokenTotalsByRun.values()].reduce(
+			(sum, value) =>
+				sum + (value.total > 0 ? value.total : value.input + value.output),
+			0,
+		);
+
+		const competitorRatesAll = competitorRows.map((competitor) => {
+			const mentions =
+				mentionsByQueryAndCompetitor.get(`${queryRow.id}:${competitor.id}`) ??
+				0;
+			const ratePct =
+				latestRunResponseCount > 0
+					? roundTo((mentions / latestRunResponseCount) * 100, 2)
+					: 0;
 			const isHighcharts = highchartsCompetitor
 				? competitor.id === highchartsCompetitor.id
 				: competitor.slug === "highcharts";
@@ -4433,33 +4578,8 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
 				isHighcharts,
 				ratePct,
 				mentions,
-				inputTokens: Math.max(0, Math.round(toFiniteNumber(row?.input_tokens))),
-				outputTokens: Math.max(
-					0,
-					Math.round(toFiniteNumber(row?.output_tokens)),
-				),
-				totalTokens: Math.max(0, Math.round(toFiniteNumber(row?.total_tokens))),
 			};
 		});
-
-		const queryMetrics =
-			competitorRatesAll.find((entry) => entry.totalTokens > 0) ??
-			competitorRatesAll[0] ??
-			null;
-		const latestRunResponseCount = Math.max(
-			0,
-			Math.round(
-				toFiniteNumber(
-					mentionByQueryAndCompetitor.get(
-						`${queryRow.id}:${highchartsCompetitor?.id ?? competitorRows[0]?.id ?? ""}`,
-					)?.response_count,
-				),
-			),
-		);
-		const latestInputTokens = queryMetrics?.inputTokens ?? 0;
-		const latestOutputTokens = queryMetrics?.outputTokens ?? 0;
-		const latestTotalTokens =
-			queryMetrics?.totalTokens ?? latestInputTokens + latestOutputTokens;
 
 		const competitorRates = competitorRatesAll.filter(
 			(entry) => !entry.isHighcharts,
@@ -4550,11 +4670,14 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
 		};
 	});
 
-	const totalResponses = Math.max(
-		0,
-		Math.round(toFiniteNumber(latestRun.response_count)),
+	const totalResponses = totalsFromRuns.responses;
+	const highchartsSeries =
+		competitorSeries.find((series) => series.isHighcharts) ?? null;
+	const overallScore = roundTo(
+		0.7 * (highchartsSeries?.mentionRatePct ?? 0) +
+			0.3 * (highchartsSeries?.shareOfVoicePct ?? 0),
+		2,
 	);
-	const overallScore = roundTo(toFiniteNumber(latestRun.overall_score), 2);
 	const modelOwnerMapString = Object.entries(modelOwnerMap)
 		.sort(([left], [right]) => left.localeCompare(right))
 		.map(([model, owner]) => `${model}=>${owner}`)
@@ -4564,28 +4687,22 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
 		modelSummary.tokenTotals.totalTokens > 0
 			? modelSummary.tokenTotals
 			: {
-					inputTokens: Math.max(
-						0,
-						Math.round(toFiniteNumber(latestRun.input_tokens)),
-					),
-					outputTokens: Math.max(
-						0,
-						Math.round(toFiniteNumber(latestRun.output_tokens)),
-					),
-					totalTokens: Math.max(
-						0,
-						Math.round(toFiniteNumber(latestRun.total_tokens)),
-					),
+					inputTokens: totalsFromRuns.inputTokens,
+					outputTokens: totalsFromRuns.outputTokens,
+					totalTokens: totalsFromRuns.totalTokens,
 				};
 	const summaryDurationTotals =
 		modelSummary.durationTotals.totalDurationMs > 0
 			? modelSummary.durationTotals
 			: {
-					totalDurationMs: Math.max(
-						0,
-						Math.round(toFiniteNumber(latestRun.total_duration_ms)),
-					),
-					avgDurationMs: roundTo(toFiniteNumber(latestRun.avg_duration_ms), 2),
+					totalDurationMs: totalsFromRuns.totalDurationMs,
+					avgDurationMs:
+						totalsFromRuns.responses > 0
+							? roundTo(
+									totalsFromRuns.totalDurationMs / totalsFromRuns.responses,
+									2,
+								)
+							: 0,
 				};
 
 	const kpi: KpiRow = {
@@ -4593,12 +4710,12 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
 		ai_visibility_overall_score: overallScore,
 		score_scale: "0-100",
 		queries_count: String(allQueryRows.length),
-		window_start_utc: latestRun.started_at ?? "",
-		window_end_utc: latestRun.ended_at ?? "",
+		window_start_utc: runTimestamps[0] ?? "",
+		window_end_utc: runTimestamps.at(-1) ?? "",
 		models: runModels.join(","),
 		model_owners: modelOwners.join(","),
 		model_owner_map: modelOwnerMapString,
-		web_search_enabled: latestRun.web_search_enabled ? "yes" : "no",
+		web_search_enabled: webSearchEnabled ?? "",
 		run_month: latestRun.run_month ?? "",
 		run_id: latestRun.run_id,
 	};
@@ -4607,8 +4724,8 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
 		generatedAt: new Date().toISOString(),
 		summary: {
 			overallScore,
-			queryCount: config.queries.length,
-			competitorCount: config.competitors.length,
+			queryCount: allQueryRows.length,
+			competitorCount: competitorRows.length,
 			totalResponses,
 			models: runModels,
 			modelOwners,
@@ -4618,12 +4735,14 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
 			tokenTotals: summaryTokenTotals,
 			durationTotals: summaryDurationTotals,
 			runMonth: latestRun.run_month,
-			webSearchEnabled: latestRun.web_search_enabled ? "yes" : "no",
-			windowStartUtc: latestRun.started_at,
-			windowEndUtc: latestRun.ended_at,
+			webSearchEnabled,
+			windowStartUtc: runTimestamps[0] ?? null,
+			windowEndUtc: runTimestamps.at(-1) ?? null,
 		},
 		kpi,
-		competitorSeries,
+		competitorSeries: competitorSeries.map(
+			({ mentionsCount, ...series }) => series,
+		),
 		promptStatus,
 		comparisonRows: [],
 		files: {
