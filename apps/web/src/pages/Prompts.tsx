@@ -74,36 +74,41 @@ function Toggle({
 	return (
 		<button
 			type="button"
+			role="switch"
+			aria-checked={active}
 			onClick={() => !disabled && onChange(!active)}
 			disabled={disabled}
 			style={{
-				width: 30,
-				height: 17,
-				borderRadius: 9,
+				display: "inline-flex",
+				alignItems: "center",
+				width: 36,
+				height: 20,
+				borderRadius: 9999,
 				border: "none",
-				padding: 0,
-				background: active ? "#8FBB93" : "#DDD0BC",
+				padding: 2,
+				background: active ? "#2A6032" : "#DDD0BC",
 				position: "relative",
 				cursor: disabled ? "not-allowed" : "pointer",
-				transition: "background 0.15s",
+				transition: "background 0.2s ease",
 				flexShrink: 0,
 				outline: "none",
-				opacity: disabled ? 0.5 : 1,
+				opacity: disabled ? 0.4 : 1,
+				boxShadow: active ? "0 0 0 0px #2A603200" : "none",
 			}}
-			aria-label={active ? "Pause prompt" : "Resume prompt"}
+			onFocus={(e) => { (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 0 0 3px rgba(42,96,50,0.2)" }}
+			onBlur={(e) => { (e.currentTarget as HTMLButtonElement).style.boxShadow = "none" }}
 		>
 			<span
 				style={{
-					position: "absolute",
-					top: 2,
-					left: active ? 13 : 2,
-					width: 13,
-					height: 13,
+					display: "block",
+					width: 16,
+					height: 16,
 					borderRadius: "50%",
 					background: "#fff",
-					transition: "left 0.15s",
-					display: "block",
-					boxShadow: "0 1px 2px rgba(0,0,0,0.15)",
+					transform: active ? "translateX(16px)" : "translateX(0px)",
+					transition: "transform 0.2s ease",
+					boxShadow: "0 1px 3px rgba(0,0,0,0.18)",
+					flexShrink: 0,
 				}}
 			/>
 		</button>
@@ -2441,9 +2446,9 @@ function QueryLab({
 						position: "fixed",
 						inset: 0,
 						zIndex: 1000,
-						background: "rgba(20,30,22,0.45)",
-						backdropFilter: "blur(4px)",
-						WebkitBackdropFilter: "blur(4px)",
+						background: "rgba(15,24,16,0.55)",
+						backdropFilter: "blur(6px)",
+						WebkitBackdropFilter: "blur(6px)",
 						display: "flex",
 						alignItems: "center",
 						justifyContent: "center",
@@ -2453,79 +2458,77 @@ function QueryLab({
 					<div
 						onClick={(e) => e.stopPropagation()}
 						style={{
-							background: "#FFFFFF",
-							borderRadius: 16,
-							boxShadow:
-								"0 8px 40px rgba(20,30,22,0.18), 0 2px 8px rgba(20,30,22,0.08)",
-							padding: "20px 22px 18px",
-							maxWidth: 320,
+							background: "#F9F7F2",
+							borderRadius: 22,
+							border: "1px solid #DDD5C5",
+							boxShadow: "0 32px 80px rgba(15,24,16,0.28), 0 4px 16px rgba(15,24,16,0.10)",
+							padding: "36px 40px 32px",
+							maxWidth: 420,
 							width: "calc(100% - 48px)",
 							position: "relative",
-							animation: "hint-card-in 0.22s cubic-bezier(0.16,1,0.3,1)",
+							animation: "hint-card-in 0.25s cubic-bezier(0.16,1,0.3,1)",
 						}}
 					>
 						<button
 							type="button"
 							onClick={() => setShowHint(false)}
 							style={{
-								position: "absolute",
-								top: 12,
-								right: 12,
-								background: "none",
-								border: "none",
-								cursor: "pointer",
-								color: "#C5D4C6",
-								padding: 2,
+								position: "absolute", top: 16, right: 16,
+								width: 28, height: 28,
+								display: "flex", alignItems: "center", justifyContent: "center",
+								background: "#EDE7DA", border: "1px solid #DDD0BC",
+								borderRadius: 8, cursor: "pointer", color: "#8A9E8C",
 							}}
 						>
-							<svg
-								width="11"
-								height="11"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2.5"
-								strokeLinecap="round"
-							>
-								<line x1="18" y1="6" x2="6" y2="18" />
-								<line x1="6" y1="6" x2="18" y2="18" />
+							<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+								<line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
 							</svg>
 						</button>
 
-						<p
-							style={{
-								fontSize: 12,
-								color: "#2A3A2C",
-								margin: "0 0 8px",
-								lineHeight: 1.55,
-								paddingRight: 16,
-							}}
-						>
-							Test and run single prompts across all models to see if Highcharts
-							gets mentioned.
+						<div style={{
+							display: "inline-flex", alignItems: "center", justifyContent: "center",
+							width: 44, height: 44, borderRadius: 12,
+							background: "linear-gradient(135deg, #2A6032 0%, #3D7A46 100%)",
+							boxShadow: "0 4px 14px rgba(42,96,50,0.32)",
+							marginBottom: 20,
+						}}>
+							<svg width="18" height="18" viewBox="0 0 24 24" fill="white" stroke="none">
+								<polygon points="6,3 20,12 6,21" />
+							</svg>
+						</div>
+
+						<div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#96B09A", marginBottom: 8 }}>
+							Query Lab
+						</div>
+
+						<p style={{ fontSize: 15, fontWeight: 600, color: "#1E2E20", lineHeight: 1.5, margin: "0 0 10px" }}>
+							Test and run single prompts across all models to see if Highcharts gets mentioned.
 						</p>
-						<p
-							style={{
-								fontSize: 12,
-								color: "#7A8E7C",
-								margin: 0,
-								lineHeight: 1.55,
-							}}
-						>
+
+						<p style={{ fontSize: 13, color: "#7A8E7C", lineHeight: 1.6, margin: "0 0 28px" }}>
 							For full runs,{" "}
 							<Link
 								to="/runs"
-								style={{
-									color: "#2A6032",
-									fontWeight: 600,
-									textDecoration: "underline",
-									textUnderlineOffset: 2,
-								}}
+								style={{ color: "#2A6032", fontWeight: 700, textDecoration: "underline", textUnderlineOffset: 3 }}
 								onClick={() => setShowHint(false)}
 							>
 								Runs →
 							</Link>
 						</p>
+
+						<button
+							type="button"
+							onClick={() => { setShowHint(false); setTimeout(() => textareaRef.current?.focus(), 50) }}
+							style={{
+								width: "100%", padding: "11px 0", borderRadius: 12,
+								background: "#2A6032", color: "#FFFFFF", border: "none",
+								fontSize: 13, fontWeight: 700, cursor: "pointer",
+								letterSpacing: "-0.01em",
+								boxShadow: "0 2px 14px rgba(42,96,50,0.28)",
+							}}
+						>
+							Got it
+						</button>
 					</div>
 				</div>
 			)}

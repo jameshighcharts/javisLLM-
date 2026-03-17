@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import benchmarkRunsHandler from '../apps/api/src/handlers/benchmark/runs.js'
 import benchmarkTriggerHandler from '../apps/api/src/handlers/benchmark/trigger.js'
 import promptLabRunHandler from '../apps/api/src/handlers/prompt-lab/run.js'
 import competitorResearchHandler from '../apps/api/src/handlers/research/competitors/run.js'
@@ -131,6 +132,154 @@ test('benchmark trigger returns 400 when cohort tag has no matching prompts', as
 
       assert.equal(result.statusCode, 400)
       assert.match(result.payload?.error ?? '', /No active prompts match cohortTag/i)
+    },
+  )
+  global.fetch = originalFetch
+})
+
+test('benchmark trigger omits optional queue args for standard full runs', async () => {
+  const originalFetch = global.fetch
+  await withEnv(
+    {
+      USE_QUEUE_TRIGGER: 'true',
+      BENCHMARK_TRIGGER_TOKEN: 'secret-token',
+      SUPABASE_URL: 'https://example.supabase.co',
+      SUPABASE_ANON_KEY: 'anon-key',
+      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+    },
+    async () => {
+      const requests = []
+      global.fetch = async (url, options = {}) => {
+        const method = String(options.method || 'GET').toUpperCase()
+        const target = String(url)
+        const body = options.body ? JSON.parse(String(options.body)) : null
+        requests.push({ target, method, body })
+
+        if (target.endsWith('/rest/v1/benchmark_runs') && method === 'POST') {
+          return createJsonResponse([{ id: 'run-123' }])
+        }
+
+        if (target.endsWith('/rest/v1/rpc/enqueue_benchmark_run') && method === 'POST') {
+          return createJsonResponse({ jobs_enqueued: 2 })
+        }
+
+        throw new Error(`Unexpected fetch call: ${method} ${target}`)
+      }
+
+      const result = await invokeHandler(benchmarkTriggerHandler, {
+        method: 'POST',
+        headers: { authorization: 'Bearer secret-token' },
+        body: {
+          model: 'gpt-4o-mini',
+          runs: 1,
+          temperature: 0.7,
+          webSearch: true,
+          ourTerms: 'Highcharts',
+        },
+      })
+
+      assert.equal(result.statusCode, 200)
+      assert.equal(result.payload?.runId, 'run-123')
+
+      const runInsertRequest = requests.find(
+        (request) =>
+          request.target.endsWith('/rest/v1/benchmark_runs') &&
+          request.method === 'POST',
+      )
+      assert.equal(Boolean(runInsertRequest), true)
+      assert.equal('run_kind' in runInsertRequest.body, false)
+      assert.equal('cohort_tag' in runInsertRequest.body, false)
+
+      const enqueueRequest = requests.find(
+        (request) =>
+          request.target.endsWith('/rest/v1/rpc/enqueue_benchmark_run') &&
+          request.method === 'POST',
+      )
+      assert.equal(Boolean(enqueueRequest), true)
+      assert.equal('p_prompt_tag' in enqueueRequest.body, false)
+      assert.equal('p_prompt_order' in enqueueRequest.body, false)
+    },
+  )
+  global.fetch = originalFetch
+})
+
+test('benchmark runs falls back when run metadata columns are not deployed yet', async () => {
+  const originalFetch = global.fetch
+  await withEnv(
+    {
+      USE_QUEUE_TRIGGER: 'true',
+      BENCHMARK_TRIGGER_TOKEN: 'secret-token',
+      SUPABASE_URL: 'https://example.supabase.co',
+      SUPABASE_ANON_KEY: 'anon-key',
+      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+    },
+    async () => {
+      global.fetch = async (url, options = {}) => {
+        const method = String(options.method || 'GET').toUpperCase()
+        const target = String(url)
+
+        if (
+          target.includes('/rest/v1/benchmark_runs?') &&
+          target.includes('run_kind') &&
+          method === 'GET'
+        ) {
+          return createJsonResponse(
+            {
+              code: 'PGRST204',
+              message:
+                "Could not find the 'run_kind' column of 'benchmark_runs' in the schema cache",
+            },
+            400,
+          )
+        }
+
+        if (
+          target.includes('/rest/v1/benchmark_runs?') &&
+          !target.includes('run_kind') &&
+          method === 'GET'
+        ) {
+          return createJsonResponse([
+            {
+              id: 'run-123',
+              run_month: '2026-03',
+              model: 'gpt-4o-mini',
+              web_search_enabled: true,
+              overall_score: 42.5,
+              created_at: '2026-03-16T12:00:00.000Z',
+            },
+          ])
+        }
+
+        if (target.includes('/rest/v1/vw_job_progress?') && method === 'GET') {
+          return createJsonResponse([
+            {
+              run_id: 'run-123',
+              total_jobs: 10,
+              completed_jobs: 5,
+              processing_jobs: 1,
+              pending_jobs: 4,
+              failed_jobs: 0,
+              dead_letter_jobs: 0,
+              completion_pct: 50,
+            },
+          ])
+        }
+
+        throw new Error(`Unexpected fetch call: ${method} ${target}`)
+      }
+
+      const result = await invokeHandler(benchmarkRunsHandler, {
+        method: 'GET',
+        headers: { authorization: 'Bearer secret-token' },
+      })
+
+      assert.equal(result.statusCode, 200)
+      assert.equal(result.payload?.ok, true)
+      assert.equal(result.payload?.runs?.length, 1)
+      assert.equal(result.payload?.runs?.[0]?.id, 'run-123')
+      assert.equal(result.payload?.runs?.[0]?.runKind, 'full')
+      assert.equal(result.payload?.runs?.[0]?.cohortTag, null)
+      assert.equal(result.payload?.runs?.[0]?.status, 'running')
     },
   )
   global.fetch = originalFetch

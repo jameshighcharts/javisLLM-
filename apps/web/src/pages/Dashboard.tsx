@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import Highcharts from "highcharts";
 import HighchartsReact from "highcharts-react-official";
 import type { CSSProperties, ReactNode } from "react";
-import { startTransition, useDeferredValue, useMemo, useState } from "react";
+import { startTransition, useEffect, useDeferredValue, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import type {
@@ -155,16 +155,6 @@ const RIVAL_COLORS = [
 	"#90A878",
 ];
 
-const TAG_SLICE_COLORS = [
-	HC_COLOR,
-	"#7AABB8",
-	"#C8A87A",
-	"#A89CB8",
-	"#D49880",
-	"#90A878",
-	"#C8B858",
-	"#C89878",
-];
 
 function rivalColor(indexAmongRivals: number) {
 	return RIVAL_COLORS[indexAmongRivals % RIVAL_COLORS.length];
@@ -172,14 +162,6 @@ function rivalColor(indexAmongRivals: number) {
 
 function truncate(s: string, n = 26) {
 	return s.length > n ? `${s.slice(0, n)}…` : s;
-}
-
-function formatTagLabel(tag: string) {
-	return tag
-		.split(/[\s_-]+/)
-		.filter(Boolean)
-		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-		.join(" ");
 }
 
 // ── Shared chart defaults ────────────────────────────────────────────────────
@@ -210,15 +192,6 @@ type TagSummary = {
 	count: number;
 };
 
-type TagStrengthSlice = {
-	tag: string;
-	queryCount: number;
-	coverageSharePct: number;
-	mentionRatePct: number;
-	shareOfVoicePct: number;
-	strengthIndexPct: number;
-	strengthSharePct: number;
-};
 
 type ProviderFilterValue = "chatgpt" | "claude" | "gemini";
 
@@ -430,125 +403,25 @@ function buildFilteredCompetitorSeries(
 	}));
 }
 
-function buildTagStrengthSlices(
-	prompts: PromptStatusSummary[],
-	allowedTags?: Set<string>,
-): TagStrengthSlice[] {
-	const tracked = prompts.filter((prompt) => prompt.status === "tracked");
-	if (tracked.length === 0) return [];
+type PromptReachTiers = {
+	strong: number; // ≥75% mention rate
+	moderate: number; // ≥50% and <75%
+	light: number; // >0% and <50%
+	absent: number; // 0%
+	total: number;
+};
 
-	const useWeightedCoverage = tracked.every((prompt) => {
-		const sampleSize = resolvePromptSampleSize(prompt);
-		return (
-			typeof sampleSize === "number" &&
-			Number.isFinite(sampleSize) &&
-			sampleSize > 0
-		);
-	});
-
-	const buckets = new Map<
-		string,
-		{
-			queryCount: number;
-			coverageUnits: number;
-			highchartsMentions: number;
-			totalMentions: number;
-		}
-	>();
-	let totalCoverageUnits = 0;
-
-	for (const prompt of tracked) {
-		const promptTags = normalizeTagList(prompt.tags);
-		const promptTagList = promptTags.length > 0 ? promptTags : ["general"];
-		const tags =
-			allowedTags && allowedTags.size > 0
-				? promptTagList.filter((tag) => allowedTags.has(tag))
-				: promptTagList;
-		if (tags.length === 0) continue;
-		const attributionWeight = 1 / tags.length;
-		const resolvedSampleSize = resolvePromptSampleSize(prompt);
-		const coverageUnits =
-			useWeightedCoverage && resolvedSampleSize ? resolvedSampleSize : 1;
-		const highchartsRatePct = Math.max(0, prompt.highchartsRatePct);
-		const totalMentionRatePct = Math.max(
-			highchartsRatePct,
-			(prompt.competitorRates ?? []).reduce(
-				(sum, rate) => sum + Math.max(0, rate.ratePct),
-				0,
-			),
-		);
-		const highchartsMentions = (highchartsRatePct / 100) * coverageUnits;
-		const totalMentions = (totalMentionRatePct / 100) * coverageUnits;
-
-		totalCoverageUnits += coverageUnits;
-
-		for (const tag of tags) {
-			const bucket = buckets.get(tag) ?? {
-				queryCount: 0,
-				coverageUnits: 0,
-				highchartsMentions: 0,
-				totalMentions: 0,
-			};
-			bucket.queryCount += 1;
-			bucket.coverageUnits += coverageUnits * attributionWeight;
-			bucket.highchartsMentions += highchartsMentions * attributionWeight;
-			bucket.totalMentions += totalMentions * attributionWeight;
-			buckets.set(tag, bucket);
-		}
+function buildPromptReachTiers(prompts: PromptStatusSummary[]): PromptReachTiers {
+	const tracked = prompts.filter((p) => p.status === "tracked");
+	let strong = 0, moderate = 0, light = 0, absent = 0;
+	for (const p of tracked) {
+		const rate = Math.max(0, p.highchartsRatePct);
+		if (rate >= 75) strong++;
+		else if (rate >= 50) moderate++;
+		else if (rate > 0) light++;
+		else absent++;
 	}
-
-	const indexedSlices = [...buckets.entries()].map(([tag, bucket]) => {
-		const mentionRatePct =
-			bucket.coverageUnits > 0
-				? (bucket.highchartsMentions / bucket.coverageUnits) * 100
-				: 0;
-		const shareOfVoicePct =
-			bucket.totalMentions > 0
-				? (bucket.highchartsMentions / bucket.totalMentions) * 100
-				: 0;
-		const strengthIndexPct = 0.7 * mentionRatePct + 0.3 * shareOfVoicePct;
-
-		return {
-			tag,
-			queryCount: bucket.queryCount,
-			coverageUnits: bucket.coverageUnits,
-			coverageSharePct:
-				totalCoverageUnits > 0
-					? (bucket.coverageUnits / totalCoverageUnits) * 100
-					: 0,
-			mentionRatePct,
-			shareOfVoicePct,
-			strengthIndexPct,
-			strengthUnits: strengthIndexPct * bucket.coverageUnits,
-		};
-	});
-
-	const totalStrengthUnits = indexedSlices.reduce(
-		(sum, slice) => sum + slice.strengthUnits,
-		0,
-	);
-
-	return indexedSlices
-		.map((slice) => ({
-			tag: slice.tag,
-			queryCount: slice.queryCount,
-			coverageSharePct: Number(slice.coverageSharePct.toFixed(1)),
-			mentionRatePct: Number(slice.mentionRatePct.toFixed(1)),
-			shareOfVoicePct: Number(slice.shareOfVoicePct.toFixed(1)),
-			strengthIndexPct: Number(slice.strengthIndexPct.toFixed(1)),
-			strengthSharePct:
-				totalStrengthUnits > 0
-					? Number(
-							((slice.strengthUnits / totalStrengthUnits) * 100).toFixed(1),
-						)
-					: 0,
-		}))
-		.sort((left, right) => {
-			if (right.strengthSharePct !== left.strengthSharePct) {
-				return right.strengthSharePct - left.strengthSharePct;
-			}
-			return left.tag.localeCompare(right.tag);
-		});
+	return { strong, moderate, light, absent, total: tracked.length };
 }
 
 // ── Skeleton ─────────────────────────────────────────────────────────────────
@@ -1237,181 +1110,350 @@ function ScoreStatCard({
 	);
 }
 
-// ── Tag strength share ───────────────────────────────────────────────────────
+// ── Prompt reach breakdown ────────────────────────────────────────────────────
 
-function TagStrengthShareCard({
-	data,
-	isLoading,
+type ReachTierKey = "strong" | "moderate" | "light" | "absent";
+
+const REACH_TIERS: Array<{
+	key: ReachTierKey;
+	label: string;
+	threshold: string;
+	color: string;
+	bg: string;
+}> = [
+	{ key: "strong",   label: "Strong",   threshold: "≥75%", color: "#3D6B47", bg: "#EAF3EB" },
+	{ key: "moderate", label: "Moderate", threshold: "≥50%", color: "#6B8C52", bg: "#F0F5EA" },
+	{ key: "light",    label: "Light",    threshold: ">0%",  color: "#C09A4A", bg: "#FAF4E6" },
+	{ key: "absent",   label: "Absent",   threshold: "0%",   color: "#B05A4A", bg: "#FAF0EE" },
+];
+
+function promptsForTier(
+	prompts: PromptStatusSummary[],
+	tier: ReachTierKey,
+): PromptStatusSummary[] {
+	const tracked = prompts.filter((p) => p.status === "tracked");
+	return tracked
+		.filter((p) => {
+			const rate = Math.max(0, p.highchartsRatePct);
+			if (tier === "strong")   return rate >= 75;
+			if (tier === "moderate") return rate >= 50 && rate < 75;
+			if (tier === "light")    return rate > 0 && rate < 50;
+			return rate === 0;
+		})
+		.sort((a, b) =>
+			tier === "absent"
+				? a.query.localeCompare(b.query)
+				: b.highchartsRatePct - a.highchartsRatePct,
+		);
+}
+
+function PromptReachModal({
+	tier,
+	prompts,
+	onClose,
 }: {
-	data: TagStrengthSlice[];
-	isLoading: boolean;
+	tier: (typeof REACH_TIERS)[number];
+	prompts: PromptStatusSummary[];
+	onClose: () => void;
 }) {
-	const hasData = data.length > 0;
+	const list = useMemo(() => promptsForTier(prompts, tier.key), [prompts, tier.key]);
 
-	const options = useMemo(
-		(): Highcharts.Options => ({
-			chart: {
-				type: "pie",
-				height: 240,
-				backgroundColor: "transparent",
-				spacing: [8, 8, 8, 8],
-				style: { fontFamily: CHART_FONT },
-			},
-			credits: CHART_CREDITS,
-			title: { text: undefined },
-			legend: { enabled: false },
-			tooltip: {
-				...TOOLTIP_BASE,
-				useHTML: true,
-				formatter: function () {
-					const point = this.point as Highcharts.Point & {
-						options: Highcharts.PointOptionsObject & {
-							custom?: TagStrengthSlice;
-						};
-					};
-					const slice = point.options.custom;
-					if (!slice) return "";
-					return (
-						`<div style="margin-bottom:6px;font-size:11px;color:#7A8E7C;font-weight:600">${point.name}</div>` +
-						`<div style="display:grid;grid-template-columns:auto auto;gap:4px 12px">` +
-						`<span style="color:#6E8472">Strength share</span><span style="text-align:right;font-weight:600;color:#2A3A2C">${slice.strengthSharePct.toFixed(1)}%</span>` +
-						`<span style="color:#6E8472">Index</span><span style="text-align:right;font-weight:600;color:#2A3A2C">${slice.strengthIndexPct.toFixed(1)}</span>` +
-						`<span style="color:#6E8472">Mention rate</span><span style="text-align:right;font-weight:600;color:#2A3A2C">${slice.mentionRatePct.toFixed(1)}%</span>` +
-						`<span style="color:#6E8472">Share of voice</span><span style="text-align:right;font-weight:600;color:#2A3A2C">${slice.shareOfVoicePct.toFixed(1)}%</span>` +
-						`<span style="color:#6E8472">Coverage share</span><span style="text-align:right;font-weight:600;color:#2A3A2C">${slice.coverageSharePct.toFixed(1)}%</span>` +
-						`<span style="color:#6E8472">Queries</span><span style="text-align:right;font-weight:600;color:#2A3A2C">${slice.queryCount}</span>` +
-						`</div>`
-					);
-				},
-			},
-			plotOptions: {
-				pie: {
-					innerSize: "58%",
-					size: "96%",
-					center: ["50%", "50%"],
-					borderWidth: 0,
-					dataLabels: {
-						enabled: true,
-						useHTML: true,
-						distance: 8,
-						formatter: function () {
-							const point = this.point as Highcharts.Point;
-							const percentage =
-								typeof point.percentage === "number" ? point.percentage : 0;
-							if (percentage < 10) return "";
-							return (
-								`<div style="text-align:center">` +
-								`<span style="display:block;font-size:10px;font-weight:600;color:#4A6050">${point.name}</span>` +
-								`<span style="display:block;font-size:11px;font-weight:700;color:#2A3A2C">${percentage.toFixed(0)}%</span>` +
-								`</div>`
-							);
-						},
-						style: {
-							fontSize: "10px",
-							fontWeight: "600",
-							textOutline: "none",
-						},
-					},
-				},
-			},
-			series: [
-				{
-					type: "pie",
-					name: "Tag strength share",
-					data: data.map((slice, index) => ({
-						name: formatTagLabel(slice.tag),
-						y: slice.strengthSharePct,
-						color: TAG_SLICE_COLORS[index % TAG_SLICE_COLORS.length],
-						custom: slice,
-					})),
-				},
-			],
-		}),
-		[data],
-	);
+	// Close on Escape
+	useEffect(() => {
+		const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+		window.addEventListener("keydown", handler);
+		return () => window.removeEventListener("keydown", handler);
+	}, [onClose]);
 
 	return (
 		<div
-			className="rounded-xl border shadow-sm h-full flex flex-col"
-			style={{ background: "#FEFCF9", borderColor: "#DDD0BC" }}
+			className="fixed inset-0 z-50 flex items-center justify-center p-4"
+			style={{ background: "rgba(20,30,22,0.45)" }}
+			onClick={onClose}
 		>
-			{/* Header */}
-			<div className="px-5 pt-4 pb-3 flex items-center justify-between">
-				<span
-					className="text-[10px] font-semibold uppercase tracking-widest"
-					style={{ color: "#6B8470" }}
+			<div
+				className="relative w-full max-w-lg rounded-2xl border shadow-2xl flex flex-col"
+				style={{
+					background: "#FEFCF9",
+					borderColor: "#DDD0BC",
+					maxHeight: "80vh",
+				}}
+				onClick={(e) => e.stopPropagation()}
+			>
+				{/* Modal header */}
+				<div
+					className="flex items-center justify-between px-5 py-4 border-b"
+					style={{ borderColor: "#EDE8DF" }}
 				>
-					Tag Strength
-				</span>
-				<div className="relative group">
+					<div className="flex items-center gap-2.5">
+						<span
+							className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold"
+							style={{ background: tier.bg, color: tier.color }}
+						>
+							{tier.label}
+						</span>
+						<span className="text-sm font-semibold" style={{ color: "#2A3A2C" }}>
+							{list.length} prompt{list.length !== 1 ? "s" : ""}
+						</span>
+						<span className="text-xs" style={{ color: "#9AAE9C" }}>
+							· HC mention rate {tier.threshold}
+						</span>
+					</div>
 					<button
 						type="button"
-						className="w-4 h-4 rounded-full text-[10px] font-semibold border flex items-center justify-center"
-						style={{
-							color: "#6B8470",
-							borderColor: "#D8CEC0",
-							background: "#FEFCF9",
-						}}
-						aria-label="About tag strength"
+						onClick={onClose}
+						className="w-6 h-6 flex items-center justify-center rounded-full text-sm transition-colors"
+						style={{ color: "#6B8470", background: "#EDE8DF" }}
+						aria-label="Close"
 					>
-						i
+						×
 					</button>
-					<div
-						className="pointer-events-none absolute right-0 top-5 z-20 w-64 rounded-lg border px-3 py-2.5 text-[10px] opacity-0 transition-opacity shadow-sm group-hover:opacity-100 group-focus-within:opacity-100"
-						style={{
-							background: "#FFFFFF",
-							borderColor: "#DDD0BC",
-							color: "#6E8472",
-						}}
-					>
-						<p
-							className="font-semibold text-[11px] mb-2"
-							style={{ color: "#2A3A2C" }}
+				</div>
+
+				{/* Prompt list */}
+				<div className="overflow-y-auto flex-1">
+					{list.length === 0 ? (
+						<div
+							className="py-12 text-center text-sm"
+							style={{ color: "#9AAE9C" }}
 						>
-							Standardized per tag
-						</p>
-						{(
-							[
-								["Mention rate", "HC mentions ÷ responses"],
-								["Share of voice", "HC mentions ÷ all tracked mentions"],
-								["Index", "0.7 × mention rate + 0.3 × SoV"],
-								["Pie share", "index × tag coverage, normalized to 100"],
-								["Multi-tag prompts", "split evenly across their tags"],
-							] as [string, string][]
-						).map(([label, val]) => (
-							<div
-								key={label}
-								className="flex items-baseline justify-between gap-3 mt-2"
-							>
-								<span>{label}</span>
-								<span className="text-right" style={{ color: "#4A6050" }}>
-									{val}
+							No prompts in this tier
+						</div>
+					) : (
+						<ul>
+							{list.map((p, i) => (
+								<li
+									key={p.query}
+									className="px-5 py-3 flex items-start gap-3 border-b"
+									style={{
+										borderColor: "#EDE8DF",
+										...(i === list.length - 1 ? { borderBottom: "none" } : {}),
+									}}
+								>
+									{/* Rate badge */}
+									<span
+										className="mt-0.5 shrink-0 text-[11px] font-bold tabular-nums rounded-md px-1.5 py-0.5"
+										style={{ background: tier.bg, color: tier.color, minWidth: 42, textAlign: "center" }}
+									>
+										{tier.key === "absent" ? "—" : `${p.highchartsRatePct.toFixed(0)}%`}
+									</span>
+
+									{/* Query + tags */}
+									<div className="flex-1 min-w-0">
+										<Link
+											to={`/prompts/drilldown?query=${encodeURIComponent(p.query)}`}
+											className="text-sm leading-snug hover:underline block truncate"
+											style={{ color: "#2A3A2C" }}
+											title={p.query}
+										>
+											{p.query}
+										</Link>
+										{p.tags && p.tags.length > 0 && (
+											<div className="flex flex-wrap gap-1 mt-1">
+												{p.tags.slice(0, 4).map((tag) => (
+													<span
+														key={tag}
+														className="text-[10px] px-1.5 py-0.5 rounded-full"
+														style={{ background: "#EDE8DF", color: "#6B8470" }}
+													>
+														{tag}
+													</span>
+												))}
+												{p.tags.length > 4 && (
+													<span className="text-[10px]" style={{ color: "#9AAE9C" }}>
+														+{p.tags.length - 4}
+													</span>
+												)}
+											</div>
+										)}
+									</div>
+
+									{/* Arrow link */}
+									<Link
+										to={`/prompts/drilldown?query=${encodeURIComponent(p.query)}`}
+										className="shrink-0 mt-0.5 text-xs"
+										style={{ color: "#9AAE9C" }}
+										title="View drilldown"
+									>
+										→
+									</Link>
+								</li>
+							))}
+						</ul>
+					)}
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function PromptReachCard({
+	prompts,
+	isLoading,
+}: {
+	prompts: PromptStatusSummary[];
+	isLoading: boolean;
+}) {
+	const tiers = useMemo(() => buildPromptReachTiers(prompts), [prompts]);
+	const mentioned = tiers.strong + tiers.moderate + tiers.light;
+	const reachPct = tiers.total > 0 ? (mentioned / tiers.total) * 100 : 0;
+	const hasData = tiers.total > 0;
+	const [activeTier, setActiveTier] = useState<ReachTierKey | null>(null);
+	const activeTierDef = REACH_TIERS.find((t) => t.key === activeTier) ?? null;
+
+	return (
+		<>
+			<div
+				className="rounded-xl border shadow-sm h-full flex flex-col"
+				style={{ background: "#FEFCF9", borderColor: "#DDD0BC" }}
+			>
+				{/* Header */}
+				<div className="px-5 pt-4 pb-2 flex items-center justify-between">
+					<span
+						className="text-[10px] font-semibold uppercase tracking-widest"
+						style={{ color: "#6B8470" }}
+					>
+						Prompt Reach
+					</span>
+					<div className="relative group">
+						<button
+							type="button"
+							className="w-4 h-4 rounded-full text-[10px] font-semibold border flex items-center justify-center"
+							style={{ color: "#6B8470", borderColor: "#D8CEC0", background: "#FEFCF9" }}
+							aria-label="About prompt reach"
+						>
+							i
+						</button>
+						<div
+							className="pointer-events-none absolute right-0 top-5 z-20 w-60 rounded-lg border px-3 py-2.5 text-[10px] opacity-0 transition-opacity shadow-sm group-hover:opacity-100 group-focus-within:opacity-100"
+							style={{ background: "#FFFFFF", borderColor: "#DDD0BC", color: "#6E8472" }}
+						>
+							<p className="font-semibold text-[11px] mb-2" style={{ color: "#2A3A2C" }}>
+								Highcharts mention rate per prompt
+							</p>
+							{([
+								["Strong", "≥75% of responses mention HC"],
+								["Moderate", "50–74% of responses mention HC"],
+								["Light", "1–49% of responses mention HC"],
+								["Absent", "HC never mentioned"],
+							] as [string, string][]).map(([l, v]) => (
+								<div key={l} className="flex items-baseline justify-between gap-3 mt-2">
+									<span>{l}</span>
+									<span className="text-right" style={{ color: "#4A6050" }}>{v}</span>
+								</div>
+							))}
+						</div>
+					</div>
+				</div>
+
+				{/* Body */}
+				<div className="flex-1 flex flex-col justify-between px-5 pb-5">
+					{isLoading ? (
+						<div className="flex-1 flex flex-col gap-3 pt-1">
+							<Skeleton className="h-8 w-24" />
+							<Skeleton className="h-[80px] w-full rounded-lg" />
+							<Skeleton className="h-3 w-full rounded-full" />
+						</div>
+					) : !hasData ? (
+						<div
+							className="flex-1 flex items-center justify-center rounded-xl border border-dashed text-xs"
+							style={{ color: "#C8D4C8", borderColor: "#DDD0BC" }}
+						>
+							No tracked prompts yet
+						</div>
+					) : (
+						<>
+							{/* Headline */}
+							<div className="flex items-baseline gap-2 pt-1 pb-3">
+								<span className="text-4xl font-bold tracking-tight" style={{ color: "#2A3A2C" }}>
+									{reachPct.toFixed(0)}%
+								</span>
+								<span className="text-xs" style={{ color: "#9AAE9C" }}>
+									of prompts mention Highcharts
 								</span>
 							</div>
-						))}
-					</div>
+
+							{/* 2×2 tier grid — each cell is clickable */}
+							<div className="grid grid-cols-2 gap-2 mb-3">
+								{REACH_TIERS.map((tier) => {
+									const count = tiers[tier.key];
+									const pct = tiers.total > 0 ? (count / tiers.total) * 100 : 0;
+									return (
+										<button
+											key={tier.key}
+											type="button"
+											onClick={() => setActiveTier(tier.key)}
+											className="rounded-lg px-3 py-2.5 flex flex-col gap-0.5 text-left transition-all"
+											style={{
+												background: tier.bg,
+												outline: "none",
+												cursor: "pointer",
+											}}
+											onMouseEnter={(e) => {
+												(e.currentTarget as HTMLElement).style.filter = "brightness(0.96)";
+												(e.currentTarget as HTMLElement).style.boxShadow = `0 0 0 1.5px ${tier.color}40`;
+											}}
+											onMouseLeave={(e) => {
+												(e.currentTarget as HTMLElement).style.filter = "";
+												(e.currentTarget as HTMLElement).style.boxShadow = "";
+											}}
+										>
+											<div className="flex items-center justify-between">
+												<span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: tier.color }}>
+													{tier.label}
+												</span>
+												<span className="text-[10px]" style={{ color: tier.color, opacity: 0.7 }}>
+													{tier.threshold}
+												</span>
+											</div>
+											<div className="flex items-baseline gap-1.5">
+												<span className="text-xl font-bold leading-tight" style={{ color: tier.color }}>
+													{count}
+												</span>
+												<span className="text-[11px]" style={{ color: tier.color, opacity: 0.65 }}>
+													{pct.toFixed(0)}%
+												</span>
+											</div>
+										</button>
+									);
+								})}
+							</div>
+
+							{/* Stacked bar — segments also clickable */}
+							<div className="flex h-2 w-full rounded-full overflow-hidden gap-px cursor-pointer">
+								{REACH_TIERS.map((tier) => {
+									const pct = tiers.total > 0 ? (tiers[tier.key] / tiers.total) * 100 : 0;
+									if (pct === 0) return null;
+									return (
+										<div
+											key={tier.key}
+											onClick={() => setActiveTier(tier.key)}
+											style={{ width: `${pct}%`, background: tier.color, opacity: 0.85 }}
+										/>
+									);
+								})}
+							</div>
+							<div className="flex justify-between mt-1">
+								<span className="text-[10px]" style={{ color: "#9AAE9C" }}>
+									{mentioned} mentioned
+								</span>
+								<span className="text-[10px]" style={{ color: "#9AAE9C" }}>
+									{tiers.absent} absent
+								</span>
+							</div>
+						</>
+					)}
 				</div>
 			</div>
 
-			{/* Pie chart — full width, centred */}
-			<div
-				className="flex-1 flex items-center justify-center px-3 pb-4"
-				style={{ minHeight: 220 }}
-			>
-				{isLoading ? (
-					<Skeleton className="h-[220px] w-full rounded-xl" />
-				) : hasData ? (
-					<HighchartsReact highcharts={Highcharts} options={options} />
-				) : (
-					<div
-						className="h-[220px] w-full flex items-center justify-center rounded-xl border border-dashed text-xs"
-						style={{ color: "#C8D4C8", borderColor: "#DDD0BC" }}
-					>
-						No tag segments yet
-					</div>
-				)}
-			</div>
-		</div>
+			{activeTier && activeTierDef && (
+				<PromptReachModal
+					tier={activeTierDef}
+					prompts={prompts}
+					onClose={() => setActiveTier(null)}
+				/>
+			)}
+		</>
 	);
 }
 
@@ -1755,7 +1797,16 @@ function VisibilityChart({
 			crosshair: { color: "#DDD0BC", width: 1, dashStyle: "Dash" },
 			labels: {
 				style: { color: "#9AAE9C", fontSize: "11px", fontFamily: CHART_FONT },
-				format: "{value:%b %e}",
+			},
+			dateTimeLabelFormats: {
+				millisecond: "%b %e",
+				second: "%b %e",
+				minute: "%b %e",
+				hour: "%b %e",
+				day: "%b %e",
+				week: "%b %e",
+				month: "%b '%y",
+				year: "%Y",
 			},
 		},
 		yAxis: {
@@ -2947,10 +2998,6 @@ export default function Dashboard() {
 	}, [selectedTagSet, promptStatus, competitorSeriesAll]);
 
 	const tracked = promptStatus.filter((p) => p.status === "tracked");
-	const tagStrengthSlices = useMemo(
-		() => buildTagStrengthSlices(promptStatus, selectedTagSet),
-		[promptStatus, selectedTagSet],
-	);
 
 	const hcEntry = competitorSeries.find((s) => s.isHighcharts);
 	const hcRate = hcEntry?.mentionRatePct ?? 0;
@@ -3107,14 +3154,14 @@ export default function Dashboard() {
 				isLoading={isLoading}
 			/>
 
-			{/* KPI row: score (2) + tag strength (2) + prompts (1) + actions (1) */}
+			{/* KPI row: score (2) + prompt reach (2) + prompts (1) + actions (1) */}
 			<div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3 sm:gap-4">
 				<div className="sm:col-span-1 xl:col-span-2">
 					<ScoreStatCard score={overallScore} isLoading={isLoading} />
 				</div>
 				<div className="sm:col-span-1 xl:col-span-2">
-					<TagStrengthShareCard
-						data={tagStrengthSlices}
+					<PromptReachCard
+						prompts={promptStatus}
 						isLoading={isLoading}
 					/>
 				</div>

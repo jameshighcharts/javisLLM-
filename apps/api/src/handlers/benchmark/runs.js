@@ -87,6 +87,53 @@ async function supabaseRestRequest(config, path, contextLabel) {
 	return Array.isArray(payload) ? payload : [];
 }
 
+function getSupabaseErrorSearchText(error) {
+	const segments = [];
+	if (error instanceof Error && error.message) {
+		segments.push(error.message);
+	}
+	const payload =
+		typeof error === "object" && error !== null ? error.payload : null;
+	if (payload && typeof payload === "object") {
+		for (const key of ["message", "details", "hint", "error"]) {
+			const value = payload[key];
+			if (typeof value === "string" && value.trim()) {
+				segments.push(value);
+			}
+		}
+	}
+	return segments.join(" ").toLowerCase();
+}
+
+function isMissingSupabaseColumn(error, columnName) {
+	const payload =
+		typeof error === "object" && error !== null ? error.payload : null;
+	const code =
+		typeof payload === "object" && payload !== null && typeof payload.code === "string"
+			? payload.code
+			: typeof error === "object" && error !== null && typeof error.code === "string"
+				? error.code
+				: "";
+	const searchText = getSupabaseErrorSearchText(error);
+	if (!searchText.includes(columnName.toLowerCase())) {
+		return false;
+	}
+	return (
+		code === "42703" ||
+		code === "PGRST204" ||
+		(searchText.includes("could not find the") &&
+			searchText.includes("column") &&
+			searchText.includes("schema cache"))
+	);
+}
+
+function buildBenchmarkRunsPath(includeRunMetadata) {
+	const columns = includeRunMetadata
+		? "id,run_month,model,run_kind,cohort_tag,web_search_enabled,overall_score,created_at"
+		: "id,run_month,model,web_search_enabled,overall_score,created_at";
+	return `/rest/v1/benchmark_runs?select=${columns}&order=created_at.desc&limit=30`;
+}
+
 function deriveQueueRunStatus(progress) {
 	const totalJobs = Number(progress?.total_jobs || 0);
 	const completedJobs = Number(progress?.completed_jobs || 0);
@@ -118,11 +165,26 @@ function deriveQueueRunStatus(progress) {
 
 async function listQueueRuns() {
 	const restConfig = getSupabaseRestConfig();
-	const runs = await supabaseRestRequest(
-		restConfig,
-		"/rest/v1/benchmark_runs?select=id,run_month,model,run_kind,cohort_tag,web_search_enabled,overall_score,created_at&order=created_at.desc&limit=30",
-		"Fetch benchmark runs",
-	);
+	let runs;
+	try {
+		runs = await supabaseRestRequest(
+			restConfig,
+			buildBenchmarkRunsPath(true),
+			"Fetch benchmark runs",
+		);
+	} catch (error) {
+		if (
+			!isMissingSupabaseColumn(error, "run_kind") &&
+			!isMissingSupabaseColumn(error, "cohort_tag")
+		) {
+			throw error;
+		}
+		runs = await supabaseRestRequest(
+			restConfig,
+			buildBenchmarkRunsPath(false),
+			"Fetch benchmark runs",
+		);
+	}
 
 	if (runs.length === 0) {
 		return [];

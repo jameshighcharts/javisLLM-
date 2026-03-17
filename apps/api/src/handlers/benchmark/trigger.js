@@ -388,6 +388,57 @@ async function supabaseRestRequest(config, path, method, body, contextLabel) {
 	return payload;
 }
 
+function getSupabaseErrorSearchText(error) {
+	const segments = [];
+	if (error instanceof Error && error.message) {
+		segments.push(error.message);
+	}
+	const payload =
+		typeof error === "object" && error !== null ? error.payload : null;
+	if (payload && typeof payload === "object") {
+		for (const key of ["message", "details", "hint", "error"]) {
+			const value = payload[key];
+			if (typeof value === "string" && value.trim()) {
+				segments.push(value);
+			}
+		}
+	}
+	return segments.join(" ").toLowerCase();
+}
+
+function isMissingSupabaseColumn(error, columnName) {
+	const payload =
+		typeof error === "object" && error !== null ? error.payload : null;
+	const code =
+		typeof payload === "object" && payload !== null && typeof payload.code === "string"
+			? payload.code
+			: typeof error === "object" && error !== null && typeof error.code === "string"
+				? error.code
+				: "";
+	const searchText = getSupabaseErrorSearchText(error);
+	if (!searchText.includes(columnName.toLowerCase())) {
+		return false;
+	}
+	return (
+		code === "42703" ||
+		code === "PGRST204" ||
+		(searchText.includes("could not find the") &&
+			searchText.includes("column") &&
+			searchText.includes("schema cache"))
+	);
+}
+
+function isEnqueueFunctionCompatibilityError(error, parameterName) {
+	const searchText = getSupabaseErrorSearchText(error);
+	return (
+		searchText.includes("enqueue_benchmark_run") &&
+		searchText.includes(parameterName.toLowerCase()) &&
+		(searchText.includes("could not find the function") ||
+			searchText.includes("unexpected inputs provided") ||
+			searchText.includes("schema cache"))
+	);
+}
+
 async function ensureTaggedPromptsExist(restConfig, cohortTag) {
 	if (!cohortTag) {
 		return;
@@ -430,19 +481,37 @@ async function triggerViaQueue(
 	const runPayload = {
 		run_month: effectiveRunMonth,
 		model: models.join(","),
-		run_kind: runKind,
-		cohort_tag: cohortTag,
 		web_search_enabled: Boolean(webSearch),
 		started_at: new Date().toISOString(),
 	};
+	if (cohortTag) {
+		runPayload.run_kind = runKind;
+		runPayload.cohort_tag = cohortTag;
+	}
 
-	const runInsertPayload = await supabaseRestRequest(
-		restConfig,
-		"/rest/v1/benchmark_runs",
-		"POST",
-		runPayload,
-		"Insert benchmark run",
-	);
+	let runInsertPayload;
+	try {
+		runInsertPayload = await supabaseRestRequest(
+			restConfig,
+			"/rest/v1/benchmark_runs",
+			"POST",
+			runPayload,
+			"Insert benchmark run",
+		);
+	} catch (error) {
+		if (
+			cohortTag &&
+			(isMissingSupabaseColumn(error, "run_kind") ||
+				isMissingSupabaseColumn(error, "cohort_tag"))
+		) {
+			const compatibilityError = new Error(
+				"Cohort runs require the latest Supabase migrations.",
+			);
+			compatibilityError.statusCode = 400;
+			throw compatibilityError;
+		}
+		throw error;
+	}
 
 	const insertedRun = Array.isArray(runInsertPayload)
 		? runInsertPayload[0]
@@ -458,23 +527,54 @@ async function triggerViaQueue(
 		throw error;
 	}
 
-	const enqueuePayload = await supabaseRestRequest(
-		restConfig,
-		"/rest/v1/rpc/enqueue_benchmark_run",
-		"POST",
-		{
-			p_run_id: runId,
-			p_models: models,
-			p_our_terms: ourTerms,
-			p_runs_per_model: runs,
-			p_temperature: temperature,
-			p_web_search: webSearch,
-			p_prompt_limit: promptLimit,
-			p_prompt_order: promptOrder,
-			p_prompt_tag: cohortTag,
-		},
-		"Enqueue benchmark jobs",
-	);
+	const enqueueRequestBody = {
+		p_run_id: runId,
+		p_models: models,
+		p_our_terms: ourTerms,
+		p_runs_per_model: runs,
+		p_temperature: temperature,
+		p_web_search: webSearch,
+		p_prompt_limit: promptLimit,
+	};
+	if (cohortTag) {
+		enqueueRequestBody.p_prompt_tag = cohortTag;
+	}
+	if (promptOrder !== "default") {
+		enqueueRequestBody.p_prompt_order = promptOrder;
+	}
+
+	let enqueuePayload;
+	try {
+		enqueuePayload = await supabaseRestRequest(
+			restConfig,
+			"/rest/v1/rpc/enqueue_benchmark_run",
+			"POST",
+			enqueueRequestBody,
+			"Enqueue benchmark jobs",
+		);
+	} catch (error) {
+		if (
+			promptOrder !== "default" &&
+			isEnqueueFunctionCompatibilityError(error, "p_prompt_order")
+		) {
+			const compatibilityError = new Error(
+				"Prompt filter order is not deployed in Supabase yet. Apply latest migrations and retry.",
+			);
+			compatibilityError.statusCode = 400;
+			throw compatibilityError;
+		}
+		if (
+			cohortTag &&
+			isEnqueueFunctionCompatibilityError(error, "p_prompt_tag")
+		) {
+			const compatibilityError = new Error(
+				"Cohort runs require the latest Supabase migrations.",
+			);
+			compatibilityError.statusCode = 400;
+			throw compatibilityError;
+		}
+		throw error;
+	}
 
 	const enqueueResult = Array.isArray(enqueuePayload)
 		? enqueuePayload[0]
