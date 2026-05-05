@@ -1,0 +1,17 @@
+.DS_Store
+.git
+.gitignore
+.claude
+.venv
+.vscode
+.vercel
+__pycache__
+*.pyc
+artifacts
+output
+test-results
+node_modules
+apps/web/node_modules
+apps/web/dist
+dist
+firebase-debug.log
