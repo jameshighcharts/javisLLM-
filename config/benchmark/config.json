@@ -1,31 +1,74 @@
 {
   "queries": [
-    "javascript charting libraries",
+    "JavaScript charting libraries",
     "data visualization library",
-    "React graph visualization library",
-    "accessibility charting library",
-    "best charting library only give 1 answer",
-    "best javascript charting library for React"
+    "JavaScript charts",
+    "JavaScript dashboard",
+    "best charting library",
+    "best JavaScript charting library",
+    "best JavaScript charting library for React",
+    "best customizable charting tools",
+    "advanced JavaScript chart libraries",
+    "interactive charting tools for developers",
+    "charting frameworks for developers",
+    "enterprise charting solutions",
+    "open source data visualization frameworks",
+    "charting APIs for developers",
+    "data visualization SDKs for developers",
+    "JavaScript libraries for analytics dashboards",
+    "javascript-based reporting libraries"
   ],
   "queryTags": {
-    "javascript charting libraries": [
-      "javascript"
+    "JavaScript charting libraries": [
+      "core"
     ],
     "data visualization library": [
-      "general"
+      "core"
     ],
-    "React graph visualization library": [
-      "react"
+    "JavaScript charts": [
+      "core"
     ],
-    "accessibility charting library": [
-      "general"
+    "JavaScript dashboard": [
+      "core"
     ],
-    "best charting library only give 1 answer": [
-      "general"
+    "best charting library": [
+      "core"
     ],
-    "best javascript charting library for React": [
-      "react",
-      "javascript"
+    "best JavaScript charting library": [
+      "core"
+    ],
+    "best JavaScript charting library for React": [
+      "core"
+    ],
+    "best customizable charting tools": [
+      "core"
+    ],
+    "advanced JavaScript chart libraries": [
+      "core"
+    ],
+    "interactive charting tools for developers": [
+      "core"
+    ],
+    "charting frameworks for developers": [
+      "core"
+    ],
+    "enterprise charting solutions": [
+      "core"
+    ],
+    "open source data visualization frameworks": [
+      "core"
+    ],
+    "charting APIs for developers": [
+      "core"
+    ],
+    "data visualization SDKs for developers": [
+      "core"
+    ],
+    "JavaScript libraries for analytics dashboards": [
+      "core"
+    ],
+    "javascript-based reporting libraries": [
+      "core"
     ]
   },
   "competitors": [

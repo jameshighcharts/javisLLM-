@@ -204,6 +204,63 @@ const PROVIDER_FILTER_OPTIONS: Array<{
 	{ value: "gemini", label: "Gemini" },
 ];
 
+const PREVIOUS_DASHBOARD_TIME_SERIES: TimeSeriesPoint[] = [
+	{
+		date: "2026-02-13",
+		timestamp: "2026-02-13T13:22:26.033414+00:00",
+		total: 9,
+		aiVisibilityScore: 30.56,
+		combviPct: 34.92,
+		rates: {
+			"d3.js": 100,
+			Highcharts: 33.33,
+			"chart.js": 77.78,
+			echarts: 33.33,
+			amcharts: 0,
+			"AG Grid": 0,
+			"AG Chart": 0,
+			Recharts: 33.33,
+		},
+	},
+	{
+		date: "2026-03-01",
+		timestamp: "2026-03-01T08:52:42.141316+00:00",
+		total: 18,
+		aiVisibilityScore: 30.72,
+		combviPct: 42.86,
+		rates: {
+			Highcharts: 38.89,
+			"d3.js": 88.89,
+			"chart.js": 72.22,
+			echarts: 33.33,
+			amcharts: 0,
+			"AG Grid": 0,
+			"AG Chart": 0,
+			Recharts: 33.33,
+		},
+	},
+];
+
+function sortTimeSeriesPoints(points: TimeSeriesPoint[]): TimeSeriesPoint[] {
+	return [...points].sort((left, right) => {
+		const leftSource = left.timestamp ?? `${left.date}T12:00:00Z`;
+		const rightSource = right.timestamp ?? `${right.date}T12:00:00Z`;
+		return Date.parse(leftSource) - Date.parse(rightSource);
+	});
+}
+
+function mergePreviousDashboardTimeSeries(
+	points: TimeSeriesPoint[],
+): TimeSeriesPoint[] {
+	const byDate = new Map(
+		PREVIOUS_DASHBOARD_TIME_SERIES.map((point) => [point.date, point]),
+	);
+	for (const point of points) {
+		byDate.set(point.date, point);
+	}
+	return sortTimeSeriesPoints([...byDate.values()]);
+}
+
 function normalizeProviderList(
 	providers: ProviderFilterValue[],
 ): ProviderFilterValue[] {
@@ -3112,13 +3169,12 @@ export default function Dashboard() {
 	}
 
 	const timeseriesPoints = useMemo((): TimeSeriesPoint[] => {
-		if (!tsData?.points?.length) return [];
-		return [...tsData.points].sort((left, right) => {
-			const leftSource = left.timestamp ?? `${left.date}T12:00:00Z`;
-			const rightSource = right.timestamp ?? `${right.date}T12:00:00Z`;
-			return Date.parse(leftSource) - Date.parse(rightSource);
-		});
-	}, [tsData]);
+		const livePoints = sortTimeSeriesPoints(tsData?.points ?? []);
+		if (normalizedSelectedTags.length > 0 || normalizedSelectedProviders.length > 0) {
+			return livePoints;
+		}
+		return mergePreviousDashboardTimeSeries(livePoints);
+	}, [tsData, normalizedSelectedTags.length, normalizedSelectedProviders.length]);
 
 	if (isError) {
 		return (

@@ -2511,16 +2511,11 @@ async function updateConfigInSupabaseForServer(config: BenchmarkConfig) {
 		throw asError(allPromptRowsError, "Unable to refresh prompt list");
 	}
 
-	const trackedQuerySet = new Set(
-		queries.map((query) => query.trim().toLowerCase()),
-	);
-	const trackedQueryByKey = new Map(
-		queries.map((query) => [query.trim().toLowerCase(), query]),
-	);
+	const trackedQuerySet = new Set(queries);
 	for (const row of allPromptRowsData) {
-		const rowKey = row.query_text.trim().toLowerCase();
-		const shouldKeep = trackedQuerySet.has(rowKey);
-		const shouldBeActive = shouldKeep && !pausedQuerySet.has(rowKey);
+		const rowPausedKey = row.query_text.trim().toLowerCase();
+		const shouldKeep = trackedQuerySet.has(row.query_text);
+		const shouldBeActive = shouldKeep && !pausedQuerySet.has(rowPausedKey);
 		const shouldMarkDeleted =
 			promptTagsColumnAvailable &&
 			!shouldKeep &&
@@ -2543,10 +2538,8 @@ async function updateConfigInSupabaseForServer(config: BenchmarkConfig) {
 						row.query_text,
 					);
 				} else {
-					const canonicalQuery =
-						trackedQueryByKey.get(rowKey) ?? row.query_text;
 					promptUpdatePayload.tags =
-						queryTags[canonicalQuery] ?? inferPromptTags(canonicalQuery);
+						queryTags[row.query_text] ?? inferPromptTags(row.query_text);
 				}
 			}
 
@@ -5985,7 +5978,7 @@ app.get(["/api/config", "/api/config/benchmark"], async (_req, res) => {
 		res.json({
 			config,
 			meta: {
-				source: "config/benchmark_config.json",
+				source: "config/benchmark/config.json",
 				updatedAt: stats.mtime.toISOString(),
 				queries: config.queries.length,
 				competitors: config.competitors.length,
@@ -6000,22 +5993,22 @@ app.put(
 	["/api/config", "/api/config/benchmark"],
 	requireWriteAccess,
 	async (req, res) => {
-	try {
-		const parsed = configSchema.parse(req.body);
-		const normalized = normalizeConfig(parsed);
+		try {
+			const parsed = configSchema.parse(req.body);
+			const normalized = normalizeConfig(parsed);
 
-		if (shouldUseSupabaseDashboardSource()) {
-			try {
-				const payload = await updateConfigInSupabaseForServer(normalized);
-				res.json(payload);
-				return;
-			} catch (error) {
-				console.warn(
-					"[api.config] Supabase config update failed, using local file.",
-					error,
-				);
+			if (shouldUseSupabaseDashboardSource()) {
+				try {
+					const payload = await updateConfigInSupabaseForServer(normalized);
+					res.json(payload);
+					return;
+				} catch (error) {
+					console.warn(
+						"[api.config] Supabase config update failed, using local file.",
+						error,
+					);
+				}
 			}
-		}
 
 			await fs.writeFile(
 				configPath,
@@ -6026,7 +6019,7 @@ app.put(
 			res.json({
 				config: normalized,
 				meta: {
-					source: "config/benchmark_config.json",
+					source: "config/benchmark/config.json",
 					updatedAt: stats.mtime.toISOString(),
 				},
 			});

@@ -1734,9 +1734,9 @@ async function updateConfigInSupabase(
 		throw asError(allPromptRowsError, "Unable to refresh prompt list");
 	}
 
-	const activeQuerySet = new Set(queries.map((query) => query.toLowerCase()));
+	const activeQuerySet = new Set(queries);
 	for (const row of allPromptRowsData) {
-		const shouldBeActive = activeQuerySet.has(row.query_text.toLowerCase());
+		const shouldBeActive = activeQuerySet.has(row.query_text);
 
 		const shouldMarkDeleted =
 			promptTagsColumnAvailable &&

@@ -24,7 +24,7 @@ LLM visibility benchmarker — tracks how often Highcharts (and configured compe
 ├── worker/
 │   └── benchmark_worker.py  # Python: dequeues PGMQ jobs, runs LLM calls
 ├── config/
-│   └── benchmark_config.json  # editable queries, competitors, aliases
+│   └── benchmark/config.json  # editable queries, competitors, aliases
 ├── supabase/sql/        # migrations 001–012 (apply in order)
 ├── scripts/             # build_looker_dataset.py, push_to_sheets_webapp.py, monthly_run.sh
 └── tests/               # pytest + .mjs test files
@@ -93,7 +93,7 @@ Apply migrations in order: `supabase/sql/001_*.sql` through `012_*.sql`. Key tab
 
 ## Config-driven inputs
 
-`config/benchmark_config.json` controls queries, competitors, and aliases. The UI admin panel can write back to this file (local) or update Supabase directly. No code changes needed to add/remove tracked entities.
+`config/benchmark/config.json` controls queries, competitors, and aliases. The UI admin panel can write back to this file (local) or update Supabase directly. No code changes needed to add/remove tracked entities.
 
 ## Python benchmark runner
 

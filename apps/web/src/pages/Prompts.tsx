@@ -1967,10 +1967,10 @@ interface QueryLabResultView {
 }
 
 const LAB_SUGGESTIONS = [
-	"best javascript charting library for React",
-	"highcharts vs chart.js comparison",
-	"data visualization library with TypeScript support",
-	"lightweight chart library for dashboards",
+	"best JavaScript charting library",
+	"best JavaScript charting library for React",
+	"JavaScript dashboard",
+	"charting APIs for developers",
 ];
 
 function dedupeCaseInsensitive(values: string[]): string[] {

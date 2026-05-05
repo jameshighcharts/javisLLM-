@@ -12,13 +12,13 @@ Update `/Users/jamesm/projects/easy_llm_benchmarker/.env.monthly` with real valu
 - `GSHEET_WEBAPP_SECRET`
 - `GSHEET_TAB_NAME`
 - `GSHEET_COMPETITOR_TAB_NAME` (tab for competitor mention-rate/share-of-voice dataset)
-- `BENCHMARK_CONFIG_PATH` (optional, defaults to `config/benchmark_config.json`)
+- `BENCHMARK_CONFIG_PATH` (optional, defaults to `config/benchmark/config.json`)
 - `SUPABASE_URL` (optional)
 - `SUPABASE_SERVICE_ROLE_KEY` (optional)
 - `SUPABASE_SYNC=1` to push each monthly run to Supabase
 
 Benchmark inputs now live in:
-- `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark_config.json`
+- `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark/config.json`
   - `queries`
   - `competitors`
   - `aliases`

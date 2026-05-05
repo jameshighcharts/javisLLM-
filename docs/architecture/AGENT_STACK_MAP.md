@@ -223,7 +223,7 @@ Start:
 - UI flows: `ui/src/pages/Prompts.tsx`
 - client API methods: `ui/src/api.ts`
 - DB tables: `prompt_queries`, `competitors`, `competitor_aliases`
-- local file fallback path: `config/benchmark_config.json`, `ui/server/index.ts`
+- local file fallback path: `config/benchmark/config.json`, `ui/server/index.ts`
 
 ### Research feature changes (gaps/briefs/sitemap/blogs/cohorts)
 

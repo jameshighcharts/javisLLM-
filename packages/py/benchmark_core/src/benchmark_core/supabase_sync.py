@@ -40,6 +40,7 @@ BENCHMARK_RESPONSE_OPTIONAL_COLUMNS = {
 }
 BENCHMARK_RESPONSE_CONFLICT_MODEL_AWARE = "run_id,query_id,run_iteration,model"
 BENCHMARK_RESPONSE_CONFLICT_LEGACY = "run_id,query_id,run_iteration"
+DELETED_PROMPT_TAG = "_deleted"
 
 
 class SyncError(RuntimeError):
@@ -171,6 +172,10 @@ def normalize_prompt_tags(raw_tags: Any, query: str) -> List[str]:
     return normalized if normalized else infer_prompt_tags(query)
 
 
+def with_deleted_prompt_tag(raw_tags: Any, query: str) -> List[str]:
+    return unique_non_empty([*normalize_prompt_tags(raw_tags, query), DELETED_PROMPT_TAG])
+
+
 def normalize_query_tags(
     queries: List[str],
     raw_query_tags: Dict[str, Any] | None,
@@ -203,6 +208,11 @@ def extract_missing_column_name(error: Any, table_name: str) -> str | None:
     if generic_match:
         return generic_match.group(1)
     return None
+
+
+def is_missing_column_error(error: Exception) -> bool:
+    text = str(error)
+    return "42703" in text or "PGRST204" in text or "schema cache" in text
 
 
 def is_on_conflict_constraint_error(error: Any) -> bool:
@@ -389,18 +399,45 @@ def sync_config(client: Client, config: Dict[str, Any]) -> Tuple[Dict[str, str],
         context="Failed to upsert prompt_queries",
     )
 
-    all_queries = execute_or_raise(
-        client.table("prompt_queries").select("id,query_text,is_active").execute(),
-        "Failed to read prompt_queries",
-    )
-    active_queries = {query.lower() for query in queries}
+    prompt_tags_column_available = True
+    try:
+        all_queries = execute_or_raise(
+            client.table("prompt_queries")
+            .select("id,query_text,is_active,tags")
+            .execute(),
+            "Failed to read prompt_queries",
+        )
+    except SyncError as exc:
+        if not is_missing_column_error(exc):
+            raise
+        prompt_tags_column_available = False
+        all_queries = execute_or_raise(
+            client.table("prompt_queries")
+            .select("id,query_text,is_active")
+            .execute(),
+            "Failed to read prompt_queries",
+        )
+
+    active_queries = set(queries)
     for row in all_queries:
         current = str(row.get("query_text", ""))
-        should_be_active = current.lower() in active_queries
+        should_keep = current in active_queries
+        should_be_active = should_keep
+        update_payload: Dict[str, Any] = {}
         if bool(row.get("is_active")) != should_be_active:
+            update_payload["is_active"] = should_be_active
+        if prompt_tags_column_available:
+            current_tags = normalize_prompt_tags(row.get("tags"), current)
+            if should_keep:
+                next_tags = query_tags.get(current) or infer_prompt_tags(current)
+            else:
+                next_tags = with_deleted_prompt_tag(row.get("tags"), current)
+            if current_tags != next_tags:
+                update_payload["tags"] = next_tags
+        if update_payload:
             execute_or_raise(
                 client.table("prompt_queries")
-                .update({"is_active": should_be_active})
+                .update(update_payload)
                 .eq("id", row.get("id"))
                 .execute(),
                 f"Failed to update prompt query active state: {current}",

@@ -24,10 +24,23 @@ from .paths import ARTIFACTS_DIR, CONFIG_DIR
 DEFAULT_OUTPUT_DIR = ARTIFACTS_DIR
 DEFAULT_CONFIG_PATH = CONFIG_DIR / "config.json"
 DEFAULT_QUERIES = [
-    "javascript charting libraries",
+    "JavaScript charting libraries",
     "data visualization library",
-    "React graph visualization library",
-    "accessibility charting library"
+    "JavaScript charts",
+    "JavaScript dashboard",
+    "best charting library",
+    "best JavaScript charting library",
+    "best JavaScript charting library for React",
+    "best customizable charting tools",
+    "advanced JavaScript chart libraries",
+    "interactive charting tools for developers",
+    "charting frameworks for developers",
+    "enterprise charting solutions",
+    "open source data visualization frameworks",
+    "charting APIs for developers",
+    "data visualization SDKs for developers",
+    "JavaScript libraries for analytics dashboards",
+    "javascript-based reporting libraries",
 ]
 COMPETITORS = [
     "d3.js",
@@ -283,7 +296,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=str(DEFAULT_CONFIG_PATH),
         help=(
             "Path to JSON config file with queries/competitors/aliases. "
-            "Defaults to config/benchmark_config.json."
+            "Defaults to config/benchmark/config.json."
         ),
     )
     parser.add_argument(

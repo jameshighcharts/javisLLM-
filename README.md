@@ -5,7 +5,7 @@ Benchmark LLM mention visibility for Highcharts vs competitors across a query se
 ## Project structure
 
 - `/Users/jamesm/projects/easy_llm_benchmarker/llm_mention_benchmark.py`: main benchmark runner (OpenAI + Anthropic + Gemini support).
-- `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark_config.json`: editable queries, competitors, aliases.
+- `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark/config.json`: editable queries, competitors, aliases.
 - `/Users/jamesm/projects/easy_llm_benchmarker/scripts/build_looker_dataset.py`: builds canonical Looker dataset + KPI CSV (includes model owner metadata fields).
 - `/Users/jamesm/projects/easy_llm_benchmarker/scripts/push_to_sheets_webapp.py`: pushes Looker CSV rows to Apps Script web app.
 - `/Users/jamesm/projects/easy_llm_benchmarker/scripts/monthly_run.sh`: full monthly pipeline (benchmark -> dataset -> sheet append).
@@ -30,7 +30,7 @@ This starts:
 - Local API: `http://localhost:8787`
 
 The admin panel can save prompt/competitor changes directly into:
-- `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark_config.json`
+- `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark/config.json`
 
 For Vercel deployment (snapshot mode), refresh bundled data first:
 
@@ -168,7 +168,7 @@ across all tracked prompts.
 
 ## Configure inputs (no code edits needed)
 
-Edit `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark_config.json`:
+Edit `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark/config.json`:
 
 - `queries`: list of query strings.
 - `queryTags` (optional): per-query tags map (example tags: `javascript`, `react`, `general`).
