@@ -40,6 +40,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 	const [user, setUser] = useState<User | null>(null);
 	const [isInitialized, setIsInitialized] = useState(false);
 
+	function getMagicLinkRedirectUrl() {
+		const configuredRedirect =
+			import.meta.env.VITE_SUPABASE_REDIRECT_URL as string | undefined;
+		if (configuredRedirect && configuredRedirect.trim()) {
+			return configuredRedirect.trim();
+		}
+
+		if (typeof window !== "undefined") {
+			return new URL("/login", window.location.origin).toString();
+		}
+
+		return "/login";
+	}
+
 	useEffect(() => {
 		if (!supabase) {
 			console.warn("Supabase client is not configured, bypassing auth.");
@@ -79,7 +93,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 		const { error } = await supabase.auth.signInWithOtp({
 			email,
 			options: {
-				emailRedirectTo: window.location.origin,
+				emailRedirectTo: getMagicLinkRedirectUrl(),
 			},
 		});
 		return { error };

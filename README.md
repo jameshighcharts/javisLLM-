@@ -46,6 +46,7 @@ This repo includes root `/Users/jamesm/projects/easy_llm_benchmarker/vercel.json
 In Vercel Project Settings -> Environment Variables, set:
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
+- Optional: `VITE_SUPABASE_REDIRECT_URL` (exact magic-link landing page, for example `https://javis-llm.vercel.app/login`)
 - `OPENAI_API_KEY` (required for GPT models in Prompt Query Lab on `/prompts`)
 - `ANTHROPIC_API_KEY` (required for Claude models in Prompt Query Lab on `/prompts`)
 - `GEMINI_API_KEY` (required for Gemini models in Prompt Query Lab on `/prompts`)
