@@ -334,7 +334,12 @@ function inferPromptTags(query: string): string[] {
 	return tags;
 }
 
-const DELETED_PROMPT_TAG = "__deleted__";
+const LEGACY_PROMPT_TAG = "legacy";
+const DELETED_PROMPT_TAG_ALIASES = new Set([
+	LEGACY_PROMPT_TAG,
+	"_deleted",
+	"__deleted__",
+]);
 
 function parsePromptTagList(rawTags: unknown): string[] {
 	const candidates =
@@ -353,22 +358,27 @@ function parsePromptTagList(rawTags: unknown): string[] {
 }
 
 function hasDeletedPromptTag(rawTags: unknown): boolean {
-	return parsePromptTagList(rawTags).includes(DELETED_PROMPT_TAG);
+	return parsePromptTagList(rawTags).some((tag) =>
+		DELETED_PROMPT_TAG_ALIASES.has(tag),
+	);
 }
 
-function withDeletedPromptTag(rawTags: unknown, query: string): string[] {
-	const baseTags = normalizePromptTags(rawTags, query);
-	return uniqueNonEmpty([
-		...baseTags.filter((tag) => tag !== DELETED_PROMPT_TAG),
-		DELETED_PROMPT_TAG,
-	]);
+function withDeletedPromptTag(_rawTags: unknown, _query: string): string[] {
+	return [LEGACY_PROMPT_TAG];
 }
 
 function normalizePromptTags(rawTags: unknown, query: string): string[] {
 	const normalized = parsePromptTagList(rawTags).filter(
-		(tag) => tag !== DELETED_PROMPT_TAG,
+		(tag) => !DELETED_PROMPT_TAG_ALIASES.has(tag),
 	);
 	return normalized.length > 0 ? normalized : inferPromptTags(query);
+}
+
+function normalizePromptTagsForStatus(rawTags: unknown, query: string): string[] {
+	if (hasDeletedPromptTag(rawTags)) {
+		return [LEGACY_PROMPT_TAG];
+	}
+	return normalizePromptTags(rawTags, query);
 }
 
 function normalizeQueryTagsMap(
@@ -1740,7 +1750,6 @@ async function updateConfigInSupabase(
 
 		const shouldMarkDeleted =
 			promptTagsColumnAvailable &&
-			row.is_active &&
 			!shouldBeActive &&
 			!hasDeletedPromptTag(row.tags);
 
@@ -2395,7 +2404,7 @@ async function fetchDashboardFromSupabase(
 
 		return {
 			query: queryRow.query_text,
-			tags: normalizePromptTags(queryRow.tags, queryRow.query_text),
+			tags: normalizePromptTagsForStatus(queryRow.tags, queryRow.query_text),
 			isPaused: !isDeleted && !queryRow.is_active,
 			status,
 			runs,
@@ -4642,7 +4651,7 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
 
 		return {
 			query: queryRow.query_text,
-			tags: normalizePromptTags(queryRow.tags, queryRow.query_text),
+			tags: normalizePromptTagsForStatus(queryRow.tags, queryRow.query_text),
 			isPaused: !isDeleted && !queryRow.is_active,
 			status,
 			runs,

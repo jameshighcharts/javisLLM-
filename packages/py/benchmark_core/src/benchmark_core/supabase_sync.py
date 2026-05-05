@@ -40,7 +40,8 @@ BENCHMARK_RESPONSE_OPTIONAL_COLUMNS = {
 }
 BENCHMARK_RESPONSE_CONFLICT_MODEL_AWARE = "run_id,query_id,run_iteration,model"
 BENCHMARK_RESPONSE_CONFLICT_LEGACY = "run_id,query_id,run_iteration"
-DELETED_PROMPT_TAG = "_deleted"
+DELETED_PROMPT_TAG = "legacy"
+DELETED_PROMPT_TAG_ALIASES = {DELETED_PROMPT_TAG, "_deleted", "__deleted__"}
 
 
 class SyncError(RuntimeError):
@@ -168,12 +169,16 @@ def normalize_prompt_tags(raw_tags: Any, query: str) -> List[str]:
     else:
         candidates = []
 
-    normalized = unique_non_empty(value.lower() for value in candidates)
+    normalized = unique_non_empty(
+        value.lower()
+        for value in candidates
+        if value.strip().lower() not in DELETED_PROMPT_TAG_ALIASES
+    )
     return normalized if normalized else infer_prompt_tags(query)
 
 
-def with_deleted_prompt_tag(raw_tags: Any, query: str) -> List[str]:
-    return unique_non_empty([*normalize_prompt_tags(raw_tags, query), DELETED_PROMPT_TAG])
+def with_deleted_prompt_tag(_raw_tags: Any, _query: str) -> List[str]:
+    return [DELETED_PROMPT_TAG]
 
 
 def normalize_query_tags(

@@ -129,16 +129,16 @@ function StatusBadge({
 			<span
 				className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
 				style={{
-					background: "#FEF2F2",
-					color: "#B91C1C",
-					border: "1px solid #FECACA",
+					background: "#FFF7ED",
+					color: "#9A3412",
+					border: "1px solid #FED7AA",
 				}}
 			>
 				<span
 					className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-					style={{ background: "#EF4444" }}
+					style={{ background: "#F97316" }}
 				/>
-				Deleted
+				Legacy
 			</span>
 		);
 	}
@@ -391,6 +391,7 @@ const TAG_STYLES: Record<
 	javascript: { bg: "#FFFBEB", color: "#B45309", border: "#FDE68A" },
 	js: { bg: "#FFFBEB", color: "#B45309", border: "#FDE68A" },
 	general: { bg: "#F2EDE6", color: "#7A8E7C", border: "#DDD0BC" },
+	legacy: { bg: "#FFF7ED", color: "#9A3412", border: "#FED7AA" },
 	grid: { bg: "#F5F3FF", color: "#7C3AED", border: "#DDD6FE" },
 	data: { bg: "#F0FDF4", color: "#15803D", border: "#BBF7D0" },
 	accessibility: { bg: "#FFF7ED", color: "#C2410C", border: "#FED7AA" },
@@ -1004,6 +1005,8 @@ type SortKey =
 	| "viabilityRatePct"
 	| "lead"
 	| "isPaused";
+
+type AllQueriesViewMode = "tags" | "legacy" | "all";
 
 function HeaderInfoBadge({
 	text,
@@ -4016,12 +4019,27 @@ export default function Prompts({
 		}
 	}
 
+	const [allQueriesView, setAllQueriesView] =
+		useState<AllQueriesViewMode>("tags");
+	const [expandedQueryGroups, setExpandedQueryGroups] = useState<Set<string>>(
+		new Set(),
+	);
+
 	const prompts = data?.promptStatus ?? [];
+	const activePrompts = useMemo(
+		() => prompts.filter((prompt) => prompt.status !== "deleted"),
+		[prompts],
+	);
+	const legacyPrompts = useMemo(
+		() => prompts.filter((prompt) => prompt.status === "deleted"),
+		[prompts],
+	);
+	const visiblePrompts = allQueriesView === "legacy" ? legacyPrompts : activePrompts;
 	const pausedCount = prompts.filter((p) => p.isPaused).length;
 
 	const sorted = useMemo(() => {
-		if (!sortKey) return prompts;
-		return [...prompts].sort((a, b) => {
+		if (!sortKey) return visiblePrompts;
+		return [...visiblePrompts].sort((a, b) => {
 			let av: string | number | boolean | null;
 			let bv: string | number | boolean | null;
 			if (sortKey === "lead") {
@@ -4042,7 +4060,7 @@ export default function Prompts({
 			if (av > bv) return sortDir === "asc" ? 1 : -1;
 			return 0;
 		});
-	}, [prompts, sortKey, sortDir]);
+	}, [visiblePrompts, sortKey, sortDir]);
 
 	const groupedByTag = useMemo(() => {
 		const map = new Map<string, typeof sorted>();
@@ -4063,10 +4081,6 @@ export default function Prompts({
 	const [competitors, setCompetitors] = useState<string[]>([]);
 	const [triggerToken, setTriggerToken] = useState(() =>
 		readStoredTriggerToken(),
-	);
-	const [allQueriesGrouped, setAllQueriesGrouped] = useState(true);
-	const [expandedQueryGroups, setExpandedQueryGroups] = useState<Set<string>>(
-		new Set(),
 	);
 	const [dirty, setDirty] = useState(false);
 	const [saveSuccess, setSaveSuccess] = useState(false);
@@ -4239,6 +4253,19 @@ export default function Prompts({
 		competitorCitationDomains:
 			configQuery.data?.config.competitorCitationDomains,
 	};
+	const allQueriesViewOptions: Array<{
+		value: AllQueriesViewMode;
+		label: string;
+		count: number;
+	}> = [
+		{ value: "tags", label: "By Tags", count: activePrompts.length },
+		{ value: "legacy", label: "Legacy", count: legacyPrompts.length },
+		{ value: "all", label: "All", count: activePrompts.length },
+	];
+	const emptyPromptRowsMessage =
+		allQueriesView === "legacy"
+			? "No legacy prompts."
+			: "No active prompts matched this view.";
 
 	function sleep(ms: number) {
 		return new Promise<void>((resolve) => {
@@ -4696,32 +4723,35 @@ export default function Prompts({
 					className="flex rounded-lg overflow-hidden"
 					style={{ border: "1px solid #DDD0BC" }}
 				>
-					<button
-						type="button"
-						onClick={() => {
-							setAllQueriesGrouped(true);
-							setExpandedQueryGroups(new Set());
-						}}
-						className="px-3 py-1.5 text-[11px] font-semibold transition-colors"
-						style={{
-							background: allQueriesGrouped ? "#2A3A2C" : "#FDFCF8",
-							color: allQueriesGrouped ? "#FFFFFF" : "#9AAE9C",
-						}}
-					>
-						By Tags
-					</button>
-					<button
-						type="button"
-						onClick={() => setAllQueriesGrouped(false)}
-						className="px-3 py-1.5 text-[11px] font-semibold transition-colors"
-						style={{
-							background: !allQueriesGrouped ? "#2A3A2C" : "#FDFCF8",
-							color: !allQueriesGrouped ? "#FFFFFF" : "#9AAE9C",
-							borderLeft: "1px solid #DDD0BC",
-						}}
-					>
-						All
-					</button>
+					{allQueriesViewOptions.map((option, index) => {
+						const active = allQueriesView === option.value;
+						return (
+							<button
+								key={option.value}
+								type="button"
+								onClick={() => {
+									setAllQueriesView(option.value);
+									if (option.value === "tags") {
+										setExpandedQueryGroups(new Set());
+									}
+								}}
+								className="px-3 py-1.5 text-[11px] font-semibold transition-colors"
+								style={{
+									background: active ? "#2A3A2C" : "#FDFCF8",
+									color: active ? "#FFFFFF" : "#9AAE9C",
+									borderLeft: index === 0 ? "none" : "1px solid #DDD0BC",
+								}}
+							>
+								{option.label}
+								<span
+									className="ml-1 tabular-nums"
+									style={{ opacity: active ? 0.72 : 0.58 }}
+								>
+									{option.count}
+								</span>
+							</button>
+						);
+					})}
 				</div>
 			</div>
 
@@ -4848,7 +4878,19 @@ export default function Prompts({
 											))}
 										</tr>
 									))
-								: allQueriesGrouped
+								: sorted.length === 0
+									? [
+											<tr key="empty-prompts">
+												<td
+													colSpan={11}
+													className="px-4 py-10 text-center text-sm"
+													style={{ color: "#9AAE9C" }}
+												>
+													{emptyPromptRowsMessage}
+												</td>
+											</tr>,
+										]
+								: allQueriesView === "tags"
 									? groupedByTag.flatMap(([tag, groupRows]) => {
 											const s = getTagStyle(tag);
 											const isOpen =

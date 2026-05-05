@@ -3034,14 +3034,21 @@ export default function Dashboard() {
 	const s = data?.summary;
 
 	const promptStatusAll = data?.promptStatus ?? [];
+	const activePromptStatusAll = useMemo(
+		() => promptStatusAll.filter((prompt) => prompt.status !== "deleted"),
+		[promptStatusAll],
+	);
 	const competitorSeriesAll = data?.competitorSeries ?? [];
 
 	const promptStatus = useMemo(() => {
-		if (selectedTagSet.size === 0) return promptStatusAll;
-		return promptStatusAll.filter((prompt) =>
+		const promptPool = selectedTagSet.has("legacy")
+			? promptStatusAll
+			: activePromptStatusAll;
+		if (selectedTagSet.size === 0) return promptPool;
+		return promptPool.filter((prompt) =>
 			promptMatchesTagFilter(prompt.tags, selectedTagSet, tagFilterMode),
 		);
-	}, [promptStatusAll, selectedTagSet, tagFilterMode]);
+	}, [promptStatusAll, activePromptStatusAll, selectedTagSet, tagFilterMode]);
 
 	const tagSummary = useMemo(
 		() =>
@@ -3204,7 +3211,7 @@ export default function Dashboard() {
 				onModeChange={changeTagFilterMode}
 				onClear={clearTagFilter}
 				onClearProviders={clearProviderFilter}
-				totalCount={promptStatusAll.length}
+				totalCount={activePromptStatusAll.length}
 				matchedCount={promptStatus.length}
 				trackedCount={tracked.length}
 				isLoading={isLoading}
