@@ -27,6 +27,38 @@ function isQueueTriggerEnabled() {
 	return parseBoolean(process.env.USE_QUEUE_TRIGGER, false);
 }
 
+function getErrorSearchText(error) {
+	const segments = [];
+	if (error instanceof Error && error.message) {
+		segments.push(error.message);
+	}
+	const payload =
+		typeof error === "object" && error !== null ? error.payload : null;
+	if (payload && typeof payload === "object") {
+		for (const key of ["message", "details", "hint", "error"]) {
+			const value = payload[key];
+			if (typeof value === "string" && value.trim()) {
+				segments.push(value);
+			}
+		}
+	}
+	return segments.join(" ").toLowerCase();
+}
+
+function isSupabaseUnavailable(error) {
+	const text = getErrorSearchText(error);
+	return (
+		text.includes("failed to fetch") ||
+		text.includes("fetch failed") ||
+		text.includes("networkerror") ||
+		text.includes("enotfound") ||
+		text.includes("econnrefused") ||
+		text.includes("etimedout") ||
+		text.includes("missing supabase env config") ||
+		text.includes("supabase is not configured")
+	);
+}
+
 function getSupabaseRestConfig() {
 	const supabaseUrl = String(process.env.SUPABASE_URL || "")
 		.trim()
@@ -164,88 +196,104 @@ function deriveQueueRunStatus(progress) {
 }
 
 async function listQueueRuns() {
-	const restConfig = getSupabaseRestConfig();
-	let runs;
 	try {
-		runs = await supabaseRestRequest(
+		const restConfig = getSupabaseRestConfig();
+		let runs;
+		try {
+			runs = await supabaseRestRequest(
+				restConfig,
+				buildBenchmarkRunsPath(true),
+				"Fetch benchmark runs",
+			);
+		} catch (error) {
+			if (
+				!isMissingSupabaseColumn(error, "run_kind") &&
+				!isMissingSupabaseColumn(error, "cohort_tag")
+			) {
+				throw error;
+			}
+			runs = await supabaseRestRequest(
+				restConfig,
+				buildBenchmarkRunsPath(false),
+				"Fetch benchmark runs",
+			);
+		}
+
+		if (runs.length === 0) {
+			return { runs: [] };
+		}
+
+		const progressRows = await supabaseRestRequest(
 			restConfig,
-			buildBenchmarkRunsPath(true),
-			"Fetch benchmark runs",
+			"/rest/v1/vw_job_progress?select=run_id,total_jobs,completed_jobs,processing_jobs,pending_jobs,failed_jobs,dead_letter_jobs,completion_pct,status&order=created_at.desc&limit=200",
+			"Fetch job progress",
 		);
-	} catch (error) {
-		if (
-			!isMissingSupabaseColumn(error, "run_kind") &&
-			!isMissingSupabaseColumn(error, "cohort_tag")
-		) {
-			throw error;
+		const progressByRunId = new Map();
+		for (const row of progressRows) {
+			if (!row || typeof row !== "object") {
+				continue;
+			}
+			const runId = String(row.run_id || "");
+			if (!runId) {
+				continue;
+			}
+			progressByRunId.set(runId, row);
 		}
-		runs = await supabaseRestRequest(
-			restConfig,
-			buildBenchmarkRunsPath(false),
-			"Fetch benchmark runs",
-		);
-	}
-
-	if (runs.length === 0) {
-		return [];
-	}
-
-	const progressRows = await supabaseRestRequest(
-		restConfig,
-		"/rest/v1/vw_job_progress?select=run_id,total_jobs,completed_jobs,processing_jobs,pending_jobs,failed_jobs,dead_letter_jobs,completion_pct,status&order=created_at.desc&limit=200",
-		"Fetch job progress",
-	);
-	const progressByRunId = new Map();
-	for (const row of progressRows) {
-		if (!row || typeof row !== "object") {
-			continue;
-		}
-		const runId = String(row.run_id || "");
-		if (!runId) {
-			continue;
-		}
-		progressByRunId.set(runId, row);
-	}
-
-	return runs.map((run) => {
-		const runId = String(run.id || "");
-		const progress = progressByRunId.get(runId) || null;
-
-		const totalJobs = Number(progress?.total_jobs || 0);
-		const completedJobs = Number(progress?.completed_jobs || 0);
-		const processingJobs = Number(progress?.processing_jobs || 0);
-		const pendingJobs = Number(progress?.pending_jobs || 0);
-		const failedJobs = Number(progress?.failed_jobs || 0);
-		const deadLetterJobs = Number(progress?.dead_letter_jobs || 0);
-		const completionPct = Number(progress?.completion_pct || 0);
 
 		return {
-			id: runId,
-			runMonth: run.run_month ? String(run.run_month) : null,
-			models: run.model ? String(run.model) : null,
-			runKind: run.run_kind ? String(run.run_kind) : "full",
-			cohortTag: run.cohort_tag ? String(run.cohort_tag) : null,
-			webSearchEnabled:
-				typeof run.web_search_enabled === "boolean"
-					? run.web_search_enabled
-					: null,
-			overallScore:
-				typeof run.overall_score === "number"
-					? Number(run.overall_score)
-					: null,
-			createdAt: run.created_at ? String(run.created_at) : null,
-			progress: {
-				totalJobs,
-				completedJobs,
-				processingJobs,
-				pendingJobs,
-				failedJobs,
-				deadLetterJobs,
-				completionPct,
-			},
-			status: deriveQueueRunStatus(progress),
+			runs: runs.map((run) => {
+				const runId = String(run.id || "");
+				const progress = progressByRunId.get(runId) || null;
+
+				const totalJobs = Number(progress?.total_jobs || 0);
+				const completedJobs = Number(progress?.completed_jobs || 0);
+				const processingJobs = Number(progress?.processing_jobs || 0);
+				const pendingJobs = Number(progress?.pending_jobs || 0);
+				const failedJobs = Number(progress?.failed_jobs || 0);
+				const deadLetterJobs = Number(progress?.dead_letter_jobs || 0);
+				const completionPct = Number(progress?.completion_pct || 0);
+
+				return {
+					id: runId,
+					runMonth: run.run_month ? String(run.run_month) : null,
+					models: run.model ? String(run.model) : null,
+					runKind: run.run_kind ? String(run.run_kind) : "full",
+					cohortTag: run.cohort_tag ? String(run.cohort_tag) : null,
+					webSearchEnabled:
+						typeof run.web_search_enabled === "boolean"
+							? run.web_search_enabled
+							: null,
+					overallScore:
+						typeof run.overall_score === "number"
+							? Number(run.overall_score)
+							: null,
+					createdAt: run.created_at ? String(run.created_at) : null,
+					progress: {
+						totalJobs,
+						completedJobs,
+						processingJobs,
+						pendingJobs,
+						failedJobs,
+						deadLetterJobs,
+						completionPct,
+					},
+					status: deriveQueueRunStatus(progress),
+				};
+			}),
 		};
-	});
+	} catch (error) {
+		if (!isSupabaseUnavailable(error)) {
+			throw error;
+		}
+
+		const config = getGitHubConfig();
+		const runs = await listWorkflowRuns(15);
+		return {
+			workflow: config.workflow,
+			repo: `${config.owner}/${config.repo}`,
+			runs,
+		};
+	}
 }
 
 module.exports = async (req, res) => {
@@ -269,10 +317,10 @@ module.exports = async (req, res) => {
 		enforceTriggerToken(req);
 
 		if (isQueueTriggerEnabled()) {
-			const runs = await listQueueRuns();
+			const response = await listQueueRuns();
 			return sendJson(res, 200, {
 				ok: true,
-				runs,
+				...response,
 			});
 		}
 

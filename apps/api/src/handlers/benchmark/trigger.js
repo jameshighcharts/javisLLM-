@@ -326,6 +326,38 @@ function isQueueTriggerEnabled() {
 	return parseBoolean(process.env.USE_QUEUE_TRIGGER, false);
 }
 
+function getErrorSearchText(error) {
+	const segments = [];
+	if (error instanceof Error && error.message) {
+		segments.push(error.message);
+	}
+	const payload =
+		typeof error === "object" && error !== null ? error.payload : null;
+	if (payload && typeof payload === "object") {
+		for (const key of ["message", "details", "hint", "error"]) {
+			const value = payload[key];
+			if (typeof value === "string" && value.trim()) {
+				segments.push(value);
+			}
+		}
+	}
+	return segments.join(" ").toLowerCase();
+}
+
+function isSupabaseUnavailable(error) {
+	const text = getErrorSearchText(error);
+	return (
+		text.includes("failed to fetch") ||
+		text.includes("fetch failed") ||
+		text.includes("networkerror") ||
+		text.includes("enotfound") ||
+		text.includes("econnrefused") ||
+		text.includes("etimedout") ||
+		text.includes("missing supabase env config") ||
+		text.includes("supabase is not configured")
+	);
+}
+
 function getSupabaseRestConfig() {
 	const supabaseUrl = String(process.env.SUPABASE_URL || "")
 		.trim()
@@ -596,6 +628,47 @@ async function triggerViaQueue(
 	};
 }
 
+async function triggerViaGitHub(
+	model,
+	models,
+	runs,
+	temperature,
+	webSearch,
+	ourTerms,
+	runMonth,
+	promptLimit,
+) {
+	const config = getGitHubConfig();
+	const triggerId = `ui-${Date.now()}`;
+	const workflowInputs = {
+		trigger_id: triggerId,
+		model,
+		models: models.join(","),
+		runs: String(runs),
+		temperature: String(temperature),
+		web_search: webSearch ? "true" : "false",
+		our_terms: ourTerms,
+		run_month: runMonth,
+	};
+	if (promptLimit !== null) {
+		workflowInputs.prompt_limit = String(promptLimit);
+	}
+
+	await dispatchWorkflow(workflowInputs);
+	const matchedRun = await findTriggeredRun(triggerId);
+
+	return {
+		triggerId,
+		workflow: config.workflow,
+		repo: `${config.owner}/${config.repo}`,
+		ref: config.ref,
+		run: matchedRun,
+		message: matchedRun
+			? "Benchmark run queued in GitHub Actions."
+			: "Benchmark dispatch sent. Run may take a few seconds to appear.",
+	};
+}
+
 module.exports = async (req, res) => {
 	try {
 		if (req.method !== "POST") {
@@ -639,31 +712,60 @@ module.exports = async (req, res) => {
 		const cohortTag = resolveCohortTag(body.cohortTag ?? body.cohort_tag);
 
 		if (isQueueTriggerEnabled()) {
-			const queueResult = await triggerViaQueue(
-				body,
-				models,
-				runs,
-				temperature,
-				webSearch,
-				ourTerms,
-				runMonth,
-				promptLimit,
-				promptOrder,
-				cohortTag,
-			);
+			try {
+				const queueResult = await triggerViaQueue(
+					body,
+					models,
+					runs,
+					temperature,
+					webSearch,
+					ourTerms,
+					runMonth,
+					promptLimit,
+					promptOrder,
+					cohortTag,
+				);
 
-			return sendJson(res, 200, {
-				ok: true,
-				runId: queueResult.runId,
-				jobsEnqueued: queueResult.jobsEnqueued,
-				models: queueResult.models,
-				promptLimit: queueResult.promptLimit,
-				promptOrder: queueResult.promptOrder,
-				runMonth: queueResult.runMonth,
-				runKind: queueResult.runKind,
-				cohortTag: queueResult.cohortTag,
-				message: "Benchmark jobs enqueued.",
-			});
+				return sendJson(res, 200, {
+					ok: true,
+					runId: queueResult.runId,
+					jobsEnqueued: queueResult.jobsEnqueued,
+					models: queueResult.models,
+					promptLimit: queueResult.promptLimit,
+					promptOrder: queueResult.promptOrder,
+					runMonth: queueResult.runMonth,
+					runKind: queueResult.runKind,
+					cohortTag: queueResult.cohortTag,
+					message: "Benchmark jobs enqueued.",
+				});
+			} catch (error) {
+				if (!isSupabaseUnavailable(error) || cohortTag) {
+					throw error;
+				}
+				console.warn(
+					"[benchmark.trigger] Queue backend unavailable, falling back to GitHub Actions.",
+					error,
+				);
+				const githubResult = await triggerViaGitHub(
+					model,
+					models,
+					runs,
+					temperature,
+					webSearch,
+					ourTerms,
+					runMonth,
+					promptLimit,
+				);
+
+				return sendJson(res, 200, {
+					ok: true,
+					models,
+					promptLimit,
+					runKind: "full",
+					cohortTag: null,
+					...githubResult,
+				});
+			}
 		}
 
 		if (cohortTag) {
@@ -674,38 +776,24 @@ module.exports = async (req, res) => {
 			throw error;
 		}
 
-		// Legacy GitHub Actions path (feature-flag fallback).
-		const config = getGitHubConfig();
-		const triggerId = `ui-${Date.now()}`;
-		const workflowInputs = {
-			trigger_id: triggerId,
+		const githubResult = await triggerViaGitHub(
 			model,
-			models: models.join(","),
-			runs: String(runs),
-			temperature: String(temperature),
-			web_search: webSearch ? "true" : "false",
-			our_terms: ourTerms,
-			run_month: runMonth,
-		};
-		if (promptLimit !== null) {
-			workflowInputs.prompt_limit = String(promptLimit);
-		}
-
-		await dispatchWorkflow(workflowInputs);
-		const matchedRun = await findTriggeredRun(triggerId);
+			models,
+			runs,
+			temperature,
+			webSearch,
+			ourTerms,
+			runMonth,
+			promptLimit,
+		);
 
 		return sendJson(res, 200, {
 			ok: true,
-			triggerId,
-			workflow: config.workflow,
-			repo: `${config.owner}/${config.repo}`,
-			ref: config.ref,
 			models,
 			promptLimit,
-			run: matchedRun,
-			message: matchedRun
-				? "Benchmark run queued in GitHub Actions."
-				: "Benchmark dispatch sent. Run may take a few seconds to appear.",
+			runKind: "full",
+			cohortTag: null,
+			...githubResult,
 		});
 	} catch (error) {
 		const statusCode =
