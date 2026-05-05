@@ -137,6 +137,35 @@ Optional worker tuning:
 - `WORKER_EMPTY_SLEEP_SECONDS`
 - `WORKER_IDLE_EXIT_SECONDS`
 
+### Railway scheduled benchmark trigger
+
+For production scheduled runs, use a separate Railway cron service that triggers the
+API enqueue path and exits. Keep the benchmark worker service as the always-on queue
+consumer.
+
+Railway cron service settings:
+- Start command: `python scripts/trigger_benchmark_run.py`
+- Cron schedule: `0 7 1,15 * *` (Railway evaluates cron in UTC)
+
+Required cron service env vars:
+- `BENCHMARK_API_BASE_URL` (for example the hosted API URL, or a Railway private URL for the API service)
+- `BENCHMARK_TRIGGER_TOKEN`
+
+Optional cron service env vars:
+- `BENCHMARK_CRON_MODEL` (defaults to the API default when omitted)
+- `BENCHMARK_CRON_MODELS` (comma-separated; overrides `BENCHMARK_CRON_MODEL`)
+- `BENCHMARK_CRON_SELECT_ALL_MODELS=true`
+- `BENCHMARK_CRON_RUNS`
+- `BENCHMARK_CRON_TEMPERATURE`
+- `BENCHMARK_CRON_WEB_SEARCH`
+- `BENCHMARK_CRON_OUR_TERMS`
+- `BENCHMARK_CRON_RUN_MONTH`
+- `BENCHMARK_CRON_PROMPT_ORDER`
+- `BENCHMARK_CRON_COHORT_TAG`
+
+Leave `BENCHMARK_CRON_PROMPT_LIMIT` unset for the normal twice-monthly full run
+across all tracked prompts.
+
 ## Configure inputs (no code edits needed)
 
 Edit `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark_config.json`:
