@@ -170,6 +170,7 @@ const dashboardFiles = {
 	competitorChart: path.join(outputDir, "looker_competitor_chart.csv"),
 	kpi: path.join(outputDir, "looker_kpi.csv"),
 	jsonl: path.join(outputDir, "llm_outputs.jsonl"),
+	promptTags: path.join(outputDir, "prompt_queries_tags.csv"),
 };
 const COMPETITOR_CITATION_DOMAINS_SETTING_KEY = "competitor_citation_domains";
 
@@ -613,6 +614,12 @@ function isTruthyFlag(value: unknown): boolean {
 		.trim()
 		.toLowerCase();
 	return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function normalizeQueryLookupKey(value: unknown): string {
+	return String(value ?? "")
+		.trim()
+		.toLowerCase();
 }
 
 function splitCsvish(value: string): string[] {
@@ -6547,12 +6554,13 @@ app.get(["/api/dashboard", "/api/analytics/dashboard"], async (req, res) => {
 			}
 		}
 
-		const [comparisonRows, competitorRows, kpiRows, jsonlRows] =
+		const [comparisonRows, competitorRows, kpiRows, jsonlRows, promptTagRows] =
 			await Promise.all([
 				readCsv(dashboardFiles.comparison),
 				readCsv(dashboardFiles.competitorChart),
 				readCsv(dashboardFiles.kpi),
 				readJsonl(dashboardFiles.jsonl),
+				readCsv(dashboardFiles.promptTags),
 			]);
 
 		const overallRow =
@@ -6603,6 +6611,9 @@ app.get(["/api/dashboard", "/api/analytics/dashboard"], async (req, res) => {
 					}));
 
 		const promptLookup = new Map(queryRows.map((row) => [row.query, row]));
+		const promptLookupByKey = new Map(
+			queryRows.map((row) => [normalizeQueryLookupKey(row.query), row]),
+		);
 		// JSONL artifacts are rewritten per benchmark run, so the full file is the active snapshot.
 		const latestRunRows = jsonlRows;
 
@@ -6621,10 +6632,38 @@ app.get(["/api/dashboard", "/api/analytics/dashboard"], async (req, res) => {
 			responsesByQueryKey.set(key, bucket);
 		}
 		const queryTags = normalizeQueryTagsMap(config.queries, config.queryTags);
+		const activeQueryKeys = new Set(
+			config.queries.map((query) => normalizeQueryLookupKey(query)),
+		);
+		const localLegacyQueries = new Map<string, string>();
+		for (const row of [...promptTagRows, ...queryRows]) {
+			const query = String(row.query_text ?? row.query ?? "").trim();
+			if (!query) continue;
+			const key = normalizeQueryLookupKey(query);
+			if (activeQueryKeys.has(key) || localLegacyQueries.has(key)) continue;
+			localLegacyQueries.set(key, query);
+		}
 
 		const pausedSet = new Set(config.pausedQueries ?? []);
-		const promptStatus = config.queries.map((query) => {
-			const row = promptLookup.get(query);
+		const localPromptRows = [
+			...config.queries.map((query) => ({
+				query,
+				tags: queryTags[query] ?? inferPromptTags(query),
+				isPaused: pausedSet.has(query),
+				isLegacy: false,
+			})),
+			...[...localLegacyQueries.values()].map((query) => ({
+				query,
+				tags: [LEGACY_PROMPT_TAG],
+				isPaused: false,
+				isLegacy: true,
+			})),
+		];
+		const promptStatus = localPromptRows.map((prompt) => {
+			const query = prompt.query;
+			const row =
+				promptLookup.get(query) ??
+				promptLookupByKey.get(normalizeQueryLookupKey(query));
 			const queryResponses =
 				responsesByQueryKey.get(query.trim().toLowerCase()) ?? [];
 			const latestRunResponseCount = row
@@ -6752,9 +6791,9 @@ app.get(["/api/dashboard", "/api/analytics/dashboard"], async (req, res) => {
 
 			return {
 				query,
-				tags: queryTags[query] ?? inferPromptTags(query),
-				isPaused: pausedSet.has(query),
-				status: row ? "tracked" : "awaiting_run",
+				tags: prompt.tags,
+				isPaused: !prompt.isLegacy && prompt.isPaused,
+				status: prompt.isLegacy ? "deleted" : row ? "tracked" : "awaiting_run",
 				runs: asNumber(row?.runs),
 				highchartsRatePct,
 				highchartsRank:
