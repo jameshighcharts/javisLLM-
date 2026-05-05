@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 COPY llm_mention_benchmark.py /app/llm_mention_benchmark.py
 COPY packages/py/benchmark_core /app/packages/py/benchmark_core
 COPY apps/worker /app/apps/worker
+COPY scripts/trigger_benchmark_run.py /app/scripts/trigger_benchmark_run.py
 RUN ln -s /app/apps/worker /app/worker
 
 CMD ["python", "-m", "worker.benchmark_worker"]
