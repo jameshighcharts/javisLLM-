@@ -4,6 +4,7 @@ import { supabase } from "../api";
 
 type AuthContextType = {
 	isInitialized: boolean;
+	authUnavailable: boolean;
 	session: Session | null;
 	user: User | null;
 	signInWithOtp: (email: string) => Promise<{ error: any }>;
@@ -35,10 +36,65 @@ export function useAuth() {
 	return context;
 }
 
+function isSupabaseFetchFailure(error: unknown): boolean {
+	const parts = new Set<string>();
+	const visited = new Set<object>();
+
+	function collect(value: unknown, depth = 0): void {
+		if (!value || depth > 3) {
+			return;
+		}
+		if (typeof value === "string") {
+			parts.add(value);
+			return;
+		}
+		if (typeof value !== "object") {
+			return;
+		}
+		if (visited.has(value)) {
+			return;
+		}
+		visited.add(value);
+
+		const record = value as {
+			message?: unknown;
+			name?: unknown;
+			code?: unknown;
+			cause?: unknown;
+		};
+
+		if (typeof record.message === "string") {
+			parts.add(record.message);
+		}
+		if (typeof record.name === "string") {
+			parts.add(record.name);
+		}
+		if (typeof record.code === "string") {
+			parts.add(record.code);
+		}
+		if (record.cause !== undefined) {
+			collect(record.cause, depth + 1);
+		}
+	}
+
+	collect(error);
+	const normalized = [...parts].join(" ").toLowerCase();
+	return (
+		normalized.includes("failed to fetch") ||
+		normalized.includes("fetch failed") ||
+		normalized.includes("networkerror") ||
+		normalized.includes("network error") ||
+		normalized.includes("enotfound") ||
+		normalized.includes("econnrefused") ||
+		normalized.includes("etimedout")
+	);
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
 	const [session, setSession] = useState<Session | null>(null);
 	const [user, setUser] = useState<User | null>(null);
 	const [isInitialized, setIsInitialized] = useState(false);
+	const [authUnavailable, setAuthUnavailable] = useState(false);
 
 	function getMagicLinkRedirectUrl() {
 		const configuredRedirect =
@@ -55,30 +111,60 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 	}
 
 	useEffect(() => {
-		if (!supabase) {
+		const client = supabase;
+		if (!client) {
 			console.warn("Supabase client is not configured, bypassing auth.");
+			setAuthUnavailable(true);
 			setIsInitialized(true);
 			return;
 		}
 
-		supabase.auth
-			.getSession()
-			.then(({ data: { session } }: { data: { session: Session | null } }) => {
+		let active = true;
+		let subscription: { unsubscribe: () => void } | null = null;
+
+		const initializeAuth = async () => {
+			try {
+				const {
+					data: { session },
+				} = await client.auth.getSession();
+				if (!active) {
+					return;
+				}
 				setSession(session);
 				setUser(session?.user ?? null);
+				const authState = client.auth.onAuthStateChange(
+					(_event: AuthChangeEvent, nextSession: Session | null) => {
+						if (!active) {
+							return;
+						}
+						setSession(nextSession);
+						setUser(nextSession?.user ?? null);
+					},
+				);
+				subscription = authState.data.subscription;
 				setIsInitialized(true);
-			});
+			} catch (error) {
+				if (!active) {
+					return;
+				}
+				if (isSupabaseFetchFailure(error)) {
+					console.warn("Supabase auth is unavailable, bypassing login.");
+					setAuthUnavailable(true);
+				} else {
+					console.error("Supabase auth initialization failed", error);
+				}
+				setSession(null);
+				setUser(null);
+				setIsInitialized(true);
+			}
+		};
 
-		const {
-			data: { subscription },
-		} = supabase.auth.onAuthStateChange(
-			(_event: AuthChangeEvent, session: Session | null) => {
-				setSession(session);
-				setUser(session?.user ?? null);
-			},
-		);
+		void initializeAuth();
 
-		return () => subscription.unsubscribe();
+		return () => {
+			active = false;
+			subscription?.unsubscribe();
+		};
 	}, []);
 
 	const signInWithOtp = async (email: string) => {
@@ -89,24 +175,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				),
 			};
 		}
-		if (!supabase) return { error: new Error("Supabase not configured") };
-		const { error } = await supabase.auth.signInWithOtp({
-			email,
-			options: {
-				emailRedirectTo: getMagicLinkRedirectUrl(),
-			},
-		});
-		return { error };
+		if (authUnavailable || !supabase) {
+			return {
+				error: new Error("Authentication is unavailable in this deployment."),
+			};
+		}
+		const client = supabase;
+		try {
+			const { error } = await client.auth.signInWithOtp({
+				email,
+				options: {
+					emailRedirectTo: getMagicLinkRedirectUrl(),
+				},
+			});
+			if (error && isSupabaseFetchFailure(error)) {
+				setAuthUnavailable(true);
+			}
+			return { error };
+		} catch (error) {
+			if (isSupabaseFetchFailure(error)) {
+				setAuthUnavailable(true);
+			}
+			return {
+				error:
+					error instanceof Error ? error : new Error(String(error ?? "Unknown error")),
+			};
+		}
 	};
 
 	const signOut = async () => {
-		if (!supabase) return;
-		await supabase.auth.signOut();
+		if (authUnavailable || !supabase) return;
+		const client = supabase;
+		await client.auth.signOut();
 	};
 
 	return (
 		<AuthContext.Provider
-			value={{ session, user, isInitialized, signInWithOtp, signOut }}
+			value={{
+				session,
+				user,
+				isInitialized,
+				authUnavailable,
+				signInWithOtp,
+				signOut,
+			}}
 		>
 			{children}
 		</AuthContext.Provider>

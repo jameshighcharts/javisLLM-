@@ -42,6 +42,21 @@ function hasOwn(value, key) {
 	);
 }
 
+function isSupabaseFetchFailure(error) {
+	const message = error instanceof Error ? error.message : String(error || "");
+	const normalized = message.toLowerCase();
+	return (
+		normalized.includes("failed to fetch") ||
+		normalized.includes("fetch failed") ||
+		normalized.includes("networkerror") ||
+		normalized.includes("enotfound") ||
+		normalized.includes("econnrefused") ||
+		normalized.includes("etimedout") ||
+		normalized.includes("missing supabase env config") ||
+		normalized.includes("supabase is not configured")
+	);
+}
+
 async function resolveBaselineRunId(config, providedBaselineRunId) {
 	const provided = cleanText(providedBaselineRunId);
 	if (provided) {
@@ -195,6 +210,16 @@ module.exports = async (req, res) => {
 			cohort,
 		});
 	} catch (error) {
+		if (req.method === "GET" && isSupabaseFetchFailure(error)) {
+			console.warn(
+				"[research.prompt-cohorts] Supabase unavailable, returning empty snapshot",
+			);
+			return sendJson(res, 200, {
+				ok: true,
+				cohorts: [],
+			});
+		}
+
 		const statusCode =
 			typeof error === "object" && error !== null && Number(error.statusCode)
 				? Number(error.statusCode)

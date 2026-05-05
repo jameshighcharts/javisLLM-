@@ -84,7 +84,7 @@ function LazyPageRoute({
 }
 
 function RootRoute() {
-	const { session, isInitialized } = useAuth();
+	const { session, isInitialized, authUnavailable } = useAuth();
 
 	if (!isInitialized) {
 		return (
@@ -96,10 +96,15 @@ function RootRoute() {
 					Loading...
 				</div>
 			</div>
-		);
+			);
 	}
 
-	return <Navigate to={session ? "/dashboard" : "/login"} replace />;
+	return (
+		<Navigate
+			to={session || authUnavailable ? "/dashboard" : "/login"}
+			replace
+		/>
+	);
 }
 
 export default function App() {

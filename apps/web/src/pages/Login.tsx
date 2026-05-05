@@ -7,23 +7,32 @@ export default function Login() {
 	const [loading, setLoading] = useState(false);
 	const [message, setMessage] = useState("");
 	const [error, setError] = useState("");
-	const { signInWithOtp, session } = useAuth();
+	const { signInWithOtp, session, authUnavailable, isInitialized } = useAuth();
 	const navigate = useNavigate();
 	const location = useLocation();
 
 	const from = location.state?.from?.pathname || "/dashboard";
 
 	useEffect(() => {
-		if (session) {
+		if (!isInitialized) {
+			return;
+		}
+		if (session || authUnavailable) {
 			navigate(from, { replace: true });
 		}
-	}, [session, from, navigate]);
+	}, [authUnavailable, from, isInitialized, navigate, session]);
 
 	const handleLogin = async (e: React.FormEvent) => {
 		e.preventDefault();
 		setLoading(true);
 		setMessage("");
 		setError("");
+
+		if (authUnavailable) {
+			setError("Authentication is unavailable in this deployment.");
+			setLoading(false);
+			return;
+		}
 
 		if (!isAllowedMagicLinkEmail(email)) {
 			setError("Only @highsoft email addresses can receive a magic link.");
@@ -40,6 +49,27 @@ export default function Login() {
 		}
 		setLoading(false);
 	};
+
+	if (!isInitialized || authUnavailable) {
+		return (
+			<div
+				className="min-h-screen flex items-center justify-center p-4"
+				style={{ background: "#F2EDE6" }}
+			>
+				<div
+					className="max-w-md w-full p-8 rounded-2xl shadow-xl flex flex-col gap-3 text-center"
+					style={{ background: "#FDFCF8", border: "1px solid #DDD0BC" }}
+				>
+					<div className="text-sm font-medium" style={{ color: "#3D5C40" }}>
+						Opening the dashboard snapshot…
+					</div>
+					<div className="text-xs" style={{ color: "#7A8E7C" }}>
+						Authentication is not available in this deployment.
+					</div>
+				</div>
+			</div>
+		);
+	}
 
 	return (
 		<div

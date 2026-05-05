@@ -25,6 +25,21 @@ function normalizeLimit(value) {
 	return Math.max(1, Math.min(200, Math.round(parsed)));
 }
 
+function isSupabaseFetchFailure(error) {
+	const message = error instanceof Error ? error.message : String(error || "");
+	const normalized = message.toLowerCase();
+	return (
+		normalized.includes("failed to fetch") ||
+		normalized.includes("fetch failed") ||
+		normalized.includes("networkerror") ||
+		normalized.includes("enotfound") ||
+		normalized.includes("econnrefused") ||
+		normalized.includes("etimedout") ||
+		normalized.includes("missing supabase env config") ||
+		normalized.includes("supabase is not configured")
+	);
+}
+
 module.exports = async (req, res) => {
 	try {
 		if (req.method !== "GET") {
@@ -72,6 +87,14 @@ module.exports = async (req, res) => {
 			gaps: Array.isArray(rows) ? rows : [],
 		});
 	} catch (error) {
+		if (req.method === "GET" && isSupabaseFetchFailure(error)) {
+			console.warn("[research.gaps.list] Supabase unavailable, returning empty snapshot");
+			return sendJson(res, 200, {
+				ok: true,
+				gaps: [],
+			});
+		}
+
 		const statusCode =
 			typeof error === "object" && error !== null && Number(error.statusCode)
 				? Number(error.statusCode)

@@ -17,6 +17,21 @@ function chunkArray(values, size) {
 	return chunks;
 }
 
+function isSupabaseFetchFailure(error) {
+	const message = error instanceof Error ? error.message : String(error || "");
+	const normalized = message.toLowerCase();
+	return (
+		normalized.includes("failed to fetch") ||
+		normalized.includes("fetch failed") ||
+		normalized.includes("networkerror") ||
+		normalized.includes("enotfound") ||
+		normalized.includes("econnrefused") ||
+		normalized.includes("etimedout") ||
+		normalized.includes("missing supabase env config") ||
+		normalized.includes("supabase is not configured")
+	);
+}
+
 async function fetchAverageMentionRateForRun(
 	config,
 	runId,
@@ -199,6 +214,34 @@ module.exports = async (req, res) => {
 			trend,
 		});
 	} catch (error) {
+		if (req.method === "GET" && isSupabaseFetchFailure(error)) {
+			const fallbackId = cleanText(req.query?.id) || "snapshot";
+			console.warn(
+				"[research.prompt-cohorts.progress] Supabase unavailable, returning empty snapshot",
+			);
+			return sendJson(res, 200, {
+				ok: true,
+				cohort: {
+					id: fallbackId,
+					tag: fallbackId,
+					displayName: fallbackId,
+					baselineRunId: "",
+					baselineLockedAt: "",
+					targetPp: 5,
+					targetWeeks: 8,
+					isActive: false,
+				},
+				promptCount: 0,
+				baselineRate: null,
+				currentRate: null,
+				currentRunId: null,
+				upliftPp: null,
+				progressPct: 0,
+				dueDate: null,
+				trend: [],
+			});
+		}
+
 		const statusCode =
 			typeof error === "object" && error !== null && Number(error.statusCode)
 				? Number(error.statusCode)

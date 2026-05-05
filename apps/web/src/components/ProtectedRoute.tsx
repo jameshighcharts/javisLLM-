@@ -2,7 +2,7 @@ import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "./AuthProvider";
 
 export function ProtectedRoute({ children }: { children: React.ReactNode }) {
-	const { session, isInitialized } = useAuth();
+	const { session, isInitialized, authUnavailable } = useAuth();
 	const location = useLocation();
 
 	if (!isInitialized) {
@@ -15,7 +15,11 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
 					Loading...
 				</div>
 			</div>
-		);
+			);
+	}
+
+	if (authUnavailable) {
+		return <>{children}</>;
 	}
 
 	if (!session) {
