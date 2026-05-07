@@ -160,15 +160,6 @@ function shortRunId(value: string) {
 	return `${value.slice(0, 8)}…`;
 }
 
-function fingerprintToken(value: string): string {
-	let hash = 2166136261;
-	for (let index = 0; index < value.length; index += 1) {
-		hash ^= value.charCodeAt(index);
-		hash = Math.imul(hash, 16777619);
-	}
-	return (hash >>> 0).toString(36);
-}
-
 // ── Web Search Toggle ─────────────────────────────────────────────────────────
 
 function WebSearchToggle({
@@ -244,11 +235,7 @@ export default function Runs() {
 	const [cohortTag, setCohortTag] = useState("");
 	const [showAdvanced, setShowAdvanced] = useState(false);
 	const normalizedTriggerToken = triggerToken.trim();
-	const hasManagedRunAccess = normalizedTriggerToken.length > 0;
-	const triggerTokenFingerprint = useMemo(
-		() => fingerprintToken(normalizedTriggerToken),
-		[normalizedTriggerToken],
-	);
+	const hasTriggerToken = normalizedTriggerToken.length > 0;
 	const modelOptionsQuery = useQuery({
 		queryKey: ["benchmark-models"],
 		queryFn: () => api.benchmarkModels(),
@@ -316,10 +303,15 @@ export default function Runs() {
 	}, [defaultModelValues, modelValues]);
 
 	const runsQuery = useQuery({
-		queryKey: ["benchmark-runs", hasManagedRunAccess, triggerTokenFingerprint],
-		queryFn: () => api.benchmarkRuns(normalizedTriggerToken || undefined),
-		enabled: hasManagedRunAccess,
-		refetchInterval: hasManagedRunAccess ? 15_000 : false,
+		queryKey: ["benchmark-runs"],
+		queryFn: () => api.benchmarkRuns(),
+		refetchInterval: (query) => {
+			const data = query.state.data as
+				| { runs?: Array<BenchmarkWorkflowRun | BenchmarkQueueRun> }
+				| undefined;
+			const currentRuns = data?.runs ?? [];
+			return currentRuns.some((run) => isActiveQueueRun(run)) ? 3_000 : 15_000;
+		},
 		retry: false,
 	});
 	const runCostsQuery = useQuery({
@@ -538,28 +530,16 @@ export default function Runs() {
 		},
 	});
 
-	useEffect(() => {
-		if (!hasManagedRunAccess || !hasActiveQueueRun) {
-			return;
-		}
-		const intervalId = window.setInterval(() => {
-			void runsQuery.refetch();
-		}, 3000);
-		return () => {
-			window.clearInterval(intervalId);
-		};
-	}, [hasManagedRunAccess, hasActiveQueueRun, runsQuery.refetch]);
-
 	const canRun =
 		!triggerMutation.isPending &&
 		!stopMutation.isPending &&
-		hasManagedRunAccess &&
+		hasTriggerToken &&
 		effectiveModels.length > 0 &&
 		Boolean(ourTerms.trim()) &&
 		(promptFilter !== "tag" || Boolean(normalizedCohortTag));
 	const canStopActiveRun =
 		queueContractEnabled &&
-		hasManagedRunAccess &&
+		hasTriggerToken &&
 		Boolean(activeQueueRun) &&
 		!stopMutation.isPending;
 
@@ -568,13 +548,15 @@ export default function Runs() {
 		const message =
 			(runsQuery.error as Error).message || "Unable to load runs.";
 		if (message === "Unauthorized trigger token.") {
-			return "Run service is not authorized. Ask an admin to verify environment configuration.";
+			return hasTriggerToken
+				? "Run service rejected the provided trigger token."
+				: "Recent runs are still protected on this deployment.";
 		}
 		if (message === "Internal server error.") {
 			return "Server is not ready to list runs. Ask an admin to verify benchmark API env vars.";
 		}
 		return message;
-	}, [runsQuery.isError, runsQuery.error]);
+	}, [hasTriggerToken, runsQuery.isError, runsQuery.error]);
 
 	const triggerErrorMessage = useMemo(() => {
 		if (!triggerMutation.isError) return "";
@@ -653,7 +635,7 @@ export default function Runs() {
 					</span>
 					<div className="flex items-center gap-3">
 						{/* Status pill */}
-						{hasManagedRunAccess && activeRun ? (
+						{activeRun ? (
 							<span
 								className="text-xs px-2.5 py-1 rounded-full font-semibold"
 								style={{
@@ -666,7 +648,7 @@ export default function Runs() {
 									? `Run #${activeRun.runNumber} in progress`
 									: `In progress${activeRun.progress ? ` · ${Math.round(activeRun.progress.completionPct)}%` : ""}`}
 							</span>
-						) : hasManagedRunAccess ? (
+						) : runsQuery.data ? (
 							<span
 								className="text-xs px-2.5 py-1 rounded-full"
 								style={{
@@ -714,13 +696,13 @@ export default function Runs() {
 						<button
 							type="button"
 							onClick={() => setTriggerToken("")}
-							disabled={!hasManagedRunAccess}
+							disabled={!hasTriggerToken}
 							className="px-3 py-2 rounded-lg text-sm font-medium"
 							style={{
 								border: "1px solid #DDD0BC",
 								background: "#FFFFFF",
-								color: hasManagedRunAccess ? "#536654" : "#9AAE9C",
-								cursor: hasManagedRunAccess ? "pointer" : "not-allowed",
+								color: hasTriggerToken ? "#536654" : "#9AAE9C",
+								cursor: hasTriggerToken ? "pointer" : "not-allowed",
 							}}
 						>
 							Clear
@@ -777,13 +759,12 @@ export default function Runs() {
 						<button
 							type="button"
 							onClick={() => runsQuery.refetch()}
-							disabled={!hasManagedRunAccess}
 							className="px-3 py-2 rounded-lg text-sm font-medium"
 							style={{
 								border: "1px solid #DDD0BC",
-								color: hasManagedRunAccess ? "#2A3A2C" : "#9AAE9C",
+								color: "#2A3A2C",
 								background: "#FFFFFF",
-								cursor: hasManagedRunAccess ? "pointer" : "not-allowed",
+								cursor: "pointer",
 							}}
 						>
 							Refresh
@@ -1195,7 +1176,7 @@ export default function Runs() {
 							{runsErrorMessage}
 						</div>
 					)}
-					{!hasManagedRunAccess && (
+					{!hasTriggerToken && (
 						<div
 							className="rounded-lg px-3 py-2 text-sm"
 							style={{
@@ -1204,7 +1185,7 @@ export default function Runs() {
 								color: "#075985",
 							}}
 						>
-							Enter a trigger token to enable run controls.
+							Trigger token is only needed to start or stop benchmark runs.
 						</div>
 					)}
 				</div>
@@ -1228,19 +1209,15 @@ export default function Runs() {
 							: "Recent Workflow Runs"}
 					</div>
 					<div className="text-xs" style={{ color: "#9AAE9C" }}>
-						{hasManagedRunAccess
+						{hasTriggerToken
 							? hasActiveQueueRun
 								? "Auto-refresh every 3s while running"
 								: "Auto-refresh every 15s"
-							: "Set trigger token to load runs"}
+							: "Read-only view · runs auto-refresh every 15s"}
 					</div>
 				</div>
 
-				{!hasManagedRunAccess ? (
-					<div className="p-5 text-sm" style={{ color: "#7A8E7C" }}>
-						Recent runs are unavailable until a trigger token is set.
-					</div>
-				) : runsQuery.isLoading ? (
+				{runsQuery.isLoading ? (
 					<div className="p-5 space-y-2">
 						{Array.from({ length: 5 }).map((_, i) => (
 							<div

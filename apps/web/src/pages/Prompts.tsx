@@ -2264,8 +2264,7 @@ function QueryLab({
 	}, [competitorCitationDomains]);
 
 	const [moreSettingsOpen, setMoreSettingsOpen] = useState(false);
-	const [showHint, setShowHint] = useState(false);
-	const hintShownRef = useRef(false);
+	const [showHint, setShowHint] = useState(true);
 
 	const canRun =
 		queryText.trim().length > 0 &&
@@ -2461,12 +2460,12 @@ function QueryLab({
 					<div
 						onClick={(e) => e.stopPropagation()}
 						style={{
-							background: "#F9F7F2",
-							borderRadius: 22,
-							border: "1px solid #DDD5C5",
-							boxShadow: "0 32px 80px rgba(15,24,16,0.28), 0 4px 16px rgba(15,24,16,0.10)",
-							padding: "36px 40px 32px",
-							maxWidth: 420,
+							background: "#FAFAF8",
+							borderRadius: 14,
+							border: "1px solid #E0D8CC",
+							boxShadow: "0 20px 50px rgba(15,24,16,0.20), 0 2px 8px rgba(15,24,16,0.06)",
+							padding: "26px 26px 22px",
+							maxWidth: 360,
 							width: "calc(100% - 48px)",
 							position: "relative",
 							animation: "hint-card-in 0.25s cubic-bezier(0.16,1,0.3,1)",
@@ -2476,46 +2475,34 @@ function QueryLab({
 							type="button"
 							onClick={() => setShowHint(false)}
 							style={{
-								position: "absolute", top: 16, right: 16,
-								width: 28, height: 28,
+								position: "absolute", top: 14, right: 14,
+								width: 26, height: 26,
 								display: "flex", alignItems: "center", justifyContent: "center",
-								background: "#EDE7DA", border: "1px solid #DDD0BC",
-								borderRadius: 8, cursor: "pointer", color: "#8A9E8C",
+								background: "#EEEAE2", border: "none",
+								borderRadius: 7, cursor: "pointer", color: "#8A9E8C",
 							}}
 						>
-							<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+							<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
 								<line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
 							</svg>
 						</button>
 
-						<div style={{
-							display: "inline-flex", alignItems: "center", justifyContent: "center",
-							width: 44, height: 44, borderRadius: 12,
-							background: "linear-gradient(135deg, #2A6032 0%, #3D7A46 100%)",
-							boxShadow: "0 4px 14px rgba(42,96,50,0.32)",
-							marginBottom: 20,
-						}}>
-							<svg width="18" height="18" viewBox="0 0 24 24" fill="white" stroke="none">
-								<polygon points="6,3 20,12 6,21" />
-							</svg>
-						</div>
-
-						<div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#96B09A", marginBottom: 8 }}>
+						<div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "#96B09A", marginBottom: 10 }}>
 							Query Lab
 						</div>
 
-						<p style={{ fontSize: 15, fontWeight: 600, color: "#1E2E20", lineHeight: 1.5, margin: "0 0 10px" }}>
-							Test and run single prompts across all models to see if Highcharts gets mentioned.
+						<p style={{ fontSize: 16, fontWeight: 650, color: "#1A2B1C", lineHeight: 1.45, margin: "0 0 8px", letterSpacing: "-0.01em" }}>
+							Test prompts across all models instantly.
 						</p>
 
-						<p style={{ fontSize: 13, color: "#7A8E7C", lineHeight: 1.6, margin: "0 0 28px" }}>
-							For full runs,{" "}
+						<p style={{ fontSize: 13, color: "#7A8E7C", lineHeight: 1.6, margin: "0 0 22px" }}>
+							Run any query and see which LLMs mention Highcharts — and where it ranks. For scheduled full runs,{" "}
 							<Link
 								to="/runs"
-								style={{ color: "#2A6032", fontWeight: 700, textDecoration: "underline", textUnderlineOffset: 3 }}
+								style={{ color: "#2A6032", fontWeight: 600, textDecoration: "underline", textUnderlineOffset: 3 }}
 								onClick={() => setShowHint(false)}
 							>
-								Runs →
+								go to Runs →
 							</Link>
 						</p>
 
@@ -2523,11 +2510,10 @@ function QueryLab({
 							type="button"
 							onClick={() => { setShowHint(false); setTimeout(() => textareaRef.current?.focus(), 50) }}
 							style={{
-								width: "100%", padding: "11px 0", borderRadius: 12,
+								width: "100%", padding: "10px 0", borderRadius: 10,
 								background: "#2A6032", color: "#FFFFFF", border: "none",
-								fontSize: 13, fontWeight: 700, cursor: "pointer",
-								letterSpacing: "-0.01em",
-								boxShadow: "0 2px 14px rgba(42,96,50,0.28)",
+								fontSize: 13, fontWeight: 600, cursor: "pointer",
+								letterSpacing: "0.01em",
 							}}
 						>
 							Got it
@@ -2654,12 +2640,6 @@ function QueryLab({
 									lineHeight: 1.65,
 									color: "#1E2E20",
 									fontFamily: "inherit",
-								}}
-								onFocus={() => {
-									if (!hintShownRef.current) {
-										hintShownRef.current = true;
-										setShowHint(true);
-									}
 								}}
 								onKeyDown={(e) => {
 									if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -4890,7 +4870,7 @@ export default function Prompts({
 												</td>
 											</tr>,
 										]
-								: allQueriesView === "tags"
+									: allQueriesView === "tags"
 									? groupedByTag.flatMap(([tag, groupRows]) => {
 											const s = getTagStyle(tag);
 											const isOpen =

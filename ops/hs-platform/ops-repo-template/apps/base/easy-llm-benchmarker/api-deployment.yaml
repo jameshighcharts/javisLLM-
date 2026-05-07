@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: easy-llm-benchmarker-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: easy-llm-benchmarker-api
+      app.kubernetes.io/part-of: easy-llm-benchmarker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: easy-llm-benchmarker-api
+        app.kubernetes.io/part-of: easy-llm-benchmarker
+    spec:
+      containers:
+        - name: main
+          image: ghcr.io/highsoft-corp/easy-llm-benchmarker-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8787
+              name: http
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: API_PORT
+              value: "8787"
+            - name: DASHBOARD_SOURCE
+              value: "supabase"
+            - name: USE_QUEUE_TRIGGER
+              value: "true"
+            - name: ENABLE_CHATGPT_WEB_SCRAPER
+              value: "false"
+            - name: SUPABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-api-secrets
+                  key: SUPABASE_URL
+            - name: SUPABASE_ANON_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-api-secrets
+                  key: SUPABASE_ANON_KEY
+            - name: SUPABASE_SERVICE_ROLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-api-secrets
+                  key: SUPABASE_SERVICE_ROLE_KEY
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-api-secrets
+                  key: OPENAI_API_KEY
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-api-secrets
+                  key: ANTHROPIC_API_KEY
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-api-secrets
+                  key: GEMINI_API_KEY
+            - name: BENCHMARK_TRIGGER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-api-secrets
+                  key: BENCHMARK_TRIGGER_TOKEN
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

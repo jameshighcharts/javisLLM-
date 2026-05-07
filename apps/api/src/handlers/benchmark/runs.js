@@ -1,4 +1,4 @@
-const { enforceRateLimit, enforceTriggerToken } = require("../_rate-limit");
+const { enforceRateLimit } = require("../_rate-limit");
 const { getGitHubConfig, listWorkflowRuns } = require("../_github");
 
 function sendJson(res, statusCode, payload) {
@@ -141,9 +141,13 @@ function isMissingSupabaseColumn(error, columnName) {
 	const payload =
 		typeof error === "object" && error !== null ? error.payload : null;
 	const code =
-		typeof payload === "object" && payload !== null && typeof payload.code === "string"
+		typeof payload === "object" &&
+		payload !== null &&
+		typeof payload.code === "string"
 			? payload.code
-			: typeof error === "object" && error !== null && typeof error.code === "string"
+			: typeof error === "object" &&
+					error !== null &&
+					typeof error.code === "string"
 				? error.code
 				: "";
 	const searchText = getSupabaseErrorSearchText(error);
@@ -313,8 +317,6 @@ module.exports = async (req, res) => {
 				? rateLimitWindowMs
 				: 60 * 1000,
 		});
-
-		enforceTriggerToken(req);
 
 		if (isQueueTriggerEnabled()) {
 			const response = await listQueueRuns();

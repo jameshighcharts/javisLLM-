@@ -1,33 +1,19 @@
 const { enforceRateLimit } = require("../_rate-limit");
+const {
+	getBenchmarkAllowedModels,
+	getBenchmarkDefaultModelIds,
+	normalizeBenchmarkModelAlias,
+	resolveBenchmarkModelIds,
+} = require("../_benchmark-models");
 
 const OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses";
 const ANTHROPIC_MESSAGES_API_URL = "https://api.anthropic.com/v1/messages";
 const GEMINI_GENERATE_CONTENT_API_ROOT =
 	"https://generativelanguage.googleapis.com/v1beta/models";
-const DEFAULT_MODEL = "gpt-4o-mini";
-const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5-20250929";
-const DEFAULT_CLAUDE_OPUS_MODEL = "claude-opus-4-5-20251101";
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
-const MODEL_ALIASES = {
-	"claude-3-5-sonnet-latest": DEFAULT_CLAUDE_MODEL,
-	"claude-4-6-sonnet-latest": DEFAULT_CLAUDE_MODEL,
-	"claude-sonnet-4-6": DEFAULT_CLAUDE_MODEL,
-	"claude-4-6-opus-latest": DEFAULT_CLAUDE_OPUS_MODEL,
-	"claude-opus-4-6": DEFAULT_CLAUDE_OPUS_MODEL,
-	"gemini-3.0-flash": DEFAULT_GEMINI_MODEL,
-	"gemini-3-flash-preview": DEFAULT_GEMINI_MODEL,
-};
-const FALLBACK_ALLOWED_MODELS = [
-	DEFAULT_MODEL,
-	"gpt-4o",
-	"gpt-5.2",
-	DEFAULT_CLAUDE_MODEL,
-	DEFAULT_CLAUDE_OPUS_MODEL,
-	DEFAULT_GEMINI_MODEL,
-];
+const DEFAULT_MODEL = getBenchmarkDefaultModelIds()[0] || "gpt-4o-mini";
 const QUERY_MAX_LENGTH = 600;
 const SYSTEM_PROMPT =
-	"You are a research assistant for software and tooling questions. Produce clear markdown with short section headers, ranked options, concise rationale, and practical trade-offs. When web search is available, ground factual claims in current web sources.";
+	"You are a research assistant for software and tooling questions. Produce clear markdown with short section headers, ranked options, concise rationale, and practical trade-offs. If web search is enabled, you must use it before answering and cite the sources you relied on in the response.";
 const OPENAI_SYSTEM_PROMPT = [
 	"Do not reproduce song lyrics or any other copyrighted material, even if asked.",
 	"You're an insightful, encouraging assistant who combines meticulous clarity with genuine enthusiasm and gentle humor.\nSupportive thoroughness: Patiently explain complex topics clearly and comprehensively.\nLighthearted interactions: Maintain friendly tone with subtle humor and warmth.\nAdaptive teaching: Flexibly adjust explanations based on perceived user proficiency.\nConfidence-building: Foster intellectual curiosity and self-assurance.",
@@ -39,6 +25,7 @@ const OPENAI_SYSTEM_PROMPT = [
 	"// Guidelines:\n// - Directly generate the image without reconfirmation or clarification, UNLESS the user asks for an image that will include a rendition of them.\n// - Do NOT mention anything related to downloading the image.\n// - Default to using this tool for image editing unless the user explicitly requests otherwise.\n// - After generating the image, do not summarize the image. Respond with an empty message.",
 	"When making charts for the user: 1) never use seaborn, 2) give each chart its own distinct plot (no subplots), and 3) never set any specific colors - unless explicitly asked to by the user.\nI REPEAT: when making charts for the user: 1) use matplotlib over seaborn, 2) give each chart its own distinct plot (no subplots), and 3) never, ever, specify colors or matplotlib styles - unless explicitly asked to by the user",
 	"**Policy reminder**: When using web results for sensitive or high-stakes topics (e.g., financial advice, health information, legal matters), always carefully check multiple reputable sources and present information with clear sourcing and caveats.",
+	"If web search is enabled for this run, you must use it before answering and cite the sources you relied on in the response.",
 	"# Closing Instructions",
 	"You must follow all personality, tone, and formatting requirements stated above in every interaction.",
 	"- **Personality**: Maintain the friendly, encouraging, and clear style described at the top of this prompt. Where appropriate, include gentle humor and warmth without detracting from clarity or accuracy.\n- **Clarity**: Explanations should be thorough but easy to follow. Use headings, lists, and formatting when it improves readability.\n- **Boundaries**: Do not produce disallowed content. This includes copyrighted song lyrics or any other material explicitly restricted in these instructions.\n- **Tool usage**: Only use the tools provided and strictly adhere to their usage guidelines. If the criteria for a tool are not met, do not invoke it.\n- **Accuracy and trust**: For high-stakes topics (e.g., medical, legal, financial), ensure that information is accurate, cite credible sources, and provide appropriate disclaimers.\n- **Freshness**: When the user asks for time-sensitive information, prefer the `web` tool with the correct QDF rating to ensure the information is recent and reliable.",
@@ -88,39 +75,11 @@ function normalizeNumber(value, fallback, min, max) {
 }
 
 function normalizeModelAlias(value) {
-	const normalized = String(value || "").trim();
-	if (!normalized) {
-		return "";
-	}
-	return MODEL_ALIASES[normalized.toLowerCase()] || normalized;
-}
-
-function normalizeModelList(values) {
-	const out = [];
-	const seen = new Set();
-	for (const value of values) {
-		const normalized = normalizeModelAlias(value);
-		if (!normalized) {
-			continue;
-		}
-		const key = normalized.toLowerCase();
-		if (seen.has(key)) {
-			continue;
-		}
-		seen.add(key);
-		out.push(normalized);
-	}
-	return out;
+	return normalizeBenchmarkModelAlias(value);
 }
 
 function getAllowedModels() {
-	const configured = String(process.env.BENCHMARK_ALLOWED_MODELS || "")
-		.split(",")
-		.map((value) => value.trim())
-		.filter(Boolean);
-	return normalizeModelList(
-		configured.length > 0 ? configured : FALLBACK_ALLOWED_MODELS,
-	);
+	return getBenchmarkAllowedModels();
 }
 
 function resolveModel(modelInput, allowedModels) {
@@ -175,7 +134,7 @@ function resolveModels(body, allowedModels) {
 	);
 
 	let candidates = selectAll
-		? allowedModels
+		? getBenchmarkDefaultModelIds()
 		: parseRequestedModels(body.models);
 
 	if (
@@ -267,7 +226,7 @@ function buildPromptLabUserPrompt(effectiveQuery, enforceWebGrounding) {
 	if (!enforceWebGrounding) {
 		return base;
 	}
-	return `${base}\nUse web search before finalizing and include source-grounded statements.`;
+	return `${base}\nYou must use web search before finalizing. Cite the sources you relied on in the answer.`;
 }
 
 function inferProviderFromModel(model) {
@@ -942,7 +901,15 @@ module.exports = async (req, res) => {
 		const body = parseBody(req);
 		const query = resolveQuery(body.query);
 		const allowedModels = getAllowedModels();
-		const models = resolveModels(body, allowedModels);
+		const requestedModels = resolveModels(body, allowedModels);
+		const models = await resolveBenchmarkModelIds(requestedModels, {
+			logger: console,
+		});
+		if (models.length === 0) {
+			const error = new Error("No prompt lab models resolved.");
+			error.statusCode = 400;
+			throw error;
+		}
 		const requestedWebSearch = parseWebSearch(body.webSearch);
 		const searchContext = resolveSearchContext(body.searchContext);
 		const results = await Promise.all(

@@ -1,0 +1,20 @@
+apiVersion: projectcontour.io/v1
+kind: HTTPProxy
+metadata:
+  name: easy-llm-benchmarker
+spec:
+  virtualhost:
+    fqdn: replace-me.invalid
+    tls:
+      secretName: easy-llm-benchmarker-tls
+  routes:
+    - conditions:
+        - prefix: /api
+      services:
+        - name: easy-llm-benchmarker-api
+          port: 8787
+    - conditions:
+        - prefix: /
+      services:
+        - name: easy-llm-benchmarker-web
+          port: 8080

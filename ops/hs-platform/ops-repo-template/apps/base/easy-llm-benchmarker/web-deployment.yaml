@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: easy-llm-benchmarker-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: easy-llm-benchmarker-web
+      app.kubernetes.io/part-of: easy-llm-benchmarker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: easy-llm-benchmarker-web
+        app.kubernetes.io/part-of: easy-llm-benchmarker
+    spec:
+      containers:
+        - name: main
+          image: ghcr.io/highsoft-corp/easy-llm-benchmarker-web:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi

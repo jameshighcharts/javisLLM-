@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: easy-llm-benchmarker-tls
+spec:
+  secretName: easy-llm-benchmarker-tls
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: replace-with-team-cluster-issuer
+  dnsNames:
+    - replace-me.invalid

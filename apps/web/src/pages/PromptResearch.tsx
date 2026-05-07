@@ -175,7 +175,7 @@ export default function PromptResearch() {
 								color: "#5C6E5D",
 							}}
 						>
-							Open Runs (token)
+							Open Runs
 						</Link>
 						{progressQuery.data && (
 							<div

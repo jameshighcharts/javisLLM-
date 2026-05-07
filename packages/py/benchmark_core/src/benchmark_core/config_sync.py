@@ -81,7 +81,7 @@ def infer_prompt_tags(query: str) -> List[str]:
     if "javascript" in normalized or " js " in f" {normalized} ":
         tags.append("javascript")
     if not tags:
-        tags.append("generic")
+        tags.append("general")
     return tags
 
 
@@ -92,7 +92,10 @@ def normalize_prompt_tags(raw_tags: Any, query: str) -> List[str]:
         candidates = [str(item) for item in raw_tags]
     else:
         candidates = []
-    normalized = unique_non_empty(value.lower() for value in candidates)
+    normalized = unique_non_empty(
+        "general" if value.lower() in {"core", "generic"} else value.lower()
+        for value in candidates
+    )
     return normalized if normalized else infer_prompt_tags(query)
 
 

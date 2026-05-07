@@ -527,7 +527,10 @@ function normalizePromptTags(rawTags: unknown, query: string): string[] {
 	return normalized.length > 0 ? normalized : inferPromptTags(query);
 }
 
-function normalizePromptTagsForStatus(rawTags: unknown, query: string): string[] {
+function normalizePromptTagsForStatus(
+	rawTags: unknown,
+	query: string,
+): string[] {
 	if (hasDeletedPromptTag(rawTags)) {
 		return [LEGACY_PROMPT_TAG];
 	}
@@ -3891,7 +3894,9 @@ function summarizePromptStatusForDashboard(promptStatus = []) {
 function toDashboardOverviewPayload(payload) {
 	return {
 		...payload,
-		promptStatus: summarizePromptStatusForDashboard(payload?.promptStatus ?? []),
+		promptStatus: summarizePromptStatusForDashboard(
+			payload?.promptStatus ?? [],
+		),
 	};
 }
 
@@ -5942,10 +5947,7 @@ app.get(
 	"/api/benchmark/models",
 	invokeServerlessHandler(benchmarkModelsHandler),
 );
-app.get(
-	"/api/benchmark/runs",
-	invokeServerlessHandler(benchmarkRunsHandler, { requireTriggerToken: true }),
-);
+app.get("/api/benchmark/runs", invokeServerlessHandler(benchmarkRunsHandler));
 app.post(
 	"/api/benchmark/trigger",
 	requireWriteAccess,
@@ -6573,7 +6575,9 @@ app.get(["/api/dashboard", "/api/analytics/dashboard"], async (req, res) => {
 		const config = await loadConfig();
 		if (shouldUseSupabaseDashboardSource()) {
 			try {
-				const selectedProviders = normalizeSelectedProviders(req.query.providers);
+				const selectedProviders = normalizeSelectedProviders(
+					req.query.providers,
+				);
 				const payload =
 					selectedProviders.length > 0
 						? await fetchDashboardFromSupabaseTablesForServer(config, {
@@ -6944,28 +6948,28 @@ app.get(["/api/dashboard", "/api/analytics/dashboard"], async (req, res) => {
 });
 
 app.get(["/api/timeseries", "/api/analytics/timeseries"], async (req, res) => {
-		try {
-			const selectedTags = normalizeSelectedTags(req.query.tags);
-			const selectedProviders = normalizeSelectedProviders(req.query.providers);
-			const tagFilterMode: "any" | "all" =
-				String(req.query.mode ?? "any").toLowerCase() === "all" ? "all" : "any";
+	try {
+		const selectedTags = normalizeSelectedTags(req.query.tags);
+		const selectedProviders = normalizeSelectedProviders(req.query.providers);
+		const tagFilterMode: "any" | "all" =
+			String(req.query.mode ?? "any").toLowerCase() === "all" ? "all" : "any";
 
-			if (shouldUseSupabaseDashboardSource()) {
-				try {
-					const payload = await fetchTimeseriesFromSupabaseForServer({
-						tags: selectedTags,
-						mode: tagFilterMode,
-						providers: selectedProviders,
-					});
-					res.json(payload);
-					return;
-				} catch (error) {
-					console.warn(
-						"[api.timeseries] Supabase snapshot failed, using fixture snapshot.",
-						error,
-					);
-				}
+		if (shouldUseSupabaseDashboardSource()) {
+			try {
+				const payload = await fetchTimeseriesFromSupabaseForServer({
+					tags: selectedTags,
+					mode: tagFilterMode,
+					providers: selectedProviders,
+				});
+				res.json(payload);
+				return;
+			} catch (error) {
+				console.warn(
+					"[api.timeseries] Supabase snapshot failed, using fixture snapshot.",
+					error,
+				);
 			}
+		}
 
 		const [config, jsonlRows] = await Promise.all([
 			loadConfig(),
@@ -7218,7 +7222,7 @@ app.get("/api/research/competitor-blogs", async (req, res) => {
 		});
 	} catch (error) {
 		const message = String(
-			error instanceof Error ? error.message : error ?? "",
+			error instanceof Error ? error.message : (error ?? ""),
 		).toLowerCase();
 		if (
 			message.includes("fetch failed") ||
@@ -7716,10 +7720,10 @@ app.get(
 				),
 				runPoints,
 				responses: responseItems,
-		});
+			});
 		} catch (error) {
 			const message = String(
-				error instanceof Error ? error.message : error ?? "",
+				error instanceof Error ? error.message : (error ?? ""),
 			).toLowerCase();
 			if (
 				message.includes("fetch failed") ||
@@ -7740,7 +7744,9 @@ app.get(
 					res.json({
 						generatedAt: new Date().toISOString(),
 						prompt: {
-							id: String(promptIndex >= 0 ? promptIndex + 1 : promptQuery || ""),
+							id: String(
+								promptIndex >= 0 ? promptIndex + 1 : promptQuery || "",
+							),
 							query: promptQuery,
 							sortOrder: promptIndex >= 0 ? promptIndex + 1 : 0,
 							isPaused: (config.pausedQueries ?? []).some(
@@ -7920,7 +7926,7 @@ app.get("/api/analytics/citation-links", async (req, res) => {
 		});
 	} catch (error) {
 		const message = String(
-			error instanceof Error ? error.message : error ?? "",
+			error instanceof Error ? error.message : (error ?? ""),
 		).toLowerCase();
 		if (
 			message.includes("fetch failed") ||
@@ -8245,7 +8251,7 @@ app.get("/api/analytics/askill", async (req, res) => {
 		});
 	} catch (error) {
 		const message = String(
-			error instanceof Error ? error.message : error ?? "",
+			error instanceof Error ? error.message : (error ?? ""),
 		).toLowerCase();
 		if (
 			message.includes("fetch failed") ||

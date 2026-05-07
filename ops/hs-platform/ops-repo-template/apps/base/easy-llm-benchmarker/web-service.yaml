@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: easy-llm-benchmarker-web
+spec:
+  selector:
+    app.kubernetes.io/name: easy-llm-benchmarker-web
+    app.kubernetes.io/part-of: easy-llm-benchmarker
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

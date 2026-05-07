@@ -353,7 +353,9 @@ function parsePromptTagList(rawTags: unknown): string[] {
 	return uniqueNonEmpty(
 		candidates.map((value) => {
 			const normalizedTag = value.trim().toLowerCase();
-			return normalizedTag === "generic" ? "general" : normalizedTag;
+			return normalizedTag === "generic" || normalizedTag === "core"
+				? "general"
+				: normalizedTag;
 		}),
 	);
 }

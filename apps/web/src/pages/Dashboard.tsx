@@ -1848,6 +1848,7 @@ function VisibilityChart({
 		title: { text: undefined },
 		xAxis: {
 			type: "datetime",
+			min: Date.UTC(new Date().getFullYear(), 0, 1),
 			lineWidth: 0,
 			tickWidth: 0,
 			gridLineWidth: 0,

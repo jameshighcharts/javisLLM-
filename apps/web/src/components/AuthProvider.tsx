@@ -28,6 +28,14 @@ export function isAllowedMagicLinkEmail(email: string): boolean {
 	return domain === "highsoft" || domain === "highsoft.com";
 }
 
+function isLocalAuthBypassEnabled(): boolean {
+	return (
+		import.meta.env.DEV &&
+		String(import.meta.env.VITE_AUTH_BYPASS ?? "").trim().toLowerCase() ===
+			"true"
+	);
+}
+
 export function useAuth() {
 	const context = useContext(AuthContext);
 	if (context === undefined) {
@@ -111,6 +119,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 	}
 
 	useEffect(() => {
+		if (isLocalAuthBypassEnabled()) {
+			console.warn("Local auth bypass is enabled, bypassing login.");
+			setAuthUnavailable(true);
+			setIsInitialized(true);
+			return;
+		}
+
 		const client = supabase;
 		if (!client) {
 			console.warn("Supabase client is not configured, bypassing auth.");

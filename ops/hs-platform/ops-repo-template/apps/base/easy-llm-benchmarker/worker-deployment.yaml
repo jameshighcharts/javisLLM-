@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: easy-llm-benchmarker-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: easy-llm-benchmarker-worker
+      app.kubernetes.io/part-of: easy-llm-benchmarker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: easy-llm-benchmarker-worker
+        app.kubernetes.io/part-of: easy-llm-benchmarker
+    spec:
+      containers:
+        - name: main
+          image: ghcr.io/highsoft-corp/easy-llm-benchmarker-worker:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: WORKER_QUEUE_NAME
+              value: benchmark_jobs
+            - name: WORKER_VT_SECONDS
+              value: "120"
+            - name: WORKER_POLL_QTY
+              value: "1"
+            - name: WORKER_EMPTY_SLEEP_SECONDS
+              value: "2"
+            - name: WORKER_IDLE_EXIT_SECONDS
+              value: "300"
+            - name: SUPABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-worker-secrets
+                  key: SUPABASE_URL
+            - name: SUPABASE_SERVICE_ROLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-worker-secrets
+                  key: SUPABASE_SERVICE_ROLE_KEY
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-worker-secrets
+                  key: OPENAI_API_KEY
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-worker-secrets
+                  key: ANTHROPIC_API_KEY
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-worker-secrets
+                  key: GEMINI_API_KEY
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
