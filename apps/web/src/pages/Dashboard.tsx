@@ -4,7 +4,13 @@ import { useQuery } from "@tanstack/react-query";
 import Highcharts from "highcharts";
 import HighchartsReact from "highcharts-react-official";
 import type { CSSProperties, ReactNode } from "react";
-import { startTransition, useEffect, useDeferredValue, useMemo, useState } from "react";
+import {
+	startTransition,
+	useEffect,
+	useDeferredValue,
+	useMemo,
+	useState,
+} from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import type {
@@ -155,7 +161,6 @@ const RIVAL_COLORS = [
 	"#90A878",
 ];
 
-
 function rivalColor(indexAmongRivals: number) {
 	return RIVAL_COLORS[indexAmongRivals % RIVAL_COLORS.length];
 }
@@ -191,7 +196,6 @@ type TagSummary = {
 	tag: string;
 	count: number;
 };
-
 
 type ProviderFilterValue = "chatgpt" | "claude" | "gemini";
 
@@ -468,9 +472,14 @@ type PromptReachTiers = {
 	total: number;
 };
 
-function buildPromptReachTiers(prompts: PromptStatusSummary[]): PromptReachTiers {
+function buildPromptReachTiers(
+	prompts: PromptStatusSummary[],
+): PromptReachTiers {
 	const tracked = prompts.filter((p) => p.status === "tracked");
-	let strong = 0, moderate = 0, light = 0, absent = 0;
+	let strong = 0,
+		moderate = 0,
+		light = 0,
+		absent = 0;
 	for (const p of tracked) {
 		const rate = Math.max(0, p.highchartsRatePct);
 		if (rate >= 75) strong++;
@@ -1178,10 +1187,34 @@ const REACH_TIERS: Array<{
 	color: string;
 	bg: string;
 }> = [
-	{ key: "strong",   label: "Strong",   threshold: "≥75%", color: "#3D6B47", bg: "#EAF3EB" },
-	{ key: "moderate", label: "Moderate", threshold: "≥50%", color: "#6B8C52", bg: "#F0F5EA" },
-	{ key: "light",    label: "Light",    threshold: ">0%",  color: "#C09A4A", bg: "#FAF4E6" },
-	{ key: "absent",   label: "Absent",   threshold: "0%",   color: "#B05A4A", bg: "#FAF0EE" },
+	{
+		key: "strong",
+		label: "Strong",
+		threshold: "≥75%",
+		color: "#3D6B47",
+		bg: "#EAF3EB",
+	},
+	{
+		key: "moderate",
+		label: "Moderate",
+		threshold: "≥50%",
+		color: "#6B8C52",
+		bg: "#F0F5EA",
+	},
+	{
+		key: "light",
+		label: "Light",
+		threshold: ">0%",
+		color: "#C09A4A",
+		bg: "#FAF4E6",
+	},
+	{
+		key: "absent",
+		label: "Absent",
+		threshold: "0%",
+		color: "#B05A4A",
+		bg: "#FAF0EE",
+	},
 ];
 
 function promptsForTier(
@@ -1192,9 +1225,9 @@ function promptsForTier(
 	return tracked
 		.filter((p) => {
 			const rate = Math.max(0, p.highchartsRatePct);
-			if (tier === "strong")   return rate >= 75;
+			if (tier === "strong") return rate >= 75;
 			if (tier === "moderate") return rate >= 50 && rate < 75;
-			if (tier === "light")    return rate > 0 && rate < 50;
+			if (tier === "light") return rate > 0 && rate < 50;
 			return rate === 0;
 		})
 		.sort((a, b) =>
@@ -1213,11 +1246,16 @@ function PromptReachModal({
 	prompts: PromptStatusSummary[];
 	onClose: () => void;
 }) {
-	const list = useMemo(() => promptsForTier(prompts, tier.key), [prompts, tier.key]);
+	const list = useMemo(
+		() => promptsForTier(prompts, tier.key),
+		[prompts, tier.key],
+	);
 
 	// Close on Escape
 	useEffect(() => {
-		const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+		const handler = (e: KeyboardEvent) => {
+			if (e.key === "Escape") onClose();
+		};
 		window.addEventListener("keydown", handler);
 		return () => window.removeEventListener("keydown", handler);
 	}, [onClose]);
@@ -1249,7 +1287,10 @@ function PromptReachModal({
 						>
 							{tier.label}
 						</span>
-						<span className="text-sm font-semibold" style={{ color: "#2A3A2C" }}>
+						<span
+							className="text-sm font-semibold"
+							style={{ color: "#2A3A2C" }}
+						>
 							{list.length} prompt{list.length !== 1 ? "s" : ""}
 						</span>
 						<span className="text-xs" style={{ color: "#9AAE9C" }}>
@@ -1290,9 +1331,16 @@ function PromptReachModal({
 									{/* Rate badge */}
 									<span
 										className="mt-0.5 shrink-0 text-[11px] font-bold tabular-nums rounded-md px-1.5 py-0.5"
-										style={{ background: tier.bg, color: tier.color, minWidth: 42, textAlign: "center" }}
+										style={{
+											background: tier.bg,
+											color: tier.color,
+											minWidth: 42,
+											textAlign: "center",
+										}}
 									>
-										{tier.key === "absent" ? "—" : `${p.highchartsRatePct.toFixed(0)}%`}
+										{tier.key === "absent"
+											? "—"
+											: `${p.highchartsRatePct.toFixed(0)}%`}
 									</span>
 
 									{/* Query + tags */}
@@ -1317,7 +1365,10 @@ function PromptReachModal({
 													</span>
 												))}
 												{p.tags.length > 4 && (
-													<span className="text-[10px]" style={{ color: "#9AAE9C" }}>
+													<span
+														className="text-[10px]"
+														style={{ color: "#9AAE9C" }}
+													>
 														+{p.tags.length - 4}
 													</span>
 												)}
@@ -1376,27 +1427,45 @@ function PromptReachCard({
 						<button
 							type="button"
 							className="w-4 h-4 rounded-full text-[10px] font-semibold border flex items-center justify-center"
-							style={{ color: "#6B8470", borderColor: "#D8CEC0", background: "#FEFCF9" }}
+							style={{
+								color: "#6B8470",
+								borderColor: "#D8CEC0",
+								background: "#FEFCF9",
+							}}
 							aria-label="About prompt reach"
 						>
 							i
 						</button>
 						<div
 							className="pointer-events-none absolute right-0 top-5 z-20 w-60 rounded-lg border px-3 py-2.5 text-[10px] opacity-0 transition-opacity shadow-sm group-hover:opacity-100 group-focus-within:opacity-100"
-							style={{ background: "#FFFFFF", borderColor: "#DDD0BC", color: "#6E8472" }}
+							style={{
+								background: "#FFFFFF",
+								borderColor: "#DDD0BC",
+								color: "#6E8472",
+							}}
 						>
-							<p className="font-semibold text-[11px] mb-2" style={{ color: "#2A3A2C" }}>
+							<p
+								className="font-semibold text-[11px] mb-2"
+								style={{ color: "#2A3A2C" }}
+							>
 								Highcharts mention rate per prompt
 							</p>
-							{([
-								["Strong", "≥75% of responses mention HC"],
-								["Moderate", "50–74% of responses mention HC"],
-								["Light", "1–49% of responses mention HC"],
-								["Absent", "HC never mentioned"],
-							] as [string, string][]).map(([l, v]) => (
-								<div key={l} className="flex items-baseline justify-between gap-3 mt-2">
+							{(
+								[
+									["Strong", "≥75% of responses mention HC"],
+									["Moderate", "50–74% of responses mention HC"],
+									["Light", "1–49% of responses mention HC"],
+									["Absent", "HC never mentioned"],
+								] as [string, string][]
+							).map(([l, v]) => (
+								<div
+									key={l}
+									className="flex items-baseline justify-between gap-3 mt-2"
+								>
 									<span>{l}</span>
-									<span className="text-right" style={{ color: "#4A6050" }}>{v}</span>
+									<span className="text-right" style={{ color: "#4A6050" }}>
+										{v}
+									</span>
 								</div>
 							))}
 						</div>
@@ -1422,7 +1491,10 @@ function PromptReachCard({
 						<>
 							{/* Headline */}
 							<div className="flex items-baseline gap-2 pt-1 pb-3">
-								<span className="text-4xl font-bold tracking-tight" style={{ color: "#2A3A2C" }}>
+								<span
+									className="text-4xl font-bold tracking-tight"
+									style={{ color: "#2A3A2C" }}
+								>
 									{reachPct.toFixed(0)}%
 								</span>
 								<span className="text-xs" style={{ color: "#9AAE9C" }}>
@@ -1447,8 +1519,10 @@ function PromptReachCard({
 												cursor: "pointer",
 											}}
 											onMouseEnter={(e) => {
-												(e.currentTarget as HTMLElement).style.filter = "brightness(0.96)";
-												(e.currentTarget as HTMLElement).style.boxShadow = `0 0 0 1.5px ${tier.color}40`;
+												(e.currentTarget as HTMLElement).style.filter =
+													"brightness(0.96)";
+												(e.currentTarget as HTMLElement).style.boxShadow =
+													`0 0 0 1.5px ${tier.color}40`;
 											}}
 											onMouseLeave={(e) => {
 												(e.currentTarget as HTMLElement).style.filter = "";
@@ -1456,18 +1530,30 @@ function PromptReachCard({
 											}}
 										>
 											<div className="flex items-center justify-between">
-												<span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: tier.color }}>
+												<span
+													className="text-[10px] font-semibold uppercase tracking-wide"
+													style={{ color: tier.color }}
+												>
 													{tier.label}
 												</span>
-												<span className="text-[10px]" style={{ color: tier.color, opacity: 0.7 }}>
+												<span
+													className="text-[10px]"
+													style={{ color: tier.color, opacity: 0.7 }}
+												>
 													{tier.threshold}
 												</span>
 											</div>
 											<div className="flex items-baseline gap-1.5">
-												<span className="text-xl font-bold leading-tight" style={{ color: tier.color }}>
+												<span
+													className="text-xl font-bold leading-tight"
+													style={{ color: tier.color }}
+												>
 													{count}
 												</span>
-												<span className="text-[11px]" style={{ color: tier.color, opacity: 0.65 }}>
+												<span
+													className="text-[11px]"
+													style={{ color: tier.color, opacity: 0.65 }}
+												>
 													{pct.toFixed(0)}%
 												</span>
 											</div>
@@ -1479,13 +1565,18 @@ function PromptReachCard({
 							{/* Stacked bar — segments also clickable */}
 							<div className="flex h-2 w-full rounded-full overflow-hidden gap-px cursor-pointer">
 								{REACH_TIERS.map((tier) => {
-									const pct = tiers.total > 0 ? (tiers[tier.key] / tiers.total) * 100 : 0;
+									const pct =
+										tiers.total > 0 ? (tiers[tier.key] / tiers.total) * 100 : 0;
 									if (pct === 0) return null;
 									return (
 										<div
 											key={tier.key}
 											onClick={() => setActiveTier(tier.key)}
-											style={{ width: `${pct}%`, background: tier.color, opacity: 0.85 }}
+											style={{
+												width: `${pct}%`,
+												background: tier.color,
+												opacity: 0.85,
+											}}
 										/>
 									);
 								})}
@@ -1757,6 +1848,7 @@ function VisibilityChart({
 		}
 		return Date.parse(`${point.date}T12:00:00Z`);
 	};
+	const xAxisMin = pointTimestamp(points[0]);
 
 	if (points.length === 0) {
 		return (
@@ -1848,7 +1940,7 @@ function VisibilityChart({
 		title: { text: undefined },
 		xAxis: {
 			type: "datetime",
-			min: Date.UTC(new Date().getFullYear(), 0, 1),
+			min: xAxisMin,
 			lineWidth: 0,
 			tickWidth: 0,
 			gridLineWidth: 0,
@@ -3178,11 +3270,18 @@ export default function Dashboard() {
 
 	const timeseriesPoints = useMemo((): TimeSeriesPoint[] => {
 		const livePoints = sortTimeSeriesPoints(tsData?.points ?? []);
-		if (normalizedSelectedTags.length > 0 || normalizedSelectedProviders.length > 0) {
+		if (
+			normalizedSelectedTags.length > 0 ||
+			normalizedSelectedProviders.length > 0
+		) {
 			return livePoints;
 		}
 		return mergePreviousDashboardTimeSeries(livePoints);
-	}, [tsData, normalizedSelectedTags.length, normalizedSelectedProviders.length]);
+	}, [
+		tsData,
+		normalizedSelectedTags.length,
+		normalizedSelectedProviders.length,
+	]);
 
 	if (isError) {
 		return (
@@ -3224,10 +3323,7 @@ export default function Dashboard() {
 					<ScoreStatCard score={overallScore} isLoading={isLoading} />
 				</div>
 				<div className="sm:col-span-1 xl:col-span-2">
-					<PromptReachCard
-						prompts={promptStatus}
-						isLoading={isLoading}
-					/>
+					<PromptReachCard prompts={promptStatus} isLoading={isLoading} />
 				</div>
 				<TotalPromptsCard
 					count={tracked.length}

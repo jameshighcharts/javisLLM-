@@ -1457,6 +1457,45 @@ export default function PromptDrilldown() {
 				</div>
 			</div>
 
+			<div
+				className="rounded-xl border shadow-sm"
+				style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}
+			>
+				<div
+					className="px-5 py-4"
+					style={{ borderBottom: "1px solid #F2EDE6" }}
+				>
+					<div
+						className="text-sm font-semibold tracking-tight"
+						style={{ color: "#2A3A2C" }}
+					>
+						Output Explorer
+					</div>
+					<div className="text-xs mt-0.5" style={{ color: "#9AAE9C" }}>
+						Raw LLM output, mention matches, and citations for each response
+					</div>
+				</div>
+				<div className="p-4">
+					{loading ? (
+						<div className="space-y-3">
+							{Array.from({ length: 3 }).map((_, index) => (
+								<div
+									key={index}
+									className="h-[160px] rounded-lg animate-pulse"
+									style={{ background: "#E5DDD0" }}
+								/>
+							))}
+						</div>
+					) : (
+						<ResponseExplorer
+							responses={data.responses}
+							runOptions={data.runPoints}
+							promptQuery={data.prompt.query}
+						/>
+					)}
+				</div>
+			</div>
+
 			{loading ? (
 				<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
 					{Array.from({ length: 6 }).map((_, index) => (
@@ -1904,45 +1943,6 @@ export default function PromptDrilldown() {
 					limit={12}
 				/>
 			)}
-
-			<div
-				className="rounded-xl border shadow-sm"
-				style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}
-			>
-				<div
-					className="px-5 py-4"
-					style={{ borderBottom: "1px solid #F2EDE6" }}
-				>
-					<div
-						className="text-sm font-semibold tracking-tight"
-						style={{ color: "#2A3A2C" }}
-					>
-						Output Explorer
-					</div>
-					<div className="text-xs mt-0.5" style={{ color: "#9AAE9C" }}>
-						Raw LLM output, mention matches, and citations for each response
-					</div>
-				</div>
-				<div className="p-4">
-					{loading ? (
-						<div className="space-y-3">
-							{Array.from({ length: 3 }).map((_, index) => (
-								<div
-									key={index}
-									className="h-[160px] rounded-lg animate-pulse"
-									style={{ background: "#E5DDD0" }}
-								/>
-							))}
-						</div>
-					) : (
-						<ResponseExplorer
-							responses={data.responses}
-							runOptions={data.runPoints}
-							promptQuery={data.prompt.query}
-						/>
-					)}
-				</div>
-			</div>
 		</div>
 	);
 }
