@@ -298,7 +298,7 @@ class ProviderRoutingTests(unittest.TestCase):
         self.assertEqual(len(fake_client.responses.calls), 1)
         system_prompt = fake_client.responses.calls[0]["input"][0]["content"]
         self.assertEqual(system_prompt, bench.OPENAI_SYSTEM_PROMPT)
-        self.assertIn("Do not reproduce song lyrics", system_prompt)
+        self.assertEqual(fake_client.responses.calls[0]["temperature"], 0.7)
 
     def test_anthropic_keeps_default_system_prompt(self):
         fake_client = FakeAnthropicClient(
@@ -319,6 +319,33 @@ class ProviderRoutingTests(unittest.TestCase):
         self.assertEqual(usage["total_tokens"], 0)
         self.assertEqual(len(fake_client.messages.calls), 1)
         self.assertEqual(fake_client.messages.calls[0]["system"], bench.SYSTEM_PROMPT)
+        self.assertEqual(fake_client.messages.calls[0]["temperature"], 0.7)
+
+    def test_omits_temperature_for_models_that_reject_it(self):
+        openai_client = FakeClient([{"output_text": "OpenAI response."}])
+        anthropic_client = FakeAnthropicClient(
+            [{"content": [{"type": "text", "text": "Anthropic response."}]}]
+        )
+
+        bench.generate_with_optional_retry(
+            openai_client,
+            "openai",
+            "gpt-5.5",
+            "charting libraries",
+            0.7,
+            False,
+        )
+        bench.generate_with_optional_retry(
+            anthropic_client,
+            "anthropic",
+            "claude-opus-4-7",
+            "charting libraries",
+            0.7,
+            False,
+        )
+
+        self.assertNotIn("temperature", openai_client.responses.calls[0])
+        self.assertNotIn("temperature", anthropic_client.messages.calls[0])
 
 
 class CliIntegrationTests(unittest.TestCase):

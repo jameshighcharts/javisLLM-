@@ -541,6 +541,27 @@ def infer_provider_from_model(model: str) -> str:
     return "openai"
 
 
+def _providerless_model_id(model: str) -> str:
+    normalized = str(model).strip().lower()
+    provider, separator, model_id = normalized.partition("/")
+    if separator and provider in {"anthropic", "google", "openai"}:
+        return model_id
+    return normalized
+
+
+def _supports_temperature_parameter(provider: str, model: str) -> bool:
+    normalized_provider = str(provider).strip().lower()
+    model_id = _providerless_model_id(model)
+    if normalized_provider == "anthropic":
+        return not (
+            model_id == "claude-opus-4-7"
+            or model_id.startswith("claude-opus-4-7-")
+        )
+    if normalized_provider == "openai":
+        return not (model_id == "gpt-5.5" or model_id.startswith("gpt-5.5-"))
+    return True
+
+
 def resolve_api_key_env(provider: str, api_key_env_override: str) -> str:
     override = str(api_key_env_override or "").strip()
     if override:
@@ -942,18 +963,20 @@ def generate_with_optional_retry(
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             if provider == "anthropic":
-                response_obj = client.messages.create(
-                    model=model,
-                    temperature=temperature,
-                    max_tokens=1024,
-                    system=system_prompt,
-                    messages=[
+                anthropic_payload: Dict[str, Any] = {
+                    "model": model,
+                    "max_tokens": 1024,
+                    "system": system_prompt,
+                    "messages": [
                         {
                             "role": "user",
                             "content": user_prompt,
                         }
                     ],
-                )
+                }
+                if _supports_temperature_parameter(provider, model):
+                    anthropic_payload["temperature"] = temperature
+                response_obj = client.messages.create(**anthropic_payload)
             elif provider == "google":
                 response_obj = client.generate_content(
                     model=model,
@@ -962,17 +985,18 @@ def generate_with_optional_retry(
                     temperature=temperature,
                 )
             else:
-                payload: Dict[str, Any] = {
+                openai_payload: Dict[str, Any] = {
                     "model": model,
-                    "temperature": temperature,
                     "input": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
                 }
+                if _supports_temperature_parameter(provider, model):
+                    openai_payload["temperature"] = temperature
                 if web_search:
-                    payload["tools"] = [{"type": "web_search_preview"}]
-                response_obj = client.responses.create(**payload)
+                    openai_payload["tools"] = [{"type": "web_search_preview"}]
+                response_obj = client.responses.create(**openai_payload)
             response_dict = to_plain_dict(response_obj)
             text = extract_response_text(response_obj, response_dict)
             citations = extract_citations(response_dict)
