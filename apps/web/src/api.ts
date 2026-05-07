@@ -4,6 +4,7 @@ import type {
 	AskillResponse,
 	AskillUrlStat,
 	BenchmarkConfig,
+	BenchmarkModelsResponse,
 	BenchmarkRunCostsResponse,
 	BenchmarkRunsResponse,
 	BenchmarkStopResponse,
@@ -374,7 +375,10 @@ function normalizePromptTags(rawTags: unknown, query: string): string[] {
 	return normalized.length > 0 ? normalized : inferPromptTags(query);
 }
 
-function normalizePromptTagsForStatus(rawTags: unknown, query: string): string[] {
+function normalizePromptTagsForStatus(
+	rawTags: unknown,
+	query: string,
+): string[] {
 	if (hasDeletedPromptTag(rawTags)) {
 		return [LEGACY_PROMPT_TAG];
 	}
@@ -6351,6 +6355,10 @@ export const api = {
 			method: "GET",
 			headers: withOptionalTriggerToken(triggerToken),
 		});
+	},
+
+	async benchmarkModels() {
+		return json<BenchmarkModelsResponse>("/benchmark/models");
 	},
 
 	async runCosts(limit = 30): Promise<BenchmarkRunCostsResponse> {

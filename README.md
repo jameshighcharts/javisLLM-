@@ -6,7 +6,9 @@ Benchmark LLM mention visibility for Highcharts vs competitors across a query se
 
 - `/Users/jamesm/projects/easy_llm_benchmarker/llm_mention_benchmark.py`: main benchmark runner (OpenAI + Anthropic + Gemini support).
 - `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark/config.json`: editable queries, competitors, aliases.
+- `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark/models.json`: benchmark model catalog with auto latest slots plus pinned baseline models.
 - `/Users/jamesm/projects/easy_llm_benchmarker/scripts/build_looker_dataset.py`: builds canonical Looker dataset + KPI CSV (includes model owner metadata fields).
+- `/Users/jamesm/projects/easy_llm_benchmarker/scripts/resolve_benchmark_models.py`: resolves model catalog aliases into concrete provider model IDs.
 - `/Users/jamesm/projects/easy_llm_benchmarker/scripts/push_to_sheets_webapp.py`: pushes Looker CSV rows to Apps Script web app.
 - `/Users/jamesm/projects/easy_llm_benchmarker/scripts/monthly_run.sh`: full monthly pipeline (benchmark -> dataset -> sheet append).
 - `/Users/jamesm/projects/easy_llm_benchmarker/automation/apps_script/Code.gs`: Apps Script endpoint code.
@@ -57,7 +59,7 @@ In Vercel Project Settings -> Environment Variables, set:
 - Optional: `GITHUB_WORKFLOW_FILE` (default: `run-benchmark.yml`)
 - Optional: `GITHUB_WORKFLOW_REF` (default: `main`)
 - Optional hardening:
-  - `BENCHMARK_ALLOWED_MODELS` (comma-separated model allowlist; default `gpt-4o-mini,gpt-4o,gpt-5.2,claude-sonnet-4-5-20250929,claude-opus-4-5-20251101,gemini-2.5-flash`)
+  - `BENCHMARK_ALLOWED_MODELS` (comma-separated extra model allowlist; the tracked catalog in `config/benchmark/models.json` is always allowed)
   - `BENCHMARK_TRIGGER_RATE_MAX` (default `5` requests)
   - `BENCHMARK_TRIGGER_RATE_WINDOW_MS` (default `60000` ms)
   - `BENCHMARK_RUNS_RATE_MAX` (default `30` requests)
@@ -154,7 +156,7 @@ Required cron service env vars:
 Optional cron service env vars:
 - `BENCHMARK_CRON_MODEL` (defaults to the API default when omitted)
 - `BENCHMARK_CRON_MODELS` (comma-separated; overrides `BENCHMARK_CRON_MODEL`)
-- `BENCHMARK_CRON_SELECT_ALL_MODELS=true`
+- `BENCHMARK_CRON_SELECT_ALL_MODELS=true` (recommended; runs latest model slots and pinned baseline models from `config/benchmark/models.json`)
 - `BENCHMARK_CRON_RUNS`
 - `BENCHMARK_CRON_TEMPERATURE`
 - `BENCHMARK_CRON_WEB_SEARCH`
@@ -174,6 +176,20 @@ Edit `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark/config.json`:
 - `queryTags` (optional): per-query tags map (example tags: `javascript`, `react`, `general`).
 - `competitors`: list of entities to track (keep `Highcharts` included).
 - `aliases`: optional mention variants per competitor.
+
+Edit `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark/models.json` for benchmark model coverage:
+
+- `kind: "latest"` entries are resolved at run start using provider model-list APIs, then fall back to their `fallback` model if discovery fails.
+- Latest candidates must pass a tiny API smoke test before selection, so a listed-but-not-enabled model is skipped.
+- `kind: "pinned"` entries keep older baseline models in the manual config card and scheduled runs.
+- `defaultModelIds` controls the order used by manual "All" selection, API `selectAllModels`, and Mac cron when `AUTO_MODELS=1`.
+
+Resolve the current catalog manually:
+
+```bash
+cd /Users/jamesm/projects/easy_llm_benchmarker
+python3 scripts/resolve_benchmark_models.py --format json
+```
 
 ## Exact commands
 

@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "defaultModelIds": [
+    "openai:gpt:latest",
+    "anthropic:opus:latest",
+    "anthropic:sonnet:latest",
+    "google:flash:latest",
+    "gpt-4o-mini",
+    "gpt-4o",
+    "gpt-5.2",
+    "claude-sonnet-4-5-20250929",
+    "claude-opus-4-5-20251101",
+    "gemini-2.5-flash"
+  ],
+  "models": [
+    {
+      "id": "openai:gpt:latest",
+      "label": "GPT 5.5",
+      "owner": "OpenAI",
+      "provider": "openai",
+      "kind": "latest",
+      "family": "gpt",
+      "fallback": "gpt-5.5",
+      "aliases": ["openai-latest", "gpt-latest", "latest-openai"],
+      "includeByDefault": true
+    },
+    {
+      "id": "anthropic:opus:latest",
+      "label": "Claude Opus 4.7",
+      "owner": "Anthropic",
+      "provider": "anthropic",
+      "kind": "latest",
+      "family": "opus",
+      "fallback": "claude-opus-4-7",
+      "aliases": ["claude-opus-latest", "anthropic-opus-latest"],
+      "includeByDefault": true
+    },
+    {
+      "id": "anthropic:sonnet:latest",
+      "label": "Claude Sonnet 4.6",
+      "owner": "Anthropic",
+      "provider": "anthropic",
+      "kind": "latest",
+      "family": "sonnet",
+      "fallback": "claude-sonnet-4-6",
+      "aliases": [
+        "claude-sonnet-latest",
+        "anthropic-sonnet-latest",
+        "claude-3-5-sonnet-latest",
+        "claude-4-6-sonnet-latest"
+      ],
+      "includeByDefault": true
+    },
+    {
+      "id": "google:flash:latest",
+      "label": "Gemini 3 Flash Preview",
+      "owner": "Google",
+      "provider": "google",
+      "kind": "latest",
+      "family": "flash",
+      "fallback": "gemini-3-flash-preview",
+      "aliases": ["gemini-flash-latest", "google-flash-latest"],
+      "includeByDefault": true
+    },
+    {
+      "id": "gpt-4o-mini",
+      "label": "GPT-4o mini",
+      "owner": "OpenAI",
+      "provider": "openai",
+      "kind": "pinned",
+      "includeByDefault": true
+    },
+    {
+      "id": "gpt-4o",
+      "label": "GPT-4o",
+      "owner": "OpenAI",
+      "provider": "openai",
+      "kind": "pinned",
+      "includeByDefault": true
+    },
+    {
+      "id": "gpt-5.2",
+      "label": "GPT 5.2",
+      "owner": "OpenAI",
+      "provider": "openai",
+      "kind": "pinned",
+      "includeByDefault": true
+    },
+    {
+      "id": "claude-sonnet-4-5-20250929",
+      "label": "Claude Sonnet 4.5",
+      "owner": "Anthropic",
+      "provider": "anthropic",
+      "kind": "pinned",
+      "includeByDefault": true
+    },
+    {
+      "id": "claude-opus-4-5-20251101",
+      "label": "Claude Opus 4.5",
+      "owner": "Anthropic",
+      "provider": "anthropic",
+      "kind": "pinned",
+      "includeByDefault": true
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "label": "Gemini 2.5 Flash",
+      "owner": "Google",
+      "provider": "google",
+      "kind": "pinned",
+      "includeByDefault": true
+    }
+  ]
+}

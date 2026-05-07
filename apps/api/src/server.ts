@@ -313,6 +313,7 @@ const writeToken = String(
 ).trim();
 const cjsRequire = createRequire(import.meta.url);
 const benchmarkTriggerHandler = cjsRequire("./handlers/benchmark/trigger.js");
+const benchmarkModelsHandler = cjsRequire("./handlers/benchmark/models.js");
 const benchmarkRunsHandler = cjsRequire("./handlers/benchmark/runs.js");
 const benchmarkStopHandler = cjsRequire("./handlers/benchmark/stop.js");
 const promptLabRunHandler = cjsRequire("./handlers/prompt-lab/run.js");
@@ -671,6 +672,8 @@ type ModelPricing = {
 };
 
 const MODEL_PRICING_BY_MODEL: Record<string, ModelPricing> = {
+	"gpt-5.5": { inputUsdPerMillion: 5, outputUsdPerMillion: 30 },
+	"gpt-5.4": { inputUsdPerMillion: 2.5, outputUsdPerMillion: 15 },
 	"gpt-5.2": { inputUsdPerMillion: 1.75, outputUsdPerMillion: 14 },
 	"gpt-4o": { inputUsdPerMillion: 2.5, outputUsdPerMillion: 10 },
 	"gpt-4o-mini": { inputUsdPerMillion: 0.15, outputUsdPerMillion: 0.6 },
@@ -682,14 +685,25 @@ const MODEL_PRICING_BY_MODEL: Record<string, ModelPricing> = {
 		inputUsdPerMillion: 15,
 		outputUsdPerMillion: 75,
 	},
+	"claude-opus-4-7": { inputUsdPerMillion: 5, outputUsdPerMillion: 25 },
+	"claude-sonnet-4-6": { inputUsdPerMillion: 3, outputUsdPerMillion: 15 },
 	"claude-opus-4-20250514": { inputUsdPerMillion: 15, outputUsdPerMillion: 75 },
 	"gemini-2.5-flash": { inputUsdPerMillion: 0.3, outputUsdPerMillion: 2.5 },
+	"gemini-3-flash-preview": { inputUsdPerMillion: 0.5, outputUsdPerMillion: 3 },
 };
 
 const MODEL_PRICING_FAMILY_RULES: Array<{
 	test: (normalizedModel: string) => boolean;
 	pricing: ModelPricing;
 }> = [
+	{
+		test: (model) => model === "gpt-5.5" || model.startsWith("gpt-5.5-"),
+		pricing: MODEL_PRICING_BY_MODEL["gpt-5.5"],
+	},
+	{
+		test: (model) => model === "gpt-5.4" || model.startsWith("gpt-5.4-"),
+		pricing: MODEL_PRICING_BY_MODEL["gpt-5.4"],
+	},
 	{
 		test: (model) => model === "gpt-5.2" || model.startsWith("gpt-5.2-"),
 		pricing: MODEL_PRICING_BY_MODEL["gpt-5.2"],
@@ -710,12 +724,27 @@ const MODEL_PRICING_FAMILY_RULES: Array<{
 	},
 	{
 		test: (model) =>
+			model === "claude-sonnet-4-6" || model.startsWith("claude-sonnet-4-6-"),
+		pricing: MODEL_PRICING_BY_MODEL["claude-sonnet-4-6"],
+	},
+	{
+		test: (model) =>
 			model === "claude-sonnet-4" || model.startsWith("claude-sonnet-4-"),
 		pricing: MODEL_PRICING_BY_MODEL["claude-sonnet-4-5-20250929"],
 	},
 	{
 		test: (model) => model.startsWith("claude-opus-4-5"),
 		pricing: MODEL_PRICING_BY_MODEL["claude-opus-4-1-20250805"],
+	},
+	{
+		test: (model) =>
+			model === "claude-opus-4-7" || model.startsWith("claude-opus-4-7-"),
+		pricing: MODEL_PRICING_BY_MODEL["claude-opus-4-7"],
+	},
+	{
+		test: (model) =>
+			model === "claude-opus-4-6" || model.startsWith("claude-opus-4-6-"),
+		pricing: MODEL_PRICING_BY_MODEL["claude-opus-4-7"],
 	},
 	{
 		test: (model) =>
@@ -731,6 +760,13 @@ const MODEL_PRICING_FAMILY_RULES: Array<{
 		test: (model) =>
 			model === "gemini-2.5-flash" || model.startsWith("gemini-2.5-flash-"),
 		pricing: MODEL_PRICING_BY_MODEL["gemini-2.5-flash"],
+	},
+	{
+		test: (model) =>
+			model === "gemini-3-flash-preview" ||
+			model.startsWith("gemini-3-flash-preview-") ||
+			model === "gemini-flash-latest",
+		pricing: MODEL_PRICING_BY_MODEL["gemini-3-flash-preview"],
 	},
 ];
 
@@ -5902,6 +5938,10 @@ async function fetchTimeseriesFromSupabaseForServer(options = {}) {
 	return fetchTimeseriesFromSupabaseViewsForServer(options);
 }
 
+app.get(
+	"/api/benchmark/models",
+	invokeServerlessHandler(benchmarkModelsHandler),
+);
 app.get(
 	"/api/benchmark/runs",
 	invokeServerlessHandler(benchmarkRunsHandler, { requireTriggerToken: true }),

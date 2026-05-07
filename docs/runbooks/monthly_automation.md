@@ -13,6 +13,8 @@ Update `/Users/jamesm/projects/easy_llm_benchmarker/.env.monthly` with real valu
 - `GSHEET_TAB_NAME`
 - `GSHEET_COMPETITOR_TAB_NAME` (tab for competitor mention-rate/share-of-voice dataset)
 - `BENCHMARK_CONFIG_PATH` (optional, defaults to `config/benchmark/config.json`)
+- `AUTO_MODELS=1` (default; resolves `config/benchmark/models.json` before each run)
+- `BENCHMARK_MODEL_CATALOG_PATH` (optional, defaults to `config/benchmark/models.json`)
 - `SUPABASE_URL` (optional)
 - `SUPABASE_SERVICE_ROLE_KEY` (optional)
 - `SUPABASE_SYNC=1` to push each monthly run to Supabase
@@ -22,6 +24,16 @@ Benchmark inputs now live in:
   - `queries`
   - `competitors`
   - `aliases`
+- `/Users/jamesm/projects/easy_llm_benchmarker/config/benchmark/models.json`
+  - `latest` model slots resolved through provider APIs
+  - tiny smoke test confirms the resolved model works with the API before use
+  - pinned baseline models kept for trend continuity
+
+Preview the model list that the Mac job will run:
+
+```bash
+python3 /Users/jamesm/projects/easy_llm_benchmarker/scripts/resolve_benchmark_models.py --format json
+```
 
 ## 2) Deploy Apps Script web app
 1. Open your target Google Sheet.

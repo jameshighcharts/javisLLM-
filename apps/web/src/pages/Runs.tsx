@@ -237,7 +237,7 @@ export default function Runs() {
 	const [temperature, setTemperature] = useState(0.7);
 	const [webSearch, setWebSearch] = useState(true);
 	const [runMonth, setRunMonth] = useState("");
-	const [promptLimit, setPromptLimit] = useState("");
+	const [promptLimit] = useState("");
 	const [promptFilter, setPromptFilter] = useState<"all" | "newest" | "tag">(
 		"all",
 	);
@@ -249,6 +249,33 @@ export default function Runs() {
 		() => fingerprintToken(normalizedTriggerToken),
 		[normalizedTriggerToken],
 	);
+	const modelOptionsQuery = useQuery({
+		queryKey: ["benchmark-models"],
+		queryFn: () => api.benchmarkModels(),
+		staleTime: 5 * 60_000,
+		retry: false,
+	});
+	const modelOptions = useMemo(
+		() =>
+			modelOptionsQuery.data?.models && modelOptionsQuery.data.models.length > 0
+				? modelOptionsQuery.data.models
+				: BENCHMARK_MODEL_OPTIONS,
+		[modelOptionsQuery.data?.models],
+	);
+	const modelValues = useMemo(
+		() => modelOptions.map((option) => option.value),
+		[modelOptions],
+	);
+	const defaultModelValues = useMemo(() => {
+		const allowed = new Set(modelValues);
+		const fromApi =
+			modelOptionsQuery.data?.defaultModelIds?.filter((id) =>
+				allowed.has(id),
+			) ?? [];
+		return fromApi.length > 0
+			? fromApi
+			: [modelValues[0] ?? BENCHMARK_MODEL_VALUES[0]];
+	}, [modelOptionsQuery.data?.defaultModelIds, modelValues]);
 	const effectiveModels = useMemo(
 		() =>
 			allowMultipleModels
@@ -267,10 +294,26 @@ export default function Runs() {
 				const normalized = dedupeModels(current);
 				return normalized.length > 0
 					? [normalized[0]]
-					: [BENCHMARK_MODEL_VALUES[0]];
+					: [defaultModelValues[0] ?? BENCHMARK_MODEL_VALUES[0]];
 			});
 		}
-	}, [allowMultipleModels]);
+	}, [allowMultipleModels, defaultModelValues]);
+
+	useEffect(() => {
+		if (modelValues.length === 0) {
+			return;
+		}
+		const allowed = new Set(modelValues);
+		setSelectedModels((current) => {
+			const retained = dedupeModels(current).filter((model) =>
+				allowed.has(model),
+			);
+			if (retained.length > 0) {
+				return retained;
+			}
+			return [defaultModelValues[0] ?? modelValues[0]];
+		});
+	}, [defaultModelValues, modelValues]);
 
 	const runsQuery = useQuery({
 		queryKey: ["benchmark-runs", hasManagedRunAccess, triggerTokenFingerprint],
@@ -980,8 +1023,8 @@ export default function Runs() {
 												onClick={() =>
 													setSelectedModels(
 														allowMultipleModels
-															? BENCHMARK_MODEL_VALUES
-															: [BENCHMARK_MODEL_VALUES[0]],
+															? modelValues
+															: [defaultModelValues[0] ?? modelValues[0]],
 													)
 												}
 												className="px-2 py-0.5 rounded text-xs font-medium"
@@ -996,7 +1039,9 @@ export default function Runs() {
 											<button
 												type="button"
 												onClick={() =>
-													setSelectedModels([BENCHMARK_MODEL_VALUES[0]])
+													setSelectedModels([
+														defaultModelValues[0] ?? modelValues[0],
+													])
 												}
 												className="px-2 py-0.5 rounded text-xs font-medium"
 												style={{
@@ -1010,7 +1055,7 @@ export default function Runs() {
 										</div>
 									</div>
 									<div className="grid grid-cols-1 gap-1.5">
-										{BENCHMARK_MODEL_OPTIONS.map((option) => {
+										{modelOptions.map((option) => {
 											const checked = selectedModels.includes(option.value);
 											const disabled =
 												!allowMultipleModels &&
@@ -1027,11 +1072,34 @@ export default function Runs() {
 														cursor: disabled ? "not-allowed" : "pointer",
 													}}
 												>
-													<span
-														className="text-xs"
-														style={{ color: checked ? "#2A5C2E" : "#2A3A2C" }}
-													>
-														{option.label}
+													<span className="flex min-w-0 items-center gap-2">
+														<span
+															className="truncate text-xs"
+															style={{
+																color: checked ? "#2A5C2E" : "#2A3A2C",
+															}}
+														>
+															{option.label}
+														</span>
+														{option.kind === "latest" && (
+															<span
+																className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold"
+																title={
+																	option.resolvedValue
+																		? `Resolved from latest slot to ${option.resolvedValue}`
+																		: option.fallback
+																			? `Falls back to ${option.fallback}`
+																			: "Resolved when the run starts"
+																}
+																style={{
+																	background: "#EAF3EF",
+																	border: "1px solid #C8DDC9",
+																	color: "#2C5D30",
+																}}
+															>
+																Latest
+															</span>
+														)}
 													</span>
 													<input
 														type="checkbox"
@@ -1053,7 +1121,7 @@ export default function Runs() {
 																);
 																return next.length > 0
 																	? next
-																	: [BENCHMARK_MODEL_VALUES[0]];
+																	: [defaultModelValues[0] ?? modelValues[0]];
 															});
 														}}
 													/>

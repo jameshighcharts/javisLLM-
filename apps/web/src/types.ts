@@ -435,6 +435,23 @@ export type BenchmarkTriggerResponse =
 	| BenchmarkTriggerWorkflowResponse
 	| BenchmarkTriggerQueueResponse;
 
+export interface BenchmarkModelOption {
+	value: string;
+	label: string;
+	owner: "OpenAI" | "Anthropic" | "Google" | "Unknown";
+	provider?: string;
+	kind?: "latest" | "pinned" | string;
+	family?: string | null;
+	fallback?: string | null;
+	resolvedValue?: string | null;
+}
+
+export interface BenchmarkModelsResponse {
+	ok: boolean;
+	defaultModelIds: string[];
+	models: BenchmarkModelOption[];
+}
+
 export interface BenchmarkRunsWorkflowResponse {
 	ok: boolean;
 	workflow: string;

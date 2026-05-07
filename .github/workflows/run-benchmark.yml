@@ -179,6 +179,7 @@ jobs:
         run: |
           set -euo pipefail
           TARGET_MODELS="${MODELS_INPUT:-${MODEL_INPUT}}"
+          TARGET_MODELS="$(python scripts/resolve_benchmark_models.py --models "${TARGET_MODELS}")"
           CMD=(
             python llm_mention_benchmark.py
             --our-terms "${OUR_TERMS_INPUT}"

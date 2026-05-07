@@ -4,28 +4,14 @@ const {
 	getGitHubConfig,
 	listWorkflowRuns,
 } = require("../_github");
+const {
+	getBenchmarkAllowedModels,
+	getBenchmarkDefaultModelIds,
+	normalizeBenchmarkModelAlias,
+	resolveBenchmarkModelIds,
+} = require("../_benchmark-models");
 
-const DEFAULT_MODEL = "gpt-4o-mini";
-const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5-20250929";
-const DEFAULT_CLAUDE_OPUS_MODEL = "claude-opus-4-5-20251101";
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
-const MODEL_ALIASES = {
-	"claude-3-5-sonnet-latest": DEFAULT_CLAUDE_MODEL,
-	"claude-4-6-sonnet-latest": DEFAULT_CLAUDE_MODEL,
-	"claude-sonnet-4-6": DEFAULT_CLAUDE_MODEL,
-	"claude-4-6-opus-latest": DEFAULT_CLAUDE_OPUS_MODEL,
-	"claude-opus-4-6": DEFAULT_CLAUDE_OPUS_MODEL,
-	"gemini-3.0-flash": DEFAULT_GEMINI_MODEL,
-	"gemini-3-flash-preview": DEFAULT_GEMINI_MODEL,
-};
-const FALLBACK_ALLOWED_MODELS = [
-	DEFAULT_MODEL,
-	"gpt-4o",
-	"gpt-5.2",
-	DEFAULT_CLAUDE_MODEL,
-	DEFAULT_CLAUDE_OPUS_MODEL,
-	DEFAULT_GEMINI_MODEL,
-];
+const DEFAULT_MODEL = getBenchmarkDefaultModelIds()[0] || "gpt-4o-mini";
 const OUR_TERMS_DEFAULT = "Highcharts";
 const MAX_OUR_TERMS_LENGTH = 300;
 const MAX_PROMPT_LIMIT = 10000;
@@ -66,41 +52,11 @@ function normalizeNumber(value, fallback, min, max) {
 }
 
 function normalizeModelAlias(value) {
-	const normalized = String(value || "").trim();
-	if (!normalized) {
-		return "";
-	}
-	return MODEL_ALIASES[normalized.toLowerCase()] || normalized;
-}
-
-function normalizeModelList(values) {
-	const out = [];
-	const seen = new Set();
-	for (const value of values) {
-		const normalized = normalizeModelAlias(value);
-		if (!normalized) {
-			continue;
-		}
-		const key = normalized.toLowerCase();
-		if (seen.has(key)) {
-			continue;
-		}
-		seen.add(key);
-		out.push(normalized);
-	}
-	return out;
+	return normalizeBenchmarkModelAlias(value);
 }
 
 function getAllowedModels() {
-	const raw = process.env.BENCHMARK_ALLOWED_MODELS || "";
-	const configured = String(raw)
-		.split(",")
-		.map((value) => value.trim())
-		.filter(Boolean);
-
-	return normalizeModelList(
-		configured.length > 0 ? configured : FALLBACK_ALLOWED_MODELS,
-	);
+	return getBenchmarkAllowedModels();
 }
 
 function resolveModel(modelInput, allowedModels) {
@@ -155,7 +111,7 @@ function resolveModels(body, allowedModels) {
 	);
 
 	let candidates = selectAll
-		? allowedModels
+		? getBenchmarkDefaultModelIds()
 		: parseRequestedModels(body.models);
 
 	if (
@@ -442,9 +398,13 @@ function isMissingSupabaseColumn(error, columnName) {
 	const payload =
 		typeof error === "object" && error !== null ? error.payload : null;
 	const code =
-		typeof payload === "object" && payload !== null && typeof payload.code === "string"
+		typeof payload === "object" &&
+		payload !== null &&
+		typeof payload.code === "string"
 			? payload.code
-			: typeof error === "object" && error !== null && typeof error.code === "string"
+			: typeof error === "object" &&
+					error !== null &&
+					typeof error.code === "string"
 				? error.code
 				: "";
 	const searchText = getSupabaseErrorSearchText(error);
@@ -696,7 +656,15 @@ module.exports = async (req, res) => {
 		const body = parseBody(req);
 		const allowedModels = getAllowedModels();
 
-		const models = resolveModels(body, allowedModels);
+		const requestedModels = resolveModels(body, allowedModels);
+		const models = await resolveBenchmarkModelIds(requestedModels, {
+			logger: console,
+		});
+		if (models.length === 0) {
+			const error = new Error("No benchmark models resolved.");
+			error.statusCode = 400;
+			throw error;
+		}
 		const model = models[0];
 		const ourTerms = resolveOurTerms(body.ourTerms);
 		const runs = Math.round(normalizeNumber(body.runs, 1, 1, 3));

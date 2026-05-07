@@ -30,6 +30,24 @@ const ANTHROPIC_PRICING_URL =
 const GOOGLE_PRICING_URL = "https://ai.google.dev/gemini-api/docs/pricing";
 
 const PRICING_BY_MODEL: Record<string, ModelPricing> = {
+	"gpt-5.5": {
+		model: "gpt-5.5",
+		provider: "OpenAI",
+		inputUsdPerMillion: 5,
+		outputUsdPerMillion: 30,
+		sourceUrl: OPENAI_PRICING_URL,
+		sourceLabel: "OpenAI API pricing",
+		sourceDate: "2026-05-06",
+	},
+	"gpt-5.4": {
+		model: "gpt-5.4",
+		provider: "OpenAI",
+		inputUsdPerMillion: 2.5,
+		outputUsdPerMillion: 15,
+		sourceUrl: OPENAI_PRICING_URL,
+		sourceLabel: "OpenAI API pricing",
+		sourceDate: "2026-05-06",
+	},
 	"gpt-5.2": {
 		model: "gpt-5.2",
 		provider: "OpenAI",
@@ -84,6 +102,24 @@ const PRICING_BY_MODEL: Record<string, ModelPricing> = {
 		sourceLabel: "Claude API pricing",
 		sourceDate: "2026-02-26",
 	},
+	"claude-opus-4-7": {
+		model: "claude-opus-4-7",
+		provider: "Anthropic",
+		inputUsdPerMillion: 5,
+		outputUsdPerMillion: 25,
+		sourceUrl: ANTHROPIC_PRICING_URL,
+		sourceLabel: "Claude API pricing",
+		sourceDate: "2026-05-06",
+	},
+	"claude-sonnet-4-6": {
+		model: "claude-sonnet-4-6",
+		provider: "Anthropic",
+		inputUsdPerMillion: 3,
+		outputUsdPerMillion: 15,
+		sourceUrl: ANTHROPIC_PRICING_URL,
+		sourceLabel: "Claude API pricing",
+		sourceDate: "2026-05-06",
+	},
 	"gemini-2.5-flash": {
 		model: "gemini-2.5-flash",
 		provider: "Google",
@@ -92,6 +128,15 @@ const PRICING_BY_MODEL: Record<string, ModelPricing> = {
 		sourceUrl: GOOGLE_PRICING_URL,
 		sourceLabel: "Gemini API pricing",
 		sourceDate: "2026-02-26",
+	},
+	"gemini-3-flash-preview": {
+		model: "gemini-3-flash-preview",
+		provider: "Google",
+		inputUsdPerMillion: 0.5,
+		outputUsdPerMillion: 3,
+		sourceUrl: GOOGLE_PRICING_URL,
+		sourceLabel: "Gemini API pricing",
+		sourceDate: "2026-05-06",
 	},
 };
 
@@ -102,6 +147,14 @@ type FamilyPricingRule = {
 };
 
 const FAMILY_RULES: FamilyPricingRule[] = [
+	{
+		test: (model) => model === "gpt-5.5" || model.startsWith("gpt-5.5-"),
+		pricing: PRICING_BY_MODEL["gpt-5.5"],
+	},
+	{
+		test: (model) => model === "gpt-5.4" || model.startsWith("gpt-5.4-"),
+		pricing: PRICING_BY_MODEL["gpt-5.4"],
+	},
 	{
 		test: (model) => model === "gpt-5.2" || model.startsWith("gpt-5.2-"),
 		pricing: PRICING_BY_MODEL["gpt-5.2"],
@@ -122,6 +175,11 @@ const FAMILY_RULES: FamilyPricingRule[] = [
 	},
 	{
 		test: (model) =>
+			model === "claude-sonnet-4-6" || model.startsWith("claude-sonnet-4-6-"),
+		pricing: PRICING_BY_MODEL["claude-sonnet-4-6"],
+	},
+	{
+		test: (model) =>
 			model === "claude-sonnet-4" || model.startsWith("claude-sonnet-4-"),
 		pricing: PRICING_BY_MODEL["claude-sonnet-4-5-20250929"],
 		notes: "Claude Sonnet 4 is priced the same as Sonnet 4.5 per Claude docs.",
@@ -131,6 +189,17 @@ const FAMILY_RULES: FamilyPricingRule[] = [
 		pricing: PRICING_BY_MODEL["claude-opus-4-1-20250805"],
 		notes:
 			"Opus 4.5-specific pricing is not published in Claude docs; using Opus 4.1 rate as a fallback.",
+	},
+	{
+		test: (model) =>
+			model === "claude-opus-4-7" || model.startsWith("claude-opus-4-7-"),
+		pricing: PRICING_BY_MODEL["claude-opus-4-7"],
+	},
+	{
+		test: (model) =>
+			model === "claude-opus-4-6" || model.startsWith("claude-opus-4-6-"),
+		pricing: PRICING_BY_MODEL["claude-opus-4-7"],
+		notes: "Claude Opus 4.6 is priced the same as Opus 4.7 per Claude docs.",
 	},
 	{
 		test: (model) =>
@@ -146,6 +215,13 @@ const FAMILY_RULES: FamilyPricingRule[] = [
 		test: (model) =>
 			model === "gemini-2.5-flash" || model.startsWith("gemini-2.5-flash-"),
 		pricing: PRICING_BY_MODEL["gemini-2.5-flash"],
+	},
+	{
+		test: (model) =>
+			model === "gemini-3-flash-preview" ||
+			model.startsWith("gemini-3-flash-preview-") ||
+			model === "gemini-flash-latest",
+		pricing: PRICING_BY_MODEL["gemini-3-flash-preview"],
 	},
 ];
 

@@ -2,23 +2,88 @@ export interface BenchmarkModelOption {
 	value: string;
 	label: string;
 	owner: "OpenAI" | "Anthropic" | "Google" | "Unknown";
+	provider?: string;
+	kind?: "latest" | "pinned" | string;
+	family?: string | null;
+	fallback?: string | null;
+	resolvedValue?: string | null;
 }
 
 export const BENCHMARK_MODEL_OPTIONS: BenchmarkModelOption[] = [
-	{ value: "gpt-4o-mini", label: "GPT-4o mini", owner: "OpenAI" },
-	{ value: "gpt-4o", label: "GPT-4o", owner: "OpenAI" },
-	{ value: "gpt-5.2", label: "GPT 5.2", owner: "OpenAI" },
+	{
+		value: "openai:gpt:latest",
+		label: "GPT 5.5",
+		owner: "OpenAI",
+		provider: "openai",
+		kind: "latest",
+		fallback: "gpt-5.5",
+	},
+	{
+		value: "anthropic:opus:latest",
+		label: "Claude Opus 4.7",
+		owner: "Anthropic",
+		provider: "anthropic",
+		kind: "latest",
+		fallback: "claude-opus-4-7",
+	},
+	{
+		value: "anthropic:sonnet:latest",
+		label: "Claude Sonnet 4.6",
+		owner: "Anthropic",
+		provider: "anthropic",
+		kind: "latest",
+		fallback: "claude-sonnet-4-6",
+	},
+	{
+		value: "google:flash:latest",
+		label: "Gemini 3 Flash Preview",
+		owner: "Google",
+		provider: "google",
+		kind: "latest",
+		fallback: "gemini-3-flash-preview",
+	},
+	{
+		value: "gpt-4o-mini",
+		label: "GPT-4o mini",
+		owner: "OpenAI",
+		provider: "openai",
+		kind: "pinned",
+	},
+	{
+		value: "gpt-4o",
+		label: "GPT-4o",
+		owner: "OpenAI",
+		provider: "openai",
+		kind: "pinned",
+	},
+	{
+		value: "gpt-5.2",
+		label: "GPT 5.2",
+		owner: "OpenAI",
+		provider: "openai",
+		kind: "pinned",
+	},
 	{
 		value: "claude-sonnet-4-5-20250929",
 		label: "Claude Sonnet 4.5",
 		owner: "Anthropic",
+		provider: "anthropic",
+		kind: "pinned",
 	},
 	{
 		value: "claude-opus-4-5-20251101",
 		label: "Claude Opus 4.5",
 		owner: "Anthropic",
+		provider: "anthropic",
+		kind: "pinned",
 	},
-	{ value: "gemini-2.5-flash", label: "Gemini 2.5 Flash", owner: "Google" },
+	{
+		value: "gemini-2.5-flash",
+		label: "Gemini 2.5 Flash",
+		owner: "Google",
+		provider: "google",
+		kind: "pinned",
+	},
 ];
 
 export const BENCHMARK_MODEL_VALUES = BENCHMARK_MODEL_OPTIONS.map(

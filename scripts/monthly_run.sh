@@ -20,15 +20,22 @@ LOG_DIR="${LOG_DIR:-${OUTPUT_DIR}/logs}"
 OUR_TERMS="${OUR_TERMS:-Highcharts}"
 MODEL="${MODEL:-gpt-4o-mini}"
 MODELS="${MODELS:-}"
+AUTO_MODELS="${AUTO_MODELS:-1}"
 RUNS="${RUNS:-3}"
 TEMPERATURE="${TEMPERATURE:-0.7}"
 WEB_SEARCH="${WEB_SEARCH:-1}"
 GSHEET_TAB_NAME="${GSHEET_TAB_NAME:-Sheet1}"
 GSHEET_COMPETITOR_TAB_NAME="${GSHEET_COMPETITOR_TAB_NAME:-CompetitorMetrics}"
 BENCHMARK_CONFIG_PATH="${BENCHMARK_CONFIG_PATH:-${ROOT_DIR}/config/benchmark/config.json}"
+BENCHMARK_MODEL_CATALOG_PATH="${BENCHMARK_MODEL_CATALOG_PATH:-${ROOT_DIR}/config/benchmark/models.json}"
 SUPABASE_SYNC="${SUPABASE_SYNC:-0}"
 
-TARGET_MODELS="${MODELS:-${MODEL}}"
+if [[ -z "${MODELS}" && ( "${AUTO_MODELS}" == "1" || "${AUTO_MODELS}" == "true" || "${AUTO_MODELS}" == "yes" ) ]]; then
+  TARGET_MODELS="$(python3 "${ROOT_DIR}/scripts/resolve_benchmark_models.py" \
+    --config "${BENCHMARK_MODEL_CATALOG_PATH}")"
+else
+  TARGET_MODELS="${MODELS:-${MODEL}}"
+fi
 IFS=',' read -r -a RAW_MODEL_LIST <<< "${TARGET_MODELS}"
 NORMALIZED_MODELS=()
 for raw_model in "${RAW_MODEL_LIST[@]}"; do
@@ -84,6 +91,7 @@ echo "root_dir=${ROOT_DIR}"
 echo "output_dir=${OUTPUT_DIR}"
 echo "run_month=${RUN_MONTH}"
 echo "run_id=${RUN_ID}"
+echo "auto_models=${AUTO_MODELS}"
 echo "models=${TARGET_MODELS}"
 echo "log_file=${LOG_FILE}"
 
