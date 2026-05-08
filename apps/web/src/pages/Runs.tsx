@@ -225,7 +225,6 @@ export default function Runs() {
 		BENCHMARK_MODEL_VALUES[0],
 	]);
 	const [runs, setRuns] = useState(1);
-	const [temperature, setTemperature] = useState(0.7);
 	const [webSearch, setWebSearch] = useState(true);
 	const [runMonth, setRunMonth] = useState("");
 	const [promptLimit] = useState("");
@@ -473,7 +472,6 @@ export default function Runs() {
 					model: effectiveModels[0],
 					models: effectiveModels,
 					runs,
-					temperature,
 					webSearch,
 					ourTerms,
 					runMonth: runMonth || undefined,
@@ -885,30 +883,6 @@ export default function Runs() {
 												Math.max(1, Math.min(3, Number(e.target.value) || 1)),
 											)
 										}
-										className="w-full px-3 py-2 rounded-lg text-sm"
-										style={inputStyle}
-									/>
-								</label>
-								{/* Temperature */}
-								<label className="space-y-1">
-									<span
-										className="text-xs font-medium"
-										style={{ color: "#7A8E7C" }}
-									>
-										Temperature
-									</span>
-									<input
-										type="number"
-										min={0}
-										max={2}
-										step={0.1}
-										value={temperature}
-										onChange={(e) => {
-											const v = Number(e.target.value);
-											setTemperature(
-												Number.isFinite(v) ? Math.max(0, Math.min(2, v)) : 0.7,
-											);
-										}}
 										className="w-full px-3 py-2 rounded-lg text-sm"
 										style={inputStyle}
 									/>

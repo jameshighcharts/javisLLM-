@@ -4357,7 +4357,6 @@ export default function Prompts({
 				{
 					model: "gpt-4o-mini",
 					runs: 1,
-					temperature: 0.7,
 					webSearch: true,
 					ourTerms: "Highcharts",
 				},

@@ -158,7 +158,6 @@ Optional cron service env vars:
 - `BENCHMARK_CRON_MODELS` (comma-separated; overrides `BENCHMARK_CRON_MODEL`)
 - `BENCHMARK_CRON_SELECT_ALL_MODELS=true` (recommended; runs latest model slots and pinned baseline models from `config/benchmark/models.json`)
 - `BENCHMARK_CRON_RUNS`
-- `BENCHMARK_CRON_TEMPERATURE`
 - `BENCHMARK_CRON_WEB_SEARCH`
 - `BENCHMARK_CRON_OUR_TERMS`
 - `BENCHMARK_CRON_RUN_MONTH`

@@ -13,6 +13,7 @@ const {
 
 const DEFAULT_MODEL = getBenchmarkDefaultModelIds()[0] || "gpt-4o-mini";
 const OUR_TERMS_DEFAULT = "Highcharts";
+const DEFAULT_BENCHMARK_TEMPERATURE = 0.7;
 const MAX_OUR_TERMS_LENGTH = 300;
 const MAX_PROMPT_LIMIT = 10000;
 const ALLOWED_PROMPT_ORDERS = new Set(["default", "newest"]);
@@ -456,7 +457,6 @@ async function triggerViaQueue(
 	_body,
 	models,
 	runs,
-	temperature,
 	webSearch,
 	ourTerms,
 	runMonth,
@@ -524,7 +524,7 @@ async function triggerViaQueue(
 		p_models: models,
 		p_our_terms: ourTerms,
 		p_runs_per_model: runs,
-		p_temperature: temperature,
+		p_temperature: DEFAULT_BENCHMARK_TEMPERATURE,
 		p_web_search: webSearch,
 		p_prompt_limit: promptLimit,
 	};
@@ -592,7 +592,6 @@ async function triggerViaGitHub(
 	model,
 	models,
 	runs,
-	temperature,
 	webSearch,
 	ourTerms,
 	runMonth,
@@ -605,7 +604,6 @@ async function triggerViaGitHub(
 		model,
 		models: models.join(","),
 		runs: String(runs),
-		temperature: String(temperature),
 		web_search: webSearch ? "true" : "false",
 		our_terms: ourTerms,
 		run_month: runMonth,
@@ -668,7 +666,6 @@ module.exports = async (req, res) => {
 		const model = models[0];
 		const ourTerms = resolveOurTerms(body.ourTerms);
 		const runs = Math.round(normalizeNumber(body.runs, 1, 1, 3));
-		const temperature = normalizeNumber(body.temperature, 0.7, 0, 2);
 		const webSearch = parseWebSearch(body.webSearch);
 		const runMonth = resolveRunMonth(body.runMonth);
 		const promptLimit = resolvePromptLimit(
@@ -685,7 +682,6 @@ module.exports = async (req, res) => {
 					body,
 					models,
 					runs,
-					temperature,
 					webSearch,
 					ourTerms,
 					runMonth,
@@ -718,7 +714,6 @@ module.exports = async (req, res) => {
 					model,
 					models,
 					runs,
-					temperature,
 					webSearch,
 					ourTerms,
 					runMonth,
@@ -748,7 +743,6 @@ module.exports = async (req, res) => {
 			model,
 			models,
 			runs,
-			temperature,
 			webSearch,
 			ourTerms,
 			runMonth,

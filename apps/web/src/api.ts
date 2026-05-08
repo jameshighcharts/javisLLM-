@@ -6375,7 +6375,6 @@ export const api = {
 			models?: string[];
 			selectAllModels?: boolean;
 			runs: number;
-			temperature: number;
 			webSearch: boolean;
 			ourTerms: string;
 			runMonth?: string;

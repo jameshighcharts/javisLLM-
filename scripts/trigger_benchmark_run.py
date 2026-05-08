@@ -40,15 +40,6 @@ def parse_int(value: str, field: str) -> int | None:
         raise ValueError(f"{field} must be an integer") from exc
 
 
-def parse_float(value: str, field: str) -> float | None:
-    if not value:
-        return None
-    try:
-        return float(value)
-    except ValueError as exc:
-        raise ValueError(f"{field} must be a number") from exc
-
-
 def parse_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
@@ -60,10 +51,6 @@ def build_trigger_payload() -> dict[str, Any]:
     model = getenv("BENCHMARK_CRON_MODEL")
     models = parse_csv(getenv("BENCHMARK_CRON_MODELS"))
     runs = parse_int(getenv("BENCHMARK_CRON_RUNS"), "BENCHMARK_CRON_RUNS")
-    temperature = parse_float(
-        getenv("BENCHMARK_CRON_TEMPERATURE"),
-        "BENCHMARK_CRON_TEMPERATURE",
-    )
     web_search = parse_bool(getenv("BENCHMARK_CRON_WEB_SEARCH"))
     run_month = getenv("BENCHMARK_CRON_RUN_MONTH")
     prompt_limit = parse_int(
@@ -84,8 +71,6 @@ def build_trigger_payload() -> dict[str, Any]:
         payload["model"] = model
     if runs is not None:
         payload["runs"] = runs
-    if temperature is not None:
-        payload["temperature"] = temperature
     if web_search is not None:
         payload["webSearch"] = web_search
     if run_month:

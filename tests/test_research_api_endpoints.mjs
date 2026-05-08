@@ -123,7 +123,6 @@ test('benchmark trigger returns 400 when cohort tag has no matching prompts', as
         body: {
           model: 'gpt-4o-mini',
           runs: 1,
-          temperature: 0.7,
           webSearch: true,
           ourTerms: 'Highcharts',
           cohortTag: 'cohort:not-found',
@@ -172,7 +171,6 @@ test('benchmark trigger omits optional queue args for standard full runs', async
         body: {
           model: 'gpt-4o-mini',
           runs: 1,
-          temperature: 0.7,
           webSearch: true,
           ourTerms: 'Highcharts',
         },
@@ -196,6 +194,7 @@ test('benchmark trigger omits optional queue args for standard full runs', async
           request.method === 'POST',
       )
       assert.equal(Boolean(enqueueRequest), true)
+      assert.equal(enqueueRequest.body.p_temperature, 0.7)
       assert.equal('p_prompt_tag' in enqueueRequest.body, false)
       assert.equal('p_prompt_order' in enqueueRequest.body, false)
     },
