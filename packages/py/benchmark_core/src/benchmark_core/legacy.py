@@ -23,6 +23,7 @@ from .paths import ARTIFACTS_DIR, CONFIG_DIR
 
 DEFAULT_OUTPUT_DIR = ARTIFACTS_DIR
 DEFAULT_CONFIG_PATH = CONFIG_DIR / "config.json"
+DEFAULT_TEMPERATURE = 0.7
 DEFAULT_QUERIES = [
     "JavaScript charting libraries",
     "data visualization library",
@@ -195,12 +196,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--runs", type=int, default=3, help="Responses per query (default: 3)."
-    )
-    parser.add_argument(
-        "--temperature",
-        type=float,
-        default=0.7,
-        help="Sampling temperature for generation (default: 0.7).",
     )
     parser.add_argument(
         "--web-search",
@@ -1164,7 +1159,7 @@ def run_benchmark(args: argparse.Namespace, client: Any | None = None) -> int:
                         provider=provider,
                         model=model_name,
                         query=query,
-                        temperature=args.temperature,
+                        temperature=DEFAULT_TEMPERATURE,
                         web_search=effective_web_search,
                     )
                     successful_calls += 1
