@@ -18,7 +18,10 @@ class FakeResponsesAPI:
         self.calls.append(kwargs)
         if not self.payloads:
             raise RuntimeError("No payload left")
-        return self.payloads.pop(0)
+        payload = self.payloads.pop(0)
+        if isinstance(payload, BaseException):
+            raise payload
+        return payload
 
 
 class FakeMessagesAPI:
@@ -30,7 +33,10 @@ class FakeMessagesAPI:
         self.calls.append(kwargs)
         if not self.payloads:
             raise RuntimeError("No payload left")
-        return self.payloads.pop(0)
+        payload = self.payloads.pop(0)
+        if isinstance(payload, BaseException):
+            raise payload
+        return payload
 
 
 class FakeClient:
@@ -52,7 +58,10 @@ class FakeGeminiClient:
         self.calls.append(kwargs)
         if not self.payloads:
             raise RuntimeError("No payload left")
-        return self.payloads.pop(0)
+        payload = self.payloads.pop(0)
+        if isinstance(payload, BaseException):
+            raise payload
+        return payload
 
 
 class MentionDetectionTests(unittest.TestCase):
@@ -346,6 +355,74 @@ class ProviderRoutingTests(unittest.TestCase):
 
         self.assertNotIn("temperature", openai_client.responses.calls[0])
         self.assertNotIn("temperature", anthropic_client.messages.calls[0])
+
+    def test_retries_without_temperature_when_provider_rejects_parameter(self):
+        openai_client = FakeClient(
+            [
+                RuntimeError(
+                    "Unsupported parameter: 'temperature' is not supported with this model."
+                ),
+                {"output_text": "OpenAI response."},
+            ]
+        )
+        anthropic_client = FakeAnthropicClient(
+            [
+                RuntimeError(
+                    "BadRequestError: `temperature` is deprecated for this model."
+                ),
+                {"content": [{"type": "text", "text": "Anthropic response."}]},
+            ]
+        )
+        gemini_client = FakeGeminiClient(
+            [
+                RuntimeError(
+                    "Invalid request: generationConfig.temperature is not supported."
+                ),
+                {
+                    "candidates": [
+                        {"content": {"parts": [{"text": "Gemini response."}]}}
+                    ]
+                },
+            ]
+        )
+
+        openai_text, _, _ = bench.generate_with_optional_retry(
+            openai_client,
+            "openai",
+            "gpt-future",
+            "charting libraries",
+            0.7,
+            False,
+        )
+        anthropic_text, _, _ = bench.generate_with_optional_retry(
+            anthropic_client,
+            "anthropic",
+            "claude-future-opus",
+            "charting libraries",
+            0.7,
+            False,
+        )
+        gemini_text, _, _ = bench.generate_with_optional_retry(
+            gemini_client,
+            "google",
+            "gemini-future",
+            "charting libraries",
+            0.7,
+            False,
+        )
+
+        self.assertEqual(openai_text, "OpenAI response.")
+        self.assertEqual(anthropic_text, "Anthropic response.")
+        self.assertEqual(gemini_text, "Gemini response.")
+        self.assertEqual(len(openai_client.responses.calls), 2)
+        self.assertEqual(len(anthropic_client.messages.calls), 2)
+        self.assertEqual(len(gemini_client.calls), 2)
+        self.assertIn("temperature", openai_client.responses.calls[0])
+        self.assertNotIn("temperature", openai_client.responses.calls[1])
+        self.assertIn("temperature", anthropic_client.messages.calls[0])
+        self.assertNotIn("temperature", anthropic_client.messages.calls[1])
+        self.assertIn("temperature", gemini_client.calls[0])
+        self.assertNotIn("temperature", gemini_client.calls[1])
 
 
 class CliIntegrationTests(unittest.TestCase):

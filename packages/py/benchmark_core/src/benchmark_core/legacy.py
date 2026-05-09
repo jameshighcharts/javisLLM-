@@ -119,7 +119,7 @@ class GeminiRestClient:
         model: str,
         system_prompt: str,
         user_prompt: str,
-        temperature: float,
+        temperature: float | None = None,
     ) -> Dict[str, Any]:
         model_path = urllib.parse.quote(model, safe="")
         endpoint = (
@@ -129,8 +129,9 @@ class GeminiRestClient:
         payload = {
             "systemInstruction": {"parts": [{"text": system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-            "generationConfig": {"temperature": temperature},
         }
+        if temperature is not None:
+            payload["generationConfig"] = {"temperature": temperature}
         request = urllib.request.Request(
             endpoint,
             data=json.dumps(payload).encode("utf-8"),
@@ -565,6 +566,30 @@ def is_transient_error(exc: Exception) -> bool:
     )
 
 
+def _is_temperature_parameter_error(exc: Exception) -> bool:
+    segments = [exc.__class__.__name__, str(exc)]
+    for attr_name in ("status_code", "code", "body", "response", "error", "payload"):
+        attr_value = getattr(exc, attr_name, None)
+        if attr_value is not None:
+            segments.append(str(attr_value))
+
+    text = " ".join(segments).lower()
+    if "temperature" not in text:
+        return False
+    return any(
+        token in text
+        for token in (
+            "unsupported parameter",
+            "not supported",
+            "deprecated",
+            "unknown parameter",
+            "unrecognized parameter",
+            "unexpected",
+            "extra inputs are not permitted",
+        )
+    )
+
+
 def to_plain_dict(response_obj: Any) -> Dict[str, Any]:
     if isinstance(response_obj, dict):
         return response_obj
@@ -886,54 +911,65 @@ def generate_with_optional_retry(
             "You must use web search before finalizing. Cite the sources you relied "
             "on in the answer."
         )
+    temperature_supported = _supports_temperature_parameter(provider, model)
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        try:
-            if provider == "anthropic":
-                anthropic_payload: Dict[str, Any] = {
-                    "model": model,
-                    "max_tokens": 1024,
-                    "system": system_prompt,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": user_prompt,
-                        }
-                    ],
-                }
-                if _supports_temperature_parameter(provider, model):
-                    anthropic_payload["temperature"] = temperature
-                response_obj = client.messages.create(**anthropic_payload)
-            elif provider == "google":
-                response_obj = client.generate_content(
-                    model=model,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    temperature=temperature,
-                )
-            else:
-                openai_payload: Dict[str, Any] = {
-                    "model": model,
-                    "input": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                }
-                if _supports_temperature_parameter(provider, model):
-                    openai_payload["temperature"] = temperature
-                if web_search:
-                    openai_payload["tools"] = [{"type": "web_search_preview"}]
-                response_obj = client.responses.create(**openai_payload)
-            response_dict = to_plain_dict(response_obj)
-            text = extract_response_text(response_obj, response_dict)
-            citations = extract_citations(response_dict)
-            usage = extract_token_usage(response_dict)
-            return text, citations, usage
-        except Exception as exc:  # noqa: BLE001
-            retry = attempt < MAX_ATTEMPTS and is_transient_error(exc)
-            if not retry:
-                raise
-            sleep_seconds = BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
-            time.sleep(sleep_seconds)
+        include_temperature = temperature_supported
+        while True:
+            try:
+                if provider == "anthropic":
+                    anthropic_payload: Dict[str, Any] = {
+                        "model": model,
+                        "max_tokens": 1024,
+                        "system": system_prompt,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": user_prompt,
+                            }
+                        ],
+                    }
+                    if include_temperature:
+                        anthropic_payload["temperature"] = temperature
+                    response_obj = client.messages.create(**anthropic_payload)
+                elif provider == "google":
+                    gemini_payload: Dict[str, Any] = {
+                        "model": model,
+                        "system_prompt": system_prompt,
+                        "user_prompt": user_prompt,
+                    }
+                    if include_temperature:
+                        gemini_payload["temperature"] = temperature
+                    response_obj = client.generate_content(**gemini_payload)
+                else:
+                    openai_payload: Dict[str, Any] = {
+                        "model": model,
+                        "input": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                    }
+                    if include_temperature:
+                        openai_payload["temperature"] = temperature
+                    if web_search:
+                        openai_payload["tools"] = [{"type": "web_search_preview"}]
+                    response_obj = client.responses.create(**openai_payload)
+                response_dict = to_plain_dict(response_obj)
+                text = extract_response_text(response_obj, response_dict)
+                citations = extract_citations(response_dict)
+                usage = extract_token_usage(response_dict)
+                return text, citations, usage
+            except Exception as exc:  # noqa: BLE001
+                if include_temperature and _is_temperature_parameter_error(exc):
+                    temperature_supported = False
+                    include_temperature = False
+                    continue
+
+                retry = attempt < MAX_ATTEMPTS and is_transient_error(exc)
+                if not retry:
+                    raise
+                sleep_seconds = BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                time.sleep(sleep_seconds)
+                break
 
     raise RuntimeError("Retries exhausted unexpectedly")
 
