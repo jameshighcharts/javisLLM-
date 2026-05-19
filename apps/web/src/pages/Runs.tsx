@@ -1258,6 +1258,14 @@ export default function Runs() {
 														0,
 														Math.round(run.progress.completedJobs),
 													),
+													failedTerminalJobs: Math.max(
+														0,
+														Math.round(
+															run.progress.deadLetterJobs ??
+																run.progress.failedJobs ??
+																0,
+														),
+													),
 													completionPct: Math.max(
 														0,
 														Math.min(
@@ -1358,8 +1366,9 @@ export default function Runs() {
 															className="text-xs tabular-nums"
 															style={{ color: "#607860" }}
 														>
-															{queueProgress.completedJobs}/
-															{queueProgress.totalJobs}
+															{queueProgress.failedTerminalJobs > 0
+																? `${queueProgress.completedJobs} ok · ${queueProgress.failedTerminalJobs} failed`
+																: `${queueProgress.completedJobs}/${queueProgress.totalJobs}`}
 														</span>
 													</div>
 												) : (

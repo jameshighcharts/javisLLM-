@@ -24,6 +24,7 @@ ANTHROPIC_VERSION = "2023-06-01"
 GEMINI_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 REQUEST_TIMEOUT_SECONDS = 10
 SMOKE_TEST_PROMPT = "Reply with OK."
+SMOKE_TEST_MAX_OUTPUT_TOKENS = 16
 
 LEGACY_ALIASES = {
     "claude-3-5-sonnet-latest": "anthropic:sonnet:latest",
@@ -68,6 +69,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--no-smoke-test",
         action="store_true",
         help="List live models but skip the tiny provider request that verifies API usability.",
+    )
+    parser.add_argument(
+        "--allow-unusable-fallback",
+        action="store_true",
+        help="Use catalog fallbacks even when all live smoke tests fail.",
     )
     return parser.parse_args(argv)
 
@@ -228,7 +234,7 @@ def smoke_test_openai_model(model_id: str) -> None:
         {
             "model": model_id,
             "input": SMOKE_TEST_PROMPT,
-            "max_output_tokens": 8,
+            "max_output_tokens": SMOKE_TEST_MAX_OUTPUT_TOKENS,
         },
     )
 
@@ -242,7 +248,7 @@ def smoke_test_anthropic_model(model_id: str) -> None:
         {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION},
         {
             "model": model_id,
-            "max_tokens": 8,
+            "max_tokens": SMOKE_TEST_MAX_OUTPUT_TOKENS,
             "messages": [{"role": "user", "content": SMOKE_TEST_PROMPT}],
         },
     )
@@ -263,7 +269,7 @@ def smoke_test_google_model(model_id: str) -> None:
             "contents": [
                 {"role": "user", "parts": [{"text": SMOKE_TEST_PROMPT}]},
             ],
-            "generationConfig": {"maxOutputTokens": 8},
+            "generationConfig": {"maxOutputTokens": SMOKE_TEST_MAX_OUTPUT_TOKENS},
         },
     )
 
@@ -420,6 +426,7 @@ def resolve_model_id(
     *,
     use_live: bool,
     smoke_test: bool,
+    allow_unusable_fallback: bool = False,
 ) -> tuple[str, str | None]:
     normalized = normalize_alias(model_id, catalog)
     entry_by_id = {
@@ -434,6 +441,11 @@ def resolve_model_id(
     try:
         return resolve_latest(entry, smoke_test=smoke_test) or fallback, None
     except Exception as exc:
+        if smoke_test and not allow_unusable_fallback:
+            raise RuntimeError(
+                f"No usable model resolved for {normalized}. "
+                "Check provider access/quota or select a pinned model."
+            ) from exc
         return fallback, str(exc)
 
 
@@ -443,6 +455,7 @@ def resolve_model_ids(
     *,
     use_live: bool,
     smoke_test: bool = True,
+    allow_unusable_fallback: bool = False,
 ) -> tuple[list[str], list[dict[str, str]]]:
     resolved: list[str] = []
     warnings: list[dict[str, str]] = []
@@ -453,6 +466,7 @@ def resolve_model_ids(
             catalog,
             use_live=use_live,
             smoke_test=smoke_test,
+            allow_unusable_fallback=allow_unusable_fallback,
         )
         if warning:
             warnings.append({"model": model_id, "warning": warning, "fallback": concrete})
@@ -478,6 +492,7 @@ def main(argv: list[str] | None = None) -> int:
         catalog,
         use_live=not args.no_live,
         smoke_test=not args.no_smoke_test,
+        allow_unusable_fallback=args.allow_unusable_fallback,
     )
     if args.format == "json":
         print(

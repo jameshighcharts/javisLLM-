@@ -202,6 +202,71 @@ test('benchmark trigger omits optional queue args for standard full runs', async
   global.fetch = originalFetch
 })
 
+test('benchmark trigger rejects unusable latest model before enqueueing', async () => {
+  const originalFetch = global.fetch
+  await withEnv(
+    {
+      USE_QUEUE_TRIGGER: 'true',
+      BENCHMARK_TRIGGER_TOKEN: 'secret-token',
+      OPENAI_API_KEY: 'openai-test-key',
+      SUPABASE_URL: 'https://example.supabase.co',
+      SUPABASE_ANON_KEY: 'anon-key',
+      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+    },
+    async () => {
+      const requests = []
+      global.fetch = async (url, options = {}) => {
+        const target = String(url)
+        const body = options.body ? JSON.parse(String(options.body)) : null
+        requests.push({ target, body })
+
+        if (target === 'https://api.openai.com/v1/models') {
+          return createJsonResponse({ data: [{ id: 'gpt-5.5' }] })
+        }
+
+        if (target === 'https://api.openai.com/v1/responses') {
+          return createJsonResponse(
+            {
+              error: {
+                message: 'You exceeded your current quota.',
+                code: 'insufficient_quota',
+              },
+            },
+            429,
+          )
+        }
+
+        throw new Error(`Unexpected fetch call: ${target}`)
+      }
+
+      const result = await invokeHandler(benchmarkTriggerHandler, {
+        method: 'POST',
+        headers: { authorization: 'Bearer secret-token' },
+        body: {
+          model: 'openai:gpt:latest',
+          runs: 1,
+          webSearch: true,
+          ourTerms: 'Highcharts',
+        },
+      })
+
+      assert.equal(result.statusCode, 400)
+      assert.match(result.payload?.error ?? '', /No usable model resolved/)
+      const smokeRequest = requests.find(
+        (request) => request.target === 'https://api.openai.com/v1/responses',
+      )
+      assert.equal(smokeRequest?.body?.max_output_tokens, 16)
+      assert.equal(
+        requests.some((request) =>
+          request.target.includes('/rest/v1/benchmark_runs'),
+        ),
+        false,
+      )
+    },
+  )
+  global.fetch = originalFetch
+})
+
 test('benchmark runs falls back when run metadata columns are not deployed yet', async () => {
   const originalFetch = global.fetch
   await withEnv(
@@ -428,7 +493,7 @@ test('prompt lab run returns effectiveQuery + citationRefs while keeping legacy 
         )
         assert.match(userContent, /Answer with this structure:/)
         assert.match(userContent, /1\) Top options \(ranked\)/)
-        assert.match(userContent, /Use web search before finalizing and include source-grounded statements\./)
+        assert.match(userContent, /You must use web search before finalizing\. Cite the sources you relied on in the answer\./)
         return createJsonResponse({
           output_text: 'Highcharts supports WCAG and keyboard navigation.',
           output: [

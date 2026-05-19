@@ -12,6 +12,17 @@ if [[ -f "${ROOT_DIR}/.env.monthly" ]]; then
   set +a
 fi
 
+UV_BIN="${UV_BIN:-/Users/jamesm/.local/bin/uv}"
+if [[ ! -x "${UV_BIN}" ]]; then
+  UV_BIN="$(command -v uv || true)"
+fi
+if [[ -z "${UV_BIN}" ]]; then
+  echo "uv is required for monthly runs because the benchmark depends on project-managed Python packages." >&2
+  exit 1
+fi
+
+PYTHON_CMD=("${UV_BIN}" run python)
+
 : "${GSHEET_WEBAPP_URL:?GSHEET_WEBAPP_URL is required}"
 : "${GSHEET_WEBAPP_SECRET:?GSHEET_WEBAPP_SECRET is required}"
 
@@ -30,7 +41,7 @@ BENCHMARK_MODEL_CATALOG_PATH="${BENCHMARK_MODEL_CATALOG_PATH:-${ROOT_DIR}/config
 SUPABASE_SYNC="${SUPABASE_SYNC:-0}"
 
 if [[ -z "${MODELS}" && ( "${AUTO_MODELS}" == "1" || "${AUTO_MODELS}" == "true" || "${AUTO_MODELS}" == "yes" ) ]]; then
-  TARGET_MODELS="$(python3 "${ROOT_DIR}/scripts/resolve_benchmark_models.py" \
+  TARGET_MODELS="$("${PYTHON_CMD[@]}" "${ROOT_DIR}/scripts/resolve_benchmark_models.py" \
     --config "${BENCHMARK_MODEL_CATALOG_PATH}")"
 else
   TARGET_MODELS="${MODELS:-${MODEL}}"
@@ -95,7 +106,7 @@ echo "models=${TARGET_MODELS}"
 echo "log_file=${LOG_FILE}"
 
 BENCH_CMD=(
-  python3
+  "${PYTHON_CMD[@]}"
   "${ROOT_DIR}/llm_mention_benchmark.py"
   --our-terms "${OUR_TERMS}"
   --model "${TARGET_MODELS}"
@@ -111,13 +122,13 @@ echo "Running benchmark..."
 "${BENCH_CMD[@]}"
 
 echo "Building canonical Looker dataset..."
-python3 "${ROOT_DIR}/scripts/build_looker_dataset.py" \
+"${PYTHON_CMD[@]}" "${ROOT_DIR}/scripts/build_looker_dataset.py" \
   --output-dir "${OUTPUT_DIR}" \
   --run-month "${RUN_MONTH}" \
   --run-id "${RUN_ID}"
 
 echo "Pushing rows to Google Sheets Apps Script web app..."
-python3 "${ROOT_DIR}/scripts/push_to_sheets_webapp.py" \
+"${PYTHON_CMD[@]}" "${ROOT_DIR}/scripts/push_to_sheets_webapp.py" \
   --csv "${OUTPUT_DIR}/looker_studio_table_paste.csv" \
   --sheet-name "${GSHEET_TAB_NAME}" \
   --url "${GSHEET_WEBAPP_URL}" \
@@ -126,7 +137,7 @@ python3 "${ROOT_DIR}/scripts/push_to_sheets_webapp.py" \
   --run-id "${RUN_ID}"
 
 echo "Pushing competitor chart rows to Google Sheets Apps Script web app..."
-python3 "${ROOT_DIR}/scripts/push_to_sheets_webapp.py" \
+"${PYTHON_CMD[@]}" "${ROOT_DIR}/scripts/push_to_sheets_webapp.py" \
   --csv "${OUTPUT_DIR}/looker_competitor_chart.csv" \
   --sheet-name "${GSHEET_COMPETITOR_TAB_NAME}" \
   --url "${GSHEET_WEBAPP_URL}" \
@@ -139,7 +150,7 @@ if [[ "${SUPABASE_SYNC}" == "1" || "${SUPABASE_SYNC}" == "true" || "${SUPABASE_S
   : "${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required when SUPABASE_SYNC=1}"
 
   echo "Syncing config + run artifacts to Supabase..."
-  python3 "${ROOT_DIR}/scripts/push_to_supabase.py" \
+  "${PYTHON_CMD[@]}" "${ROOT_DIR}/scripts/push_to_supabase.py" \
     --config "${BENCHMARK_CONFIG_PATH}" \
     --output-dir "${OUTPUT_DIR}" \
     --run-month "${RUN_MONTH}" \

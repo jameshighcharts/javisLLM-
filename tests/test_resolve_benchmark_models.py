@@ -57,6 +57,7 @@ def test_live_resolution_skips_latest_candidate_when_smoke_test_fails(
         if url == resolver.OPENAI_MODELS_URL:
             return {"data": [{"id": "gpt-5.6"}, {"id": "gpt-5.5"}]}
         if url == resolver.OPENAI_RESPONSES_API_URL:
+            assert payload["max_output_tokens"] == 16
             smoke_attempts.append(payload["model"])
             if payload["model"] == "gpt-5.6":
                 raise RuntimeError("model is listed but not enabled for this API key")
@@ -98,3 +99,30 @@ def test_live_resolution_can_skip_smoke_test(monkeypatch) -> None:
 
     assert resolved == ["gpt-5.6"]
     assert warnings == []
+
+
+def test_live_resolution_fails_when_all_smoke_tests_fail(monkeypatch) -> None:
+    catalog = resolver.load_catalog(str(Path("config/benchmark/models.json")))
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    def fake_request_json(url, headers=None, payload=None):
+        if url == resolver.OPENAI_MODELS_URL:
+            return {"data": [{"id": "gpt-5.5"}]}
+        if url == resolver.OPENAI_RESPONSES_API_URL:
+            raise RuntimeError("insufficient_quota")
+        raise AssertionError(f"unexpected request: {url}")
+
+    monkeypatch.setattr(resolver, "request_json", fake_request_json)
+
+    try:
+        resolver.resolve_model_ids(
+            ["openai:gpt:latest"],
+            catalog,
+            use_live=True,
+            smoke_test=True,
+        )
+    except RuntimeError as exc:
+        assert "No usable model resolved for openai:gpt:latest" in str(exc)
+    else:
+        raise AssertionError("expected unresolved live model to fail")

@@ -10,6 +10,7 @@ const GEMINI_MODELS_URL =
 	"https://generativelanguage.googleapis.com/v1beta/models";
 const REQUEST_TIMEOUT_MS = 10_000;
 const SMOKE_TEST_PROMPT = "Reply with OK.";
+const SMOKE_TEST_MAX_OUTPUT_TOKENS = 16;
 
 const FALLBACK_CATALOG = {
 	version: 1,
@@ -371,7 +372,7 @@ async function smokeTestOpenAiModel(modelId) {
 		body: JSON.stringify({
 			model: modelId,
 			input: SMOKE_TEST_PROMPT,
-			max_output_tokens: 8,
+			max_output_tokens: SMOKE_TEST_MAX_OUTPUT_TOKENS,
 		}),
 	});
 }
@@ -390,7 +391,7 @@ async function smokeTestAnthropicModel(modelId) {
 		},
 		body: JSON.stringify({
 			model: modelId,
-			max_tokens: 8,
+			max_tokens: SMOKE_TEST_MAX_OUTPUT_TOKENS,
 			messages: [{ role: "user", content: SMOKE_TEST_PROMPT }],
 		}),
 	});
@@ -415,7 +416,7 @@ async function smokeTestGoogleModel(modelId) {
 					parts: [{ text: SMOKE_TEST_PROMPT }],
 				},
 			],
-			generationConfig: { maxOutputTokens: 8 },
+			generationConfig: { maxOutputTokens: SMOKE_TEST_MAX_OUTPUT_TOKENS },
 		}),
 	});
 }
@@ -587,6 +588,14 @@ async function resolveBenchmarkModelId(modelId, options = {}) {
 		const resolved = await resolveLatestEntry(entry, options);
 		return resolved || entry.fallback || normalized;
 	} catch (error) {
+		if (options.allowUnusableFallback === false) {
+			const strictError = new Error(
+				`No usable model resolved for ${entry.id}. Check provider access/quota or select a pinned model.`,
+			);
+			strictError.statusCode = 400;
+			strictError.cause = error;
+			throw strictError;
+		}
 		warn(
 			options.logger,
 			`[benchmark-models] Falling back for ${entry.id} to ${entry.fallback || entry.id}.`,

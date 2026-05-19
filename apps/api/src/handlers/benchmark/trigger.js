@@ -656,6 +656,7 @@ module.exports = async (req, res) => {
 
 		const requestedModels = resolveModels(body, allowedModels);
 		const models = await resolveBenchmarkModelIds(requestedModels, {
+			allowUnusableFallback: false,
 			logger: console,
 		});
 		if (models.length === 0) {
