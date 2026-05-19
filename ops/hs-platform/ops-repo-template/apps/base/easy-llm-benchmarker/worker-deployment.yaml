@@ -54,6 +54,21 @@ spec:
                 secretKeyRef:
                   name: easy-llm-benchmarker-worker-secrets
                   key: GEMINI_API_KEY
+            - name: DEEPSEEK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-worker-secrets
+                  key: DEEPSEEK_API_KEY
+            - name: MOONSHOT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-worker-secrets
+                  key: MOONSHOT_API_KEY
+            - name: MINIMAX_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-worker-secrets
+                  key: MINIMAX_API_KEY
           resources:
             requests:
               cpu: 250m

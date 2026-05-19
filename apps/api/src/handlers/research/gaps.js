@@ -88,7 +88,9 @@ module.exports = async (req, res) => {
 		});
 	} catch (error) {
 		if (req.method === "GET" && isSupabaseFetchFailure(error)) {
-			console.warn("[research.gaps.list] Supabase unavailable, returning empty snapshot");
+			console.warn(
+				"[research.gaps.list] Supabase unavailable, returning empty snapshot",
+			);
 			return sendJson(res, 200, {
 				ok: true,
 				gaps: [],

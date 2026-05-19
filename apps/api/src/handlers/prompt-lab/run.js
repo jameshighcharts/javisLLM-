@@ -10,6 +10,11 @@ const OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses";
 const ANTHROPIC_MESSAGES_API_URL = "https://api.anthropic.com/v1/messages";
 const GEMINI_GENERATE_CONTENT_API_ROOT =
 	"https://generativelanguage.googleapis.com/v1beta/models";
+const OPENAI_COMPATIBLE_BASE_URLS = {
+	deepseek: "https://api.deepseek.com",
+	moonshot: "https://api.moonshot.ai/v1",
+	minimax: "https://api.minimax.io/v1",
+};
 const DEFAULT_MODEL = getBenchmarkDefaultModelIds()[0] || "gpt-4o-mini";
 const QUERY_MAX_LENGTH = 600;
 const SYSTEM_PROMPT =
@@ -239,6 +244,15 @@ function inferProviderFromModel(model) {
 	if (normalized.startsWith("gemini") || normalized.startsWith("google/")) {
 		return "google";
 	}
+	if (normalized.startsWith("deepseek")) {
+		return "deepseek";
+	}
+	if (normalized.startsWith("kimi") || normalized.startsWith("moonshot/")) {
+		return "moonshot";
+	}
+	if (normalized.startsWith("minimax")) {
+		return "minimax";
+	}
 	return "openai";
 }
 
@@ -248,7 +262,13 @@ function resolveApiKeyForProvider(provider) {
 			? "ANTHROPIC_API_KEY"
 			: provider === "google"
 				? "GEMINI_API_KEY"
-				: "OPENAI_API_KEY";
+				: provider === "deepseek"
+					? "DEEPSEEK_API_KEY"
+					: provider === "moonshot"
+						? "MOONSHOT_API_KEY"
+						: provider === "minimax"
+							? "MINIMAX_API_KEY"
+							: "OPENAI_API_KEY";
 	const value = String(process.env[keyName] || "").trim();
 	if (!value) {
 		const error = new Error(
@@ -264,6 +284,9 @@ function resolveApiKeyForProvider(provider) {
 function resolveModelOwner(provider) {
 	if (provider === "anthropic") return "Anthropic";
 	if (provider === "google") return "Google";
+	if (provider === "deepseek") return "DeepSeek";
+	if (provider === "moonshot") return "Moonshot AI";
+	if (provider === "minimax") return "MiniMax";
 	if (provider === "openai") return "OpenAI";
 	return "Unknown";
 }
@@ -333,7 +356,46 @@ function extractResponseText(responsePayload) {
 		}
 	}
 
+	const choices = Array.isArray(responsePayload?.choices)
+		? responsePayload.choices
+		: [];
+	for (const choice of choices) {
+		if (!choice || typeof choice !== "object") {
+			continue;
+		}
+		const message = choice.message;
+		if (!message || typeof message !== "object") {
+			continue;
+		}
+		if (typeof message.content === "string" && message.content.trim()) {
+			texts.push(message.content.trim());
+			continue;
+		}
+		const contentParts = Array.isArray(message.content) ? message.content : [];
+		for (const part of contentParts) {
+			if (!part || typeof part !== "object") {
+				continue;
+			}
+			if (typeof part.text === "string" && part.text.trim()) {
+				texts.push(part.text.trim());
+			}
+		}
+	}
+
 	return texts.join("\n").trim();
+}
+
+function resolveOpenAiCompatibleBaseUrl(provider) {
+	return OPENAI_COMPATIBLE_BASE_URLS[provider] || "";
+}
+
+function normalizeProviderModelId(model) {
+	const normalized = String(model || "").trim();
+	const slashIndex = normalized.indexOf("/");
+	if (slashIndex <= 0) {
+		return normalized;
+	}
+	return normalized.slice(slashIndex + 1);
 }
 
 function normalizeCitationHost(url) {
@@ -780,6 +842,72 @@ async function runGeminiPromptLabQuery({ effectiveQuery, model }) {
 	};
 }
 
+async function runOpenAiCompatiblePromptLabQuery({
+	provider,
+	effectiveQuery,
+	model,
+}) {
+	const apiKey = resolveApiKeyForProvider(provider);
+	const baseUrl = resolveOpenAiCompatibleBaseUrl(provider);
+	if (!baseUrl) {
+		throw new Error(`Unsupported provider "${provider}".`);
+	}
+	const requestBody = {
+		model: normalizeProviderModelId(model),
+		messages: [
+			{ role: "system", content: getSystemPromptForProvider(provider) },
+			{
+				role: "user",
+				content: buildPromptLabUserPrompt(effectiveQuery, false),
+			},
+		],
+	};
+	if (provider !== "moonshot") {
+		requestBody.temperature = 0.7;
+	}
+
+	const upstreamResponse = await fetch(`${baseUrl}/chat/completions`, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${apiKey}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify(requestBody),
+	});
+
+	const raw = await upstreamResponse.text();
+	let payload = {};
+	if (raw) {
+		try {
+			payload = JSON.parse(raw);
+		} catch {
+			payload = {};
+		}
+	}
+
+	if (!upstreamResponse.ok) {
+		const upstreamMessage =
+			typeof payload?.error?.message === "string"
+				? payload.error.message
+				: typeof payload?.base_resp?.status_msg === "string"
+					? payload.base_resp.status_msg
+					: `${provider} request failed (${upstreamResponse.status}).`;
+		const error = new Error(upstreamMessage);
+		error.statusCode =
+			upstreamResponse.status >= 500 ? 502 : upstreamResponse.status;
+		throw error;
+	}
+
+	const citationRefs = normalizeCitationRefs(payload, provider);
+	return {
+		responseText: extractResponseText(payload),
+		citationRefs,
+		citations: extractCitations(citationRefs),
+		effectiveQuery,
+		tokens: extractTokenUsage(payload),
+	};
+}
+
 async function runPromptLabQuery({ query, model, webSearch, searchContext }) {
 	const provider = inferProviderFromModel(model);
 	const effectiveQuery = buildEffectiveQuery(query, provider, searchContext);
@@ -788,6 +916,17 @@ async function runPromptLabQuery({ query, model, webSearch, searchContext }) {
 	}
 	if (provider === "google") {
 		return runGeminiPromptLabQuery({ effectiveQuery, model });
+	}
+	if (
+		provider === "deepseek" ||
+		provider === "moonshot" ||
+		provider === "minimax"
+	) {
+		return runOpenAiCompatiblePromptLabQuery({
+			provider,
+			effectiveQuery,
+			model,
+		});
 	}
 	return runOpenAiPromptLabQuery({ effectiveQuery, model, webSearch });
 }

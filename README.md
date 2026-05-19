@@ -52,6 +52,9 @@ In Vercel Project Settings -> Environment Variables, set:
 - `OPENAI_API_KEY` (required for GPT models in Prompt Query Lab on `/prompts`)
 - `ANTHROPIC_API_KEY` (required for Claude models in Prompt Query Lab on `/prompts`)
 - `GEMINI_API_KEY` (required for Gemini models in Prompt Query Lab on `/prompts`)
+- `DEEPSEEK_API_KEY` (required for DeepSeek models in Prompt Query Lab on `/prompts`)
+- `MOONSHOT_API_KEY` (required for Kimi models in Prompt Query Lab on `/prompts`)
+- `MINIMAX_API_KEY` (required for MiniMax models in Prompt Query Lab on `/prompts`)
 - `GITHUB_TOKEN` (PAT with `repo` + `workflow` access to this repo)
 - `GITHUB_OWNER` (e.g. `jameshighcharts`)
 - `GITHUB_REPO` (e.g. `javisLLM-`)
@@ -107,6 +110,9 @@ In GitHub repo settings -> Secrets and variables -> Actions, add:
 - `OPENAI_API_KEY`
 - `ANTHROPIC_API_KEY` (required when running Claude models)
 - `GEMINI_API_KEY` (required when running Gemini models)
+- `DEEPSEEK_API_KEY` (required when running DeepSeek models)
+- `MOONSHOT_API_KEY` (required when running Kimi models)
+- `MINIMAX_API_KEY` (required when running MiniMax models)
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 
@@ -131,6 +137,9 @@ Required Railway env vars:
 - `OPENAI_API_KEY`
 - `ANTHROPIC_API_KEY`
 - `GEMINI_API_KEY`
+- `DEEPSEEK_API_KEY`
+- `MOONSHOT_API_KEY`
+- `MINIMAX_API_KEY`
 
 Optional worker tuning:
 - `WORKER_QUEUE_NAME`
@@ -201,6 +210,9 @@ Edit `/Users/jamesm/projects/easy_llm_benchmarker/.env.monthly` and set:
 - `OPENAI_API_KEY` (required for GPT models)
 - `ANTHROPIC_API_KEY` (required for Claude models)
 - `GEMINI_API_KEY` (required for Gemini models)
+- `DEEPSEEK_API_KEY` (required for DeepSeek models)
+- `MOONSHOT_API_KEY` (required for Kimi models)
+- `MINIMAX_API_KEY` (required for MiniMax models)
 - `GSHEET_WEBAPP_URL`
 - `GSHEET_WEBAPP_SECRET`
 - `GSHEET_TAB_NAME`

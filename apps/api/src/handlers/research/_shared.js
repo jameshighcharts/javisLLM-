@@ -125,6 +125,15 @@ function inferProviderFromModel(model) {
 	if (normalized.startsWith("gemini") || normalized.startsWith("google/")) {
 		return "google";
 	}
+	if (normalized.startsWith("deepseek")) {
+		return "deepseek";
+	}
+	if (normalized.startsWith("kimi") || normalized.startsWith("moonshot/")) {
+		return "moonshot";
+	}
+	if (normalized.startsWith("minimax")) {
+		return "minimax";
+	}
 	return "openai";
 }
 

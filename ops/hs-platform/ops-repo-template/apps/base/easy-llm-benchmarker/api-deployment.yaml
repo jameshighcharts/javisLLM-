@@ -62,6 +62,21 @@ spec:
                 secretKeyRef:
                   name: easy-llm-benchmarker-api-secrets
                   key: GEMINI_API_KEY
+            - name: DEEPSEEK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-api-secrets
+                  key: DEEPSEEK_API_KEY
+            - name: MOONSHOT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-api-secrets
+                  key: MOONSHOT_API_KEY
+            - name: MINIMAX_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: easy-llm-benchmarker-api-secrets
+                  key: MINIMAX_API_KEY
             - name: BENCHMARK_TRIGGER_TOKEN
               valueFrom:
                 secretKeyRef:

@@ -230,6 +230,15 @@ function inferModelOwner(model: string): string {
 	if (normalized.startsWith("gemini") || normalized.startsWith("google/")) {
 		return "Google";
 	}
+	if (normalized.startsWith("deepseek")) {
+		return "DeepSeek";
+	}
+	if (normalized.startsWith("kimi") || normalized.startsWith("moonshot/")) {
+		return "Moonshot AI";
+	}
+	if (normalized.startsWith("minimax")) {
+		return "MiniMax";
+	}
 	return "Unknown";
 }
 

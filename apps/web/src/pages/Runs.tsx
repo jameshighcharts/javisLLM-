@@ -14,6 +14,7 @@ import { formatUsd } from "../utils/modelPricing";
 
 const TRIGGER_TOKEN_STORAGE_KEY = "benchmark_trigger_token";
 const MAX_PROMPT_LIMIT = 10000;
+type RunProviderGroup = "all" | "china";
 
 function canUseSessionStorage(): boolean {
 	return (
@@ -226,6 +227,8 @@ export default function Runs() {
 	]);
 	const [runs, setRuns] = useState(1);
 	const [webSearch, setWebSearch] = useState(true);
+	const [runProviderGroup, setRunProviderGroup] =
+		useState<RunProviderGroup>("all");
 	const [runMonth, setRunMonth] = useState("");
 	const [promptLimit] = useState("");
 	const [promptFilter, setPromptFilter] = useState<"all" | "newest" | "tag">(
@@ -302,8 +305,9 @@ export default function Runs() {
 	}, [defaultModelValues, modelValues]);
 
 	const runsQuery = useQuery({
-		queryKey: ["benchmark-runs"],
-		queryFn: () => api.benchmarkRuns(),
+		queryKey: ["benchmark-runs", runProviderGroup],
+		queryFn: () =>
+			api.benchmarkRuns(undefined, { providerGroup: runProviderGroup }),
 		refetchInterval: (query) => {
 			const data = query.state.data as
 				| { runs?: Array<BenchmarkWorkflowRun | BenchmarkQueueRun> }
@@ -314,8 +318,8 @@ export default function Runs() {
 		retry: false,
 	});
 	const runCostsQuery = useQuery({
-		queryKey: ["run-costs"],
-		queryFn: () => api.runCosts(30),
+		queryKey: ["run-costs", runProviderGroup],
+		queryFn: () => api.runCosts(30, { providerGroup: runProviderGroup }),
 		refetchInterval: 60_000,
 		retry: false,
 	});
@@ -503,6 +507,8 @@ export default function Runs() {
 		() => Boolean(runsQuery.data && !isWorkflowRunsResponse(runsQuery.data)),
 		[runsQuery.data],
 	);
+	const providerGroupLabel =
+		runProviderGroup === "china" ? "China LLMs" : "All models";
 	const activeQueueRun = useMemo(
 		() =>
 			(runsQuery.data?.runs ?? []).find((run): run is BenchmarkQueueRun =>
@@ -663,7 +669,8 @@ export default function Runs() {
 								className="text-xs tabular-nums"
 								style={{ color: "#7A8E7C" }}
 							>
-								Est. cost (last {runCostsQuery.data.runCount}):{" "}
+								Est. cost ({providerGroupLabel.toLowerCase()} · last{" "}
+								{runCostsQuery.data.runCount}):{" "}
 								<strong>
 									{formatUsd(runCostsQuery.data.totals.estimatedTotalCostUsd)}
 								</strong>
@@ -1174,20 +1181,56 @@ export default function Runs() {
 					className="px-4 sm:px-5 py-4 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between"
 					style={{ borderBottom: "1px solid #F2EDE6" }}
 				>
-					<div
-						className="text-sm font-semibold tracking-tight"
-						style={{ color: "#2A3A2C" }}
-					>
-						{queueContractEnabled
-							? "Recent Queue Runs"
-							: "Recent Workflow Runs"}
+					<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+						<div
+							className="text-sm font-semibold tracking-tight"
+							style={{ color: "#2A3A2C" }}
+						>
+							{queueContractEnabled
+								? "Recent Queue Runs"
+								: "Recent Workflow Runs"}
+						</div>
+						<div
+							className="inline-flex items-center gap-1 rounded-lg p-1"
+							style={{ background: "#F7F3EC", border: "1px solid #E6DDCF" }}
+						>
+							{(
+								[
+									{ value: "all", label: "All" },
+									{ value: "china", label: "China LLMs" },
+								] as const
+							).map((option) => {
+								const active = runProviderGroup === option.value;
+								return (
+									<button
+										key={option.value}
+										type="button"
+										onClick={() => setRunProviderGroup(option.value)}
+										className="px-2.5 py-1 rounded-md text-xs font-medium"
+										style={{
+											background: active ? "#2A5C2E" : "transparent",
+											color: active ? "#FFFFFF" : "#607860",
+										}}
+									>
+										{option.label}
+									</button>
+								);
+							})}
+						</div>
 					</div>
-					<div className="text-xs" style={{ color: "#9AAE9C" }}>
-						{hasTriggerToken
-							? hasActiveQueueRun
-								? "Auto-refresh every 3s while running"
-								: "Auto-refresh every 15s"
-							: "Read-only view · runs auto-refresh every 15s"}
+					<div className="flex flex-col items-start gap-1 text-xs sm:items-end">
+						<div style={{ color: "#9AAE9C" }}>
+							{hasTriggerToken
+								? hasActiveQueueRun
+									? "Auto-refresh every 3s while running"
+									: "Auto-refresh every 15s"
+								: "Read-only view · runs auto-refresh every 15s"}
+						</div>
+						{runProviderGroup === "china" && (
+							<div style={{ color: "#7A8E7C" }}>
+								Filtered to DeepSeek, Kimi, and MiniMax outputs
+							</div>
+						)}
 					</div>
 				</div>
 
@@ -1203,7 +1246,9 @@ export default function Runs() {
 					</div>
 				) : (runsQuery.data?.runs ?? []).length === 0 ? (
 					<div className="p-5 text-sm" style={{ color: "#7A8E7C" }}>
-						No runs found yet.
+						{runProviderGroup === "china"
+							? "No runs found for DeepSeek, Kimi, or MiniMax yet."
+							: "No runs found yet."}
 					</div>
 				) : (
 					<div className="overflow-x-auto">

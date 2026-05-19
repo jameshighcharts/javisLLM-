@@ -27,6 +27,40 @@ function isQueueTriggerEnabled() {
 	return parseBoolean(process.env.USE_QUEUE_TRIGGER, false);
 }
 
+function parseProviderGroup(value) {
+	const normalized = String(value || "")
+		.trim()
+		.toLowerCase();
+	return normalized === "china" ? "china" : "all";
+}
+
+function isChineseLlmModel(model) {
+	const normalized = String(model || "")
+		.trim()
+		.toLowerCase();
+	return (
+		normalized.startsWith("deepseek") ||
+		normalized.startsWith("kimi") ||
+		normalized.startsWith("moonshot/") ||
+		normalized.startsWith("minimax")
+	);
+}
+
+function runMatchesProviderGroup(run, providerGroup) {
+	if (providerGroup !== "china") {
+		return true;
+	}
+	const rawModels = String(run?.model || "").trim();
+	if (!rawModels) {
+		return false;
+	}
+	return rawModels
+		.split(",")
+		.map((value) => value.trim())
+		.filter(Boolean)
+		.some((model) => isChineseLlmModel(model));
+}
+
 function getErrorSearchText(error) {
 	const segments = [];
 	if (error instanceof Error && error.message) {
@@ -199,7 +233,7 @@ function deriveQueueRunStatus(progress) {
 	return "pending";
 }
 
-async function listQueueRuns() {
+async function listQueueRuns(providerGroup = "all") {
 	try {
 		const restConfig = getSupabaseRestConfig();
 		let runs;
@@ -245,45 +279,47 @@ async function listQueueRuns() {
 		}
 
 		return {
-			runs: runs.map((run) => {
-				const runId = String(run.id || "");
-				const progress = progressByRunId.get(runId) || null;
+			runs: runs
+				.filter((run) => runMatchesProviderGroup(run, providerGroup))
+				.map((run) => {
+					const runId = String(run.id || "");
+					const progress = progressByRunId.get(runId) || null;
 
-				const totalJobs = Number(progress?.total_jobs || 0);
-				const completedJobs = Number(progress?.completed_jobs || 0);
-				const processingJobs = Number(progress?.processing_jobs || 0);
-				const pendingJobs = Number(progress?.pending_jobs || 0);
-				const failedJobs = Number(progress?.failed_jobs || 0);
-				const deadLetterJobs = Number(progress?.dead_letter_jobs || 0);
-				const completionPct = Number(progress?.completion_pct || 0);
+					const totalJobs = Number(progress?.total_jobs || 0);
+					const completedJobs = Number(progress?.completed_jobs || 0);
+					const processingJobs = Number(progress?.processing_jobs || 0);
+					const pendingJobs = Number(progress?.pending_jobs || 0);
+					const failedJobs = Number(progress?.failed_jobs || 0);
+					const deadLetterJobs = Number(progress?.dead_letter_jobs || 0);
+					const completionPct = Number(progress?.completion_pct || 0);
 
-				return {
-					id: runId,
-					runMonth: run.run_month ? String(run.run_month) : null,
-					models: run.model ? String(run.model) : null,
-					runKind: run.run_kind ? String(run.run_kind) : "full",
-					cohortTag: run.cohort_tag ? String(run.cohort_tag) : null,
-					webSearchEnabled:
-						typeof run.web_search_enabled === "boolean"
-							? run.web_search_enabled
-							: null,
-					overallScore:
-						typeof run.overall_score === "number"
-							? Number(run.overall_score)
-							: null,
-					createdAt: run.created_at ? String(run.created_at) : null,
-					progress: {
-						totalJobs,
-						completedJobs,
-						processingJobs,
-						pendingJobs,
-						failedJobs,
-						deadLetterJobs,
-						completionPct,
-					},
-					status: deriveQueueRunStatus(progress),
-				};
-			}),
+					return {
+						id: runId,
+						runMonth: run.run_month ? String(run.run_month) : null,
+						models: run.model ? String(run.model) : null,
+						runKind: run.run_kind ? String(run.run_kind) : "full",
+						cohortTag: run.cohort_tag ? String(run.cohort_tag) : null,
+						webSearchEnabled:
+							typeof run.web_search_enabled === "boolean"
+								? run.web_search_enabled
+								: null,
+						overallScore:
+							typeof run.overall_score === "number"
+								? Number(run.overall_score)
+								: null,
+						createdAt: run.created_at ? String(run.created_at) : null,
+						progress: {
+							totalJobs,
+							completedJobs,
+							processingJobs,
+							pendingJobs,
+							failedJobs,
+							deadLetterJobs,
+							completionPct,
+						},
+						status: deriveQueueRunStatus(progress),
+					};
+				}),
 		};
 	} catch (error) {
 		if (!isSupabaseUnavailable(error)) {
@@ -319,7 +355,8 @@ module.exports = async (req, res) => {
 		});
 
 		if (isQueueTriggerEnabled()) {
-			const response = await listQueueRuns();
+			const providerGroup = parseProviderGroup(req.query.providerGroup);
+			const response = await listQueueRuns(providerGroup);
 			return sendJson(res, 200, {
 				ok: true,
 				...response,

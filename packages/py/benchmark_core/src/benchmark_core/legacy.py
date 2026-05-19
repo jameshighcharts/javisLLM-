@@ -86,6 +86,15 @@ MODEL_OWNER_BY_PROVIDER = {
     "openai": "OpenAI",
     "anthropic": "Anthropic",
     "google": "Google",
+    "deepseek": "DeepSeek",
+    "moonshot": "Moonshot AI",
+    "minimax": "MiniMax",
+}
+
+OPENAI_COMPATIBLE_PROVIDER_BASE_URLS = {
+    "deepseek": "https://api.deepseek.com",
+    "moonshot": "https://api.moonshot.ai/v1",
+    "minimax": "https://api.minimax.io/v1",
 }
 
 
@@ -435,12 +444,18 @@ def detect_mentions(
 
 
 def create_openai_client(api_key: str) -> Any:
+    return create_openai_compatible_client(api_key=api_key)
+
+
+def create_openai_compatible_client(api_key: str, base_url: str | None = None) -> Any:
     try:
         from openai import OpenAI
     except ImportError as exc:
         raise RuntimeError(
             'Missing dependency "openai". Install with: pip3 install openai'
         ) from exc
+    if base_url:
+        return OpenAI(api_key=api_key, base_url=base_url)
     return OpenAI(api_key=api_key)
 
 
@@ -458,19 +473,53 @@ def create_gemini_client(api_key: str) -> Any:
     return GeminiRestClient(api_key=api_key)
 
 
+def create_deepseek_client(api_key: str) -> Any:
+    return create_openai_compatible_client(
+        api_key=api_key,
+        base_url=OPENAI_COMPATIBLE_PROVIDER_BASE_URLS["deepseek"],
+    )
+
+
+def create_moonshot_client(api_key: str) -> Any:
+    return create_openai_compatible_client(
+        api_key=api_key,
+        base_url=OPENAI_COMPATIBLE_PROVIDER_BASE_URLS["moonshot"],
+    )
+
+
+def create_minimax_client(api_key: str) -> Any:
+    return create_openai_compatible_client(
+        api_key=api_key,
+        base_url=OPENAI_COMPATIBLE_PROVIDER_BASE_URLS["minimax"],
+    )
+
+
 def infer_provider_from_model(model: str) -> str:
     normalized = str(model).strip().lower()
     if normalized.startswith("claude") or normalized.startswith("anthropic/"):
         return "anthropic"
     if normalized.startswith("gemini") or normalized.startswith("google/"):
         return "google"
+    if normalized.startswith("deepseek"):
+        return "deepseek"
+    if normalized.startswith("kimi") or normalized.startswith("moonshot/"):
+        return "moonshot"
+    if normalized.startswith("minimax"):
+        return "minimax"
     return "openai"
 
 
 def _providerless_model_id(model: str) -> str:
     normalized = str(model).strip().lower()
     provider, separator, model_id = normalized.partition("/")
-    if separator and provider in {"anthropic", "google", "openai"}:
+    if separator and provider in {
+        "anthropic",
+        "google",
+        "openai",
+        "deepseek",
+        "moonshot",
+        "minimax",
+    }:
         return model_id
     return normalized
 
@@ -483,6 +532,8 @@ def _supports_temperature_parameter(provider: str, model: str) -> bool:
             model_id == "claude-opus-4-7"
             or model_id.startswith("claude-opus-4-7-")
         )
+    if normalized_provider == "moonshot":
+        return False
     if normalized_provider == "openai":
         return not (model_id == "gpt-5.5" or model_id.startswith("gpt-5.5-"))
     return True
@@ -496,6 +547,12 @@ def resolve_api_key_env(provider: str, api_key_env_override: str) -> str:
         return "ANTHROPIC_API_KEY"
     if provider == "google":
         return "GEMINI_API_KEY"
+    if provider == "deepseek":
+        return "DEEPSEEK_API_KEY"
+    if provider == "moonshot":
+        return "MOONSHOT_API_KEY"
+    if provider == "minimax":
+        return "MINIMAX_API_KEY"
     return "OPENAI_API_KEY"
 
 
@@ -504,6 +561,12 @@ def create_llm_client(provider: str, api_key: str) -> Any:
         return create_anthropic_client(api_key)
     if provider == "google":
         return create_gemini_client(api_key)
+    if provider == "deepseek":
+        return create_deepseek_client(api_key)
+    if provider == "moonshot":
+        return create_moonshot_client(api_key)
+    if provider == "minimax":
+        return create_minimax_client(api_key)
     return create_openai_client(api_key)
 
 
@@ -665,6 +728,26 @@ def extract_response_text(response_obj: Any, response_dict: Dict[str, Any]) -> s
                 if isinstance(text, str) and text.strip():
                     texts.append(text.strip())
 
+    choices = response_dict.get("choices", [])
+    if isinstance(choices, list):
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message", {})
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                texts.append(content.strip())
+                continue
+            if isinstance(content, list):
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    text = part.get("text")
+                    if isinstance(text, str) and text.strip():
+                        texts.append(text.strip())
+
     return "\n".join(texts).strip()
 
 
@@ -694,6 +777,12 @@ def infer_citation_provider(response_dict: Dict[str, Any]) -> str:
         return "anthropic"
     if model.startswith("gemini") or model.startswith("google/"):
         return "google"
+    if model.startswith("deepseek"):
+        return "deepseek"
+    if model.startswith("kimi") or model.startswith("moonshot/"):
+        return "moonshot"
+    if model.startswith("minimax"):
+        return "minimax"
     if isinstance(response_dict.get("candidates"), list):
         return "google"
     if response_dict.get("type") == "message" and isinstance(response_dict.get("content"), list):
@@ -940,6 +1029,17 @@ def generate_with_optional_retry(
                     if include_temperature:
                         gemini_payload["temperature"] = temperature
                     response_obj = client.generate_content(**gemini_payload)
+                elif provider in {"deepseek", "moonshot", "minimax"}:
+                    compatible_payload: Dict[str, Any] = {
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                    }
+                    if include_temperature:
+                        compatible_payload["temperature"] = temperature
+                    response_obj = client.chat.completions.create(**compatible_payload)
                 else:
                     openai_payload: Dict[str, Any] = {
                         "model": model,

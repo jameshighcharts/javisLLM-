@@ -241,6 +241,12 @@ def infer_model_owner_from_model(model: str) -> str:
         return "Anthropic"
     if normalized.startswith(("gemini", "google/")):
         return "Google"
+    if normalized.startswith("deepseek"):
+        return "DeepSeek"
+    if normalized.startswith(("kimi", "moonshot/")):
+        return "Moonshot AI"
+    if normalized.startswith("minimax"):
+        return "MiniMax"
     return "Unknown"
 
 

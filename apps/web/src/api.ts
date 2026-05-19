@@ -917,10 +917,25 @@ function inferModelOwnerFromModel(model: string): string {
 	if (normalized.startsWith("gemini") || normalized.startsWith("google/")) {
 		return "Google";
 	}
+	if (normalized.startsWith("deepseek")) {
+		return "DeepSeek";
+	}
+	if (normalized.startsWith("kimi") || normalized.startsWith("moonshot/")) {
+		return "Moonshot AI";
+	}
+	if (normalized.startsWith("minimax")) {
+		return "MiniMax";
+	}
 	return "Unknown";
 }
 
-type LlmProviderKey = "chatgpt" | "claude" | "gemini";
+type LlmProviderKey =
+	| "chatgpt"
+	| "claude"
+	| "gemini"
+	| "deepseek"
+	| "kimi"
+	| "minimax";
 
 function normalizeProviderKey(value: string): LlmProviderKey | null {
 	const normalized = value.trim().toLowerCase();
@@ -939,6 +954,15 @@ function normalizeProviderKey(value: string): LlmProviderKey | null {
 	}
 	if (normalized.includes("gemini") || normalized.includes("google")) {
 		return "gemini";
+	}
+	if (normalized.includes("deepseek")) {
+		return "deepseek";
+	}
+	if (normalized.includes("kimi") || normalized.includes("moonshot")) {
+		return "kimi";
+	}
+	if (normalized.includes("minimax")) {
+		return "minimax";
 	}
 	return null;
 }
@@ -6352,8 +6376,16 @@ export const api = {
 		return diagnosticsViaApi();
 	},
 
-	async benchmarkRuns(triggerToken?: string) {
-		return json<BenchmarkRunsResponse>("/benchmark/runs", {
+	async benchmarkRuns(
+		triggerToken?: string,
+		options: { providerGroup?: "all" | "china" } = {},
+	) {
+		const params = new URLSearchParams();
+		if (options.providerGroup && options.providerGroup !== "all") {
+			params.set("providerGroup", options.providerGroup);
+		}
+		const suffix = params.toString() ? `?${params.toString()}` : "";
+		return json<BenchmarkRunsResponse>(`/benchmark/runs${suffix}`, {
 			method: "GET",
 			headers: withOptionalTriggerToken(triggerToken),
 		});
@@ -6363,9 +6395,18 @@ export const api = {
 		return json<BenchmarkModelsResponse>("/benchmark/models");
 	},
 
-	async runCosts(limit = 30): Promise<BenchmarkRunCostsResponse> {
+	async runCosts(
+		limit = 30,
+		options: { providerGroup?: "all" | "china" } = {},
+	): Promise<BenchmarkRunCostsResponse> {
 		const clampedLimit = Math.max(1, Math.min(200, Math.round(limit)));
-		const suffix = `?limit=${encodeURIComponent(String(clampedLimit))}`;
+		const params = new URLSearchParams({
+			limit: String(clampedLimit),
+		});
+		if (options.providerGroup && options.providerGroup !== "all") {
+			params.set("providerGroup", options.providerGroup);
+		}
+		const suffix = `?${params.toString()}`;
 		return json<BenchmarkRunCostsResponse>(`/run-costs${suffix}`);
 	},
 

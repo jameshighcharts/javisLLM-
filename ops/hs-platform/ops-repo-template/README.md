@@ -27,6 +27,9 @@ Required AWS secret values for the current scaffold:
   - `OPENAI_API_KEY`
   - `ANTHROPIC_API_KEY`
   - `GEMINI_API_KEY`
+  - `DEEPSEEK_API_KEY`
+  - `MOONSHOT_API_KEY`
+  - `MINIMAX_API_KEY`
   - `BENCHMARK_TRIGGER_TOKEN`
 - Worker secret bundle:
   - `SUPABASE_URL`
@@ -34,6 +37,9 @@ Required AWS secret values for the current scaffold:
   - `OPENAI_API_KEY`
   - `ANTHROPIC_API_KEY`
   - `GEMINI_API_KEY`
+  - `DEEPSEEK_API_KEY`
+  - `MOONSHOT_API_KEY`
+  - `MINIMAX_API_KEY`
 
 Smoke tests after Argo sync:
 

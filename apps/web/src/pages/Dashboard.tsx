@@ -197,7 +197,13 @@ type TagSummary = {
 	count: number;
 };
 
-type ProviderFilterValue = "chatgpt" | "claude" | "gemini";
+type ProviderFilterValue =
+	| "chatgpt"
+	| "claude"
+	| "gemini"
+	| "deepseek"
+	| "kimi"
+	| "minimax";
 
 const PROVIDER_FILTER_OPTIONS: Array<{
 	value: ProviderFilterValue;
@@ -206,6 +212,9 @@ const PROVIDER_FILTER_OPTIONS: Array<{
 	{ value: "chatgpt", label: "ChatGPT" },
 	{ value: "claude", label: "Claude" },
 	{ value: "gemini", label: "Gemini" },
+	{ value: "deepseek", label: "DeepSeek" },
+	{ value: "kimi", label: "Kimi" },
+	{ value: "minimax", label: "MiniMax" },
 ];
 
 const PREVIOUS_DASHBOARD_TIME_SERIES: TimeSeriesPoint[] = [
@@ -268,14 +277,15 @@ function mergePreviousDashboardTimeSeries(
 function normalizeProviderList(
 	providers: ProviderFilterValue[],
 ): ProviderFilterValue[] {
+	const allowedProviders = new Set(
+		PROVIDER_FILTER_OPTIONS.map((provider) => provider.value),
+	);
 	return [
 		...new Set(providers.map((provider) => provider.trim().toLowerCase())),
 	]
 		.filter(
 			(provider): provider is ProviderFilterValue =>
-				provider === "chatgpt" ||
-				provider === "claude" ||
-				provider === "gemini",
+				allowedProviders.has(provider as ProviderFilterValue),
 		)
 		.sort((left, right) => left.localeCompare(right));
 }

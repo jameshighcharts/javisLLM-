@@ -8,6 +8,9 @@
     "gpt-4o-mini",
     "gpt-4o",
     "gpt-5.2",
+    "deepseek-v4-pro",
+    "kimi-k2.5",
+    "MiniMax-M2.5",
     "claude-sonnet-4-5-20250929",
     "claude-opus-4-5-20251101",
     "gemini-2.5-flash"
@@ -83,6 +86,30 @@
       "label": "GPT 5.2",
       "owner": "OpenAI",
       "provider": "openai",
+      "kind": "pinned",
+      "includeByDefault": true
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "label": "DeepSeek V4 Pro",
+      "owner": "DeepSeek",
+      "provider": "deepseek",
+      "kind": "pinned",
+      "includeByDefault": true
+    },
+    {
+      "id": "kimi-k2.5",
+      "label": "Kimi K2.5",
+      "owner": "Moonshot AI",
+      "provider": "moonshot",
+      "kind": "pinned",
+      "includeByDefault": true
+    },
+    {
+      "id": "MiniMax-M2.5",
+      "label": "MiniMax M2.5",
+      "owner": "MiniMax",
+      "provider": "minimax",
       "kind": "pinned",
       "includeByDefault": true
     },

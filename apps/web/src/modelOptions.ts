@@ -1,7 +1,14 @@
 export interface BenchmarkModelOption {
 	value: string;
 	label: string;
-	owner: "OpenAI" | "Anthropic" | "Google" | "Unknown";
+	owner:
+		| "OpenAI"
+		| "Anthropic"
+		| "Google"
+		| "DeepSeek"
+		| "Moonshot AI"
+		| "MiniMax"
+		| "Unknown";
 	provider?: string;
 	kind?: "latest" | "pinned" | string;
 	family?: string | null;
@@ -61,6 +68,27 @@ export const BENCHMARK_MODEL_OPTIONS: BenchmarkModelOption[] = [
 		label: "GPT 5.2",
 		owner: "OpenAI",
 		provider: "openai",
+		kind: "pinned",
+	},
+	{
+		value: "deepseek-v4-pro",
+		label: "DeepSeek V4 Pro",
+		owner: "DeepSeek",
+		provider: "deepseek",
+		kind: "pinned",
+	},
+	{
+		value: "kimi-k2.5",
+		label: "Kimi K2.5",
+		owner: "Moonshot AI",
+		provider: "moonshot",
+		kind: "pinned",
+	},
+	{
+		value: "MiniMax-M2.5",
+		label: "MiniMax M2.5",
+		owner: "MiniMax",
+		provider: "minimax",
 		kind: "pinned",
 	},
 	{
@@ -130,6 +158,15 @@ export function inferModelOwnerFromModelId(model: string): string {
 	}
 	if (normalized.startsWith("gemini") || normalized.startsWith("google/")) {
 		return "Google";
+	}
+	if (normalized.startsWith("deepseek")) {
+		return "DeepSeek";
+	}
+	if (normalized.startsWith("kimi") || normalized.startsWith("moonshot/")) {
+		return "Moonshot AI";
+	}
+	if (normalized.startsWith("minimax")) {
+		return "MiniMax";
 	}
 	return "Unknown";
 }

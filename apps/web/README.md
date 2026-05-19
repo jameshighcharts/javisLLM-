@@ -15,6 +15,9 @@ VITE_AUTH_BYPASS=false
 OPENAI_API_KEY=required-for-local-query-lab
 ANTHROPIC_API_KEY=required-for-claude-query-lab
 GEMINI_API_KEY=required-for-gemini-query-lab
+DEEPSEEK_API_KEY=required-for-deepseek-query-lab
+MOONSHOT_API_KEY=required-for-kimi-query-lab
+MINIMAX_API_KEY=required-for-minimax-query-lab
 # Optional local-only ChatGPT web UI scraping for Query Lab:
 ENABLE_CHATGPT_WEB_SCRAPER=true
 CHATGPT_SESSION_COOKIE=name=value; other=value

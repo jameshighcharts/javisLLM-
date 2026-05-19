@@ -248,6 +248,11 @@ const OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses";
 const ANTHROPIC_MESSAGES_API_URL = "https://api.anthropic.com/v1/messages";
 const GEMINI_GENERATE_CONTENT_API_ROOT =
 	"https://generativelanguage.googleapis.com/v1beta/models";
+const OPENAI_COMPATIBLE_BASE_URLS: Record<string, string> = {
+	deepseek: "https://api.deepseek.com",
+	moonshot: "https://api.moonshot.ai/v1",
+	minimax: "https://api.minimax.io/v1",
+};
 const ANTHROPIC_API_VERSION = "2023-06-01";
 
 const promptLabRunSchema = z.object({
@@ -290,7 +295,14 @@ type HttpError = Error & {
 	exposeMessage?: boolean;
 };
 
-type PromptLabProvider = "openai" | "anthropic" | "google" | "chatgpt-web";
+type PromptLabProvider =
+	| "openai"
+	| "anthropic"
+	| "google"
+	| "deepseek"
+	| "moonshot"
+	| "minimax"
+	| "chatgpt-web";
 
 const app = express();
 app.disable("x-powered-by");
@@ -838,7 +850,35 @@ function inferModelOwnerFromModel(model: string): string {
 	if (normalized.startsWith("gemini") || normalized.startsWith("google/")) {
 		return "Google";
 	}
+	if (normalized.startsWith("deepseek")) {
+		return "DeepSeek";
+	}
+	if (normalized.startsWith("kimi") || normalized.startsWith("moonshot/")) {
+		return "Moonshot AI";
+	}
+	if (normalized.startsWith("minimax")) {
+		return "MiniMax";
+	}
 	return "Unknown";
+}
+
+type RunProviderGroup = "all" | "china";
+
+function parseRunProviderGroup(rawValue: unknown): RunProviderGroup {
+	const normalized = String(rawValue ?? "")
+		.trim()
+		.toLowerCase();
+	return normalized === "china" ? "china" : "all";
+}
+
+function isChineseLlmModel(model: string): boolean {
+	const normalized = model.trim().toLowerCase();
+	return (
+		normalized.startsWith("deepseek") ||
+		normalized.startsWith("kimi") ||
+		normalized.startsWith("moonshot/") ||
+		normalized.startsWith("minimax")
+	);
 }
 
 function parseModelOwnerMap(rawValue: string): Record<string, string> {
@@ -1025,6 +1065,15 @@ function inferPromptLabProvider(modelInput: string): PromptLabProvider {
 	if (normalized.startsWith("gemini") || normalized.startsWith("google/")) {
 		return "google";
 	}
+	if (normalized.startsWith("deepseek")) {
+		return "deepseek";
+	}
+	if (normalized.startsWith("kimi") || normalized.startsWith("moonshot/")) {
+		return "moonshot";
+	}
+	if (normalized.startsWith("minimax")) {
+		return "minimax";
+	}
 	return "openai";
 }
 
@@ -1088,7 +1137,13 @@ function resolvePromptLabApiKey(provider: PromptLabProvider): string {
 			? "ANTHROPIC_API_KEY"
 			: provider === "google"
 				? "GEMINI_API_KEY"
-				: "OPENAI_API_KEY";
+				: provider === "deepseek"
+					? "DEEPSEEK_API_KEY"
+					: provider === "moonshot"
+						? "MOONSHOT_API_KEY"
+						: provider === "minimax"
+							? "MINIMAX_API_KEY"
+							: "OPENAI_API_KEY";
 	const apiKey = String(process.env[keyName] ?? "").trim();
 	if (!apiKey) {
 		const error = new Error(
@@ -1104,6 +1159,9 @@ function resolvePromptLabApiKey(provider: PromptLabProvider): string {
 function resolvePromptLabModelOwner(provider: PromptLabProvider): string {
 	if (provider === "anthropic") return "Anthropic";
 	if (provider === "google") return "Google";
+	if (provider === "deepseek") return "DeepSeek";
+	if (provider === "moonshot") return "Moonshot AI";
+	if (provider === "minimax") return "MiniMax";
 	if (provider === "chatgpt-web") return "OpenAI";
 	if (provider === "openai") return "OpenAI";
 	return "Unknown";
@@ -1185,7 +1243,48 @@ function extractPromptLabResponseText(
 		}
 	}
 
+	const choices = Array.isArray(responsePayload.choices)
+		? responsePayload.choices
+		: [];
+	for (const choice of choices) {
+		if (!choice || typeof choice !== "object") {
+			continue;
+		}
+		const message = (choice as { message?: unknown }).message;
+		if (!message || typeof message !== "object") {
+			continue;
+		}
+		const content = (message as { content?: unknown }).content;
+		if (typeof content === "string" && content.trim()) {
+			texts.push(content.trim());
+			continue;
+		}
+		const contentParts = Array.isArray(content) ? content : [];
+		for (const part of contentParts) {
+			if (!part || typeof part !== "object") {
+				continue;
+			}
+			const text = (part as { text?: unknown }).text;
+			if (typeof text === "string" && text.trim()) {
+				texts.push(text.trim());
+			}
+		}
+	}
+
 	return texts.join("\n").trim();
+}
+
+function resolveOpenAiCompatibleBaseUrl(provider: PromptLabProvider): string {
+	return OPENAI_COMPATIBLE_BASE_URLS[provider] ?? "";
+}
+
+function normalizeOpenAiCompatibleModelId(model: string): string {
+	const normalized = model.trim();
+	const slashIndex = normalized.indexOf("/");
+	if (slashIndex <= 0) {
+		return normalized;
+	}
+	return normalized.slice(slashIndex + 1);
 }
 
 function normalizePromptLabCitationHost(url: string): string {
@@ -1710,6 +1809,93 @@ async function runGeminiPromptLabQuery(
 	};
 }
 
+async function runOpenAiCompatiblePromptLabQuery(
+	provider: Extract<PromptLabProvider, "deepseek" | "moonshot" | "minimax">,
+	effectiveQuery: string,
+	model: string,
+): Promise<{
+	responseText: string;
+	citationRefs: PromptLabCitationRef[];
+	citations: string[];
+	effectiveQuery: string;
+	tokens: { inputTokens: number; outputTokens: number; totalTokens: number };
+}> {
+	const apiKey = resolvePromptLabApiKey(provider);
+	const baseUrl = resolveOpenAiCompatibleBaseUrl(provider);
+	if (!baseUrl) {
+		throw new Error(`Unsupported provider "${provider}".`);
+	}
+	const requestBody: Record<string, unknown> = {
+		model: normalizeOpenAiCompatibleModelId(model),
+		messages: [
+			{
+				role: "system",
+				content: getPromptLabSystemPrompt(provider),
+			},
+			{
+				role: "user",
+				content: buildPromptLabUserPrompt(effectiveQuery, false),
+			},
+		],
+	};
+	if (provider !== "moonshot") {
+		requestBody.temperature = 0.7;
+	}
+
+	const upstreamResponse = await fetch(`${baseUrl}/chat/completions`, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${apiKey}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify(requestBody),
+	});
+
+	const raw = await upstreamResponse.text();
+	let payload: unknown = {};
+	if (raw) {
+		try {
+			payload = JSON.parse(raw);
+		} catch {
+			payload = {};
+		}
+	}
+
+	if (!upstreamResponse.ok) {
+		const upstreamMessage =
+			typeof payload === "object" &&
+			payload !== null &&
+			typeof (payload as { error?: { message?: unknown } }).error?.message ===
+				"string"
+				? (payload as { error: { message: string } }).error.message
+				: typeof payload === "object" &&
+						payload !== null &&
+						typeof (payload as { base_resp?: { status_msg?: unknown } })
+							.base_resp?.status_msg === "string"
+					? (payload as { base_resp: { status_msg: string } }).base_resp
+							.status_msg
+					: `${provider} request failed (${upstreamResponse.status}).`;
+		const error = new Error(upstreamMessage) as Error & { statusCode?: number };
+		error.statusCode =
+			upstreamResponse.status >= 500 ? 502 : upstreamResponse.status;
+		throw error;
+	}
+
+	const responsePayload =
+		payload && typeof payload === "object"
+			? (payload as Record<string, unknown>)
+			: {};
+	const citationRefs = extractPromptLabCitationRefs(responsePayload, provider);
+
+	return {
+		responseText: extractPromptLabResponseText(responsePayload),
+		citationRefs,
+		citations: extractPromptLabCitations(citationRefs),
+		effectiveQuery,
+		tokens: extractPromptLabTokenUsage(responsePayload),
+	};
+}
+
 async function runPromptLabQuery(
 	query: string,
 	model: string,
@@ -1745,6 +1931,13 @@ async function runPromptLabQuery(
 	}
 	if (provider === "google") {
 		return runGeminiPromptLabQuery(effectiveQuery, model);
+	}
+	if (
+		provider === "deepseek" ||
+		provider === "moonshot" ||
+		provider === "minimax"
+	) {
+		return runOpenAiCompatiblePromptLabQuery(provider, effectiveQuery, model);
 	}
 	return runOpenAiPromptLabQuery(effectiveQuery, model, webSearch);
 }
@@ -3440,7 +3633,13 @@ function aggregateUrlStats(
 		);
 }
 
-type LlmProviderKey = "chatgpt" | "claude" | "gemini";
+type LlmProviderKey =
+	| "chatgpt"
+	| "claude"
+	| "gemini"
+	| "deepseek"
+	| "kimi"
+	| "minimax";
 
 function normalizeProviderKey(value: string): LlmProviderKey | null {
 	const normalized = value.trim().toLowerCase();
@@ -3459,6 +3658,15 @@ function normalizeProviderKey(value: string): LlmProviderKey | null {
 	}
 	if (normalized.includes("gemini") || normalized.includes("google")) {
 		return "gemini";
+	}
+	if (normalized.includes("deepseek")) {
+		return "deepseek";
+	}
+	if (normalized.includes("kimi") || normalized.includes("moonshot")) {
+		return "kimi";
+	}
+	if (normalized.includes("minimax")) {
+		return "minimax";
 	}
 	return null;
 }
@@ -5187,9 +5395,13 @@ async function fetchUnderTheHoodFromSupabaseViewsForServer(
 	};
 }
 
-async function fetchRunCostsFromSupabaseViewsForServer(limit = 30) {
+async function fetchRunCostsFromSupabaseViewsForServer(
+	limit = 30,
+	options: { providerGroup?: RunProviderGroup } = {},
+) {
 	const client = requireSupabaseClient();
 	const clampedLimit = Math.max(1, Math.min(200, Math.round(limit)));
+	const providerGroup = options.providerGroup ?? "all";
 	const runResult = await client
 		.from("mv_run_summary")
 		.select(
@@ -5249,75 +5461,111 @@ async function fetchRunCostsFromSupabaseViewsForServer(limit = 30) {
 		modelRowsByRun.set(row.run_id, bucket);
 	}
 
-	const runs = runRows.map((run) => {
-		const rowsForRun = modelRowsByRun.get(run.run_id) ?? [];
-		const resolvedModels =
-			resolveRunModels(run).length > 0
-				? resolveRunModels(run)
-				: [...new Set(rowsForRun.map((row) => row.model).filter(Boolean))].sort(
-						(a, b) => a.localeCompare(b),
-					);
+	const runs = runRows
+		.map((run) => {
+			const rowsForRun = modelRowsByRun.get(run.run_id) ?? [];
+			const filteredModelRows =
+				providerGroup === "china"
+					? rowsForRun.filter((row) =>
+							isChineseLlmModel(String(row.model ?? "")),
+						)
+					: rowsForRun;
+			const resolvedModels =
+				filteredModelRows.length > 0
+					? [
+							...new Set(
+								filteredModelRows
+									.map((row) => String(row.model ?? "").trim())
+									.filter(Boolean),
+							),
+						].sort((a, b) => a.localeCompare(b))
+					: providerGroup === "china"
+						? []
+						: resolveRunModels(run).length > 0
+							? resolveRunModels(run)
+							: [
+									...new Set(
+										rowsForRun.map((row) => row.model).filter(Boolean),
+									),
+								].sort((a, b) => a.localeCompare(b));
 
-		let estimatedInputCostUsd = 0;
-		let estimatedOutputCostUsd = 0;
-		let estimatedTotalCostUsd = 0;
-		let pricedResponseCount = 0;
-		const unpricedModels = new Set<string>();
+			if (providerGroup === "china" && resolvedModels.length === 0) {
+				return null;
+			}
 
-		for (const row of rowsForRun) {
-			const model = String(row.model ?? "").trim();
-			if (!model) continue;
-			const inputTokens = Math.max(
-				0,
-				Math.round(asNumber(row.total_input_tokens)),
-			);
-			const outputTokens = Math.max(
-				0,
-				Math.round(asNumber(row.total_output_tokens)),
-			);
-			const responseCount = Math.max(
-				0,
-				Math.round(asNumber(row.response_count)),
-			);
-			const costs = estimateResponseCostForServer(
-				model,
+			let estimatedInputCostUsd = 0;
+			let estimatedOutputCostUsd = 0;
+			let estimatedTotalCostUsd = 0;
+			let pricedResponseCount = 0;
+			const unpricedModels = new Set<string>();
+			let responseCount = 0;
+			let inputTokens = 0;
+			let outputTokens = 0;
+			let totalTokens = 0;
+
+			for (const row of filteredModelRows) {
+				const model = String(row.model ?? "").trim();
+				if (!model) continue;
+				const modelInputTokens = Math.max(
+					0,
+					Math.round(asNumber(row.total_input_tokens)),
+				);
+				const modelOutputTokens = Math.max(
+					0,
+					Math.round(asNumber(row.total_output_tokens)),
+				);
+				const modelResponseCount = Math.max(
+					0,
+					Math.round(asNumber(row.response_count)),
+				);
+				const modelTotalTokens = Math.max(
+					0,
+					Math.round(asNumber(row.total_tokens)),
+				);
+				responseCount += modelResponseCount;
+				inputTokens += modelInputTokens;
+				outputTokens += modelOutputTokens;
+				totalTokens += modelTotalTokens;
+				const costs = estimateResponseCostForServer(
+					model,
+					modelInputTokens,
+					modelOutputTokens,
+				);
+				estimatedInputCostUsd += costs.inputCostUsd;
+				estimatedOutputCostUsd += costs.outputCostUsd;
+				estimatedTotalCostUsd += costs.totalCostUsd;
+				if (costs.priced) {
+					pricedResponseCount += modelResponseCount;
+				} else {
+					unpricedModels.add(model);
+				}
+			}
+
+			return {
+				runId: run.run_id,
+				runMonth: run.run_month,
+				runKind: run.run_kind ?? "full",
+				cohortTag: run.cohort_tag ?? null,
+				createdAt: run.created_at,
+				startedAt: run.started_at,
+				endedAt: run.ended_at,
+				webSearchEnabled:
+					typeof run.web_search_enabled === "boolean"
+						? run.web_search_enabled
+						: null,
+				responseCount,
+				models: resolvedModels,
 				inputTokens,
 				outputTokens,
-			);
-			estimatedInputCostUsd += costs.inputCostUsd;
-			estimatedOutputCostUsd += costs.outputCostUsd;
-			estimatedTotalCostUsd += costs.totalCostUsd;
-			if (costs.priced) {
-				pricedResponseCount += responseCount;
-			} else {
-				unpricedModels.add(model);
-			}
-		}
-
-		return {
-			runId: run.run_id,
-			runMonth: run.run_month,
-			runKind: run.run_kind ?? "full",
-			cohortTag: run.cohort_tag ?? null,
-			createdAt: run.created_at,
-			startedAt: run.started_at,
-			endedAt: run.ended_at,
-			webSearchEnabled:
-				typeof run.web_search_enabled === "boolean"
-					? run.web_search_enabled
-					: null,
-			responseCount: Math.max(0, Math.round(asNumber(run.response_count))),
-			models: resolvedModels,
-			inputTokens: Math.max(0, Math.round(asNumber(run.input_tokens))),
-			outputTokens: Math.max(0, Math.round(asNumber(run.output_tokens))),
-			totalTokens: Math.max(0, Math.round(asNumber(run.total_tokens))),
-			pricedResponseCount,
-			unpricedModels: [...unpricedModels].sort((a, b) => a.localeCompare(b)),
-			estimatedInputCostUsd: roundTo(estimatedInputCostUsd, 6),
-			estimatedOutputCostUsd: roundTo(estimatedOutputCostUsd, 6),
-			estimatedTotalCostUsd: roundTo(estimatedTotalCostUsd, 6),
-		};
-	});
+				totalTokens,
+				pricedResponseCount,
+				unpricedModels: [...unpricedModels].sort((a, b) => a.localeCompare(b)),
+				estimatedInputCostUsd: roundTo(estimatedInputCostUsd, 6),
+				estimatedOutputCostUsd: roundTo(estimatedOutputCostUsd, 6),
+				estimatedTotalCostUsd: roundTo(estimatedTotalCostUsd, 6),
+			};
+		})
+		.filter((run): run is NonNullable<typeof run> => run !== null);
 
 	const totals = runs.reduce(
 		(sum, run) => {
@@ -6338,10 +6586,13 @@ app.get("/api/run-costs", async (req, res) => {
 		const limit = Number.isFinite(parsedLimit)
 			? Math.max(1, Math.min(200, Math.round(parsedLimit)))
 			: 30;
+		const providerGroup = parseRunProviderGroup(req.query.providerGroup);
 
 		if (shouldUseSupabaseDashboardSource()) {
 			try {
-				const payload = await fetchRunCostsFromSupabaseViewsForServer(limit);
+				const payload = await fetchRunCostsFromSupabaseViewsForServer(limit, {
+					providerGroup,
+				});
 				res.json(payload);
 				return;
 			} catch (error) {
@@ -6394,6 +6645,10 @@ app.get("/api/run-costs", async (req, res) => {
 		>();
 
 		for (const row of jsonlRows) {
+			const modelName = String(row.model ?? "").trim();
+			if (providerGroup === "china" && !isChineseLlmModel(modelName)) {
+				continue;
+			}
 			const timestampRaw = String(
 				row.timestamp ?? row.created_at ?? row.run_created_at ?? "",
 			).trim();
@@ -6435,7 +6690,6 @@ app.get("/api/run-costs", async (req, res) => {
 				buckets.set(runId, bucket);
 			}
 
-			const modelName = String(row.model ?? "").trim();
 			if (modelName) {
 				bucket.models.add(modelName);
 			}

@@ -63,12 +63,21 @@ TARGET_MODELS="$(IFS=','; echo "${NORMALIZED_MODELS[*]}")"
 NEEDS_OPENAI=0
 NEEDS_ANTHROPIC=0
 NEEDS_GEMINI=0
+NEEDS_DEEPSEEK=0
+NEEDS_MOONSHOT=0
+NEEDS_MINIMAX=0
 for model_name in "${NORMALIZED_MODELS[@]}"; do
   model_lower="$(echo "${model_name}" | tr '[:upper:]' '[:lower:]')"
   if [[ "${model_lower}" == claude* || "${model_lower}" == anthropic/* ]]; then
     NEEDS_ANTHROPIC=1
   elif [[ "${model_lower}" == gemini* || "${model_lower}" == google/* ]]; then
     NEEDS_GEMINI=1
+  elif [[ "${model_lower}" == deepseek* ]]; then
+    NEEDS_DEEPSEEK=1
+  elif [[ "${model_lower}" == kimi* || "${model_lower}" == moonshot/* ]]; then
+    NEEDS_MOONSHOT=1
+  elif [[ "${model_lower}" == minimax* ]]; then
+    NEEDS_MINIMAX=1
   else
     NEEDS_OPENAI=1
   fi
@@ -82,6 +91,15 @@ if [[ "${NEEDS_ANTHROPIC}" == "1" ]]; then
 fi
 if [[ "${NEEDS_GEMINI}" == "1" ]]; then
   : "${GEMINI_API_KEY:?GEMINI_API_KEY is required when any selected model is Gemini-compatible}"
+fi
+if [[ "${NEEDS_DEEPSEEK}" == "1" ]]; then
+  : "${DEEPSEEK_API_KEY:?DEEPSEEK_API_KEY is required when any selected model is DeepSeek-compatible}"
+fi
+if [[ "${NEEDS_MOONSHOT}" == "1" ]]; then
+  : "${MOONSHOT_API_KEY:?MOONSHOT_API_KEY is required when any selected model is Kimi-compatible}"
+fi
+if [[ "${NEEDS_MINIMAX}" == "1" ]]; then
+  : "${MINIMAX_API_KEY:?MINIMAX_API_KEY is required when any selected model is MiniMax-compatible}"
 fi
 
 mkdir -p "${OUTPUT_DIR}" "${LOG_DIR}"
