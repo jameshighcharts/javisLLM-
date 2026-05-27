@@ -8,7 +8,7 @@ import Login from "./pages/Login";
 
 type PageModule = { default: ComponentType<any> };
 const pageModules = import.meta.glob(
-	"./pages/{Askill,CitationLinks,CompetitorBlogs,Competitors,Dashboard,Gantt,KR23,Logics,OKR,ProductMentions,PromptDrilldown,PromptDrilldownHub,PromptResearch,Prompts,Runs,UnderTheHood}.tsx",
+	"./pages/{Askill,CitationLinks,CompetitorBlogs,Competitors,Costs,Dashboard,Gantt,KR23,Logics,OKR,ProductMentions,PromptDrilldown,PromptDrilldownHub,PromptResearch,Prompts,Runs,UnderTheHood}.tsx",
 ) as Record<string, () => Promise<PageModule>>;
 
 function resolveLazyPage(path: string): ElementType | null {
@@ -20,6 +20,7 @@ const Askill = resolveLazyPage("./pages/Askill.tsx");
 const CitationLinks = resolveLazyPage("./pages/CitationLinks.tsx");
 const CompetitorBlogs = resolveLazyPage("./pages/CompetitorBlogs.tsx");
 const Competitors = resolveLazyPage("./pages/Competitors.tsx");
+const Costs = resolveLazyPage("./pages/Costs.tsx");
 const Dashboard = resolveLazyPage("./pages/Dashboard.tsx");
 const Gantt = resolveLazyPage("./pages/Gantt.tsx");
 const KR23 = resolveLazyPage("./pages/KR23.tsx");
@@ -125,6 +126,10 @@ export default function App() {
 											element={
 												<LazyPageRoute Page={Dashboard} label="Dashboard" />
 											}
+										/>
+										<Route
+											path="/costs"
+											element={<LazyPageRoute Page={Costs} label="Costs" />}
 										/>
 										<Route
 											path="/okr/kr-2-1"

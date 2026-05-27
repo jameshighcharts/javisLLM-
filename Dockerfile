@@ -6,11 +6,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir --upgrade pip \
-  && pip install --no-cache-dir -r /app/requirements.txt
-
-COPY llm_mention_benchmark.py /app/llm_mention_benchmark.py
 COPY packages/py/benchmark_core /app/packages/py/benchmark_core
+RUN pip install --no-cache-dir --upgrade pip \
+  && pip install --no-cache-dir -r /app/requirements.txt \
+  && pip install --no-cache-dir /app/packages/py/benchmark_core
+
+COPY main.py /app/main.py
+COPY llm_mention_benchmark.py /app/llm_mention_benchmark.py
 COPY apps/worker /app/apps/worker
 COPY scripts/trigger_benchmark_run.py /app/scripts/trigger_benchmark_run.py
 RUN ln -s /app/apps/worker /app/worker

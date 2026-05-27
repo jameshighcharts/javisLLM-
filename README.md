@@ -125,6 +125,7 @@ Workflow file used by `/runs` trigger:
 
 The queue worker is intended to run on Railway from the repo root. This repo now includes:
 - `/Users/jamesm/projects/easy_llm_benchmarker/Dockerfile` -> explicit worker image so Railway uses Dockerfile builds instead of guessing with Railpack
+- `/Users/jamesm/projects/easy_llm_benchmarker/railway.json` -> pins the service to the Dockerfile builder and the worker start command
 - `/Users/jamesm/projects/easy_llm_benchmarker/Procfile` -> `worker: python -m worker.benchmark_worker`
 - `/Users/jamesm/projects/easy_llm_benchmarker/.python-version` -> `3.11`
 - `/Users/jamesm/projects/easy_llm_benchmarker/main.py` -> fallback entrypoint to the same worker if a shell-based start command is used

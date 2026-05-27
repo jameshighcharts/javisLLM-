@@ -11,6 +11,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { Wallet } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "./AuthProvider";
@@ -139,7 +140,12 @@ const NAV: NavItem[] = [
 				/>
 				<path strokeLinecap="round" strokeLinejoin="round" d="M3 12H21" />
 			</svg>
-		),
+			),
+	},
+	{
+		to: "/costs",
+		label: "Costs",
+		icon: <Wallet size={15} strokeWidth={1.75} />,
 	},
 ];
 
@@ -147,6 +153,7 @@ const MOBILE_NAV = NAV.filter((item) => !item.soon).slice(0, 6);
 
 const PAGE_TITLES: Record<string, string> = {
 	"/dashboard": "Dashboard",
+	"/costs": "Costs",
 	"/okr": "OKRs",
 	"/okr/kr-2-1":
 		"KR 2.1: Create and launch 10 LLM-optimized comparison pages by May 31, 2026. Checklist score of +80%",
