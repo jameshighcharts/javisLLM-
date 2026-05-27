@@ -377,16 +377,51 @@ app.use((_req, res, next) => {
 	next();
 });
 
-function getRequestToken(req: express.Request): string {
+function getBearerToken(req: express.Request): string {
 	const auth = req.headers.authorization ?? req.headers.Authorization;
 	if (typeof auth === "string" && auth.startsWith("Bearer ")) {
 		return auth.slice("Bearer ".length).trim();
 	}
+	return "";
+}
+
+function getRequestToken(req: express.Request): string {
 	const headerToken = req.headers["x-ui-token"] ?? req.headers["X-UI-Token"];
 	if (typeof headerToken === "string") {
 		return headerToken.trim();
 	}
-	return "";
+	return getBearerToken(req);
+}
+
+function hasWriteTokenAccess(req: express.Request): boolean {
+	if (!writeToken) {
+		return false;
+	}
+	const provided = getRequestToken(req);
+	return Boolean(provided) && provided === writeToken;
+}
+
+function allowsMachineTokenAccess(req: express.Request): boolean {
+	const routePath = `${req.baseUrl}${req.path}`;
+	const method = req.method.toUpperCase();
+
+	if (method === "POST") {
+		return [
+			"/api/benchmark/trigger",
+			"/api/benchmark/stop",
+			"/api/research/competitors/run",
+			"/api/research/sitemap/sync",
+			"/api/research/gaps/refresh",
+			"/api/research/briefs/generate",
+			"/api/research/prompt-cohorts",
+		].includes(routePath);
+	}
+
+	if (method === "PATCH") {
+		return routePath.startsWith("/api/research/gaps/");
+	}
+
+	return false;
 }
 
 function isLocalhostRequest(req: express.Request): boolean {
@@ -399,14 +434,53 @@ function isLocalhostRequest(req: express.Request): boolean {
 	);
 }
 
+async function requireApiAccess(
+	req: express.Request,
+	res: express.Response,
+	next: express.NextFunction,
+) {
+	if (req.method === "OPTIONS") {
+		next();
+		return;
+	}
+
+	if (hasWriteTokenAccess(req) && allowsMachineTokenAccess(req)) {
+		next();
+		return;
+	}
+
+	if (!supabase) {
+		if (!isProduction && isLocalhostRequest(req)) {
+			next();
+			return;
+		}
+
+		res.status(500).json({ error: "Authentication is not configured." });
+		return;
+	}
+
+	const token = getBearerToken(req);
+	if (!token) {
+		res.status(401).json({ error: "Authentication required." });
+		return;
+	}
+
+	const { data, error } = await supabase.auth.getUser(token);
+	if (error || !data.user) {
+		res.status(401).json({ error: "Invalid or expired session." });
+		return;
+	}
+
+	next();
+}
+
 function requireWriteAccess(
 	req: express.Request,
 	res: express.Response,
 	next: express.NextFunction,
 ) {
 	if (writeToken) {
-		const provided = getRequestToken(req);
-		if (!provided || provided !== writeToken) {
+		if (!hasWriteTokenAccess(req)) {
 			res.status(401).json({ error: "Unauthorized." });
 			return;
 		}
@@ -441,6 +515,8 @@ function ensureServerlessTriggerToken(req: express.Request) {
 		req.headers.authorization = `Bearer ${configured}`;
 	}
 }
+
+app.use("/api", requireApiAccess);
 
 function invokeServerlessHandler(
 	handler: (

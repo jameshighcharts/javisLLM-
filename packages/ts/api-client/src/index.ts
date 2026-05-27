@@ -15,15 +15,24 @@ export type RequestOptions = {
 	headers?: Record<string, string>;
 };
 
+type ApiClientOptions = {
+	getHeaders?: () => Promise<Record<string, string>>;
+};
+
 async function request<T>(
 	path: string,
 	schema: { parse: (value: unknown) => T },
+	clientOptions: ApiClientOptions,
 	options: RequestOptions = {},
 ): Promise<T> {
+	const authHeaders = clientOptions.getHeaders
+		? await clientOptions.getHeaders()
+		: {};
 	const response = await fetch(`/api${path}`, {
 		method: options.method ?? "GET",
 		headers: {
 			"Content-Type": "application/json",
+			...authHeaders,
 			...(options.headers ?? {}),
 		},
 		body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -39,34 +48,40 @@ async function request<T>(
 	return schema.parse(payload);
 }
 
-export function createApiClient() {
+export function createApiClient(options: ApiClientOptions = {}) {
 	return {
 		health(): Promise<HealthResponse> {
-			return request("/health", HealthResponseSchema);
+			return request("/health", HealthResponseSchema, options);
 		},
 		triggerBenchmark(
 			body: unknown,
 			triggerToken?: string,
 		): Promise<BenchmarkTriggerResponse> {
-			return request("/benchmark/trigger", BenchmarkTriggerResponseSchema, {
-				method: "POST",
-				body,
-				headers: triggerToken
-					? { Authorization: `Bearer ${triggerToken}` }
-					: {},
-			});
+			return request(
+				"/benchmark/trigger",
+				BenchmarkTriggerResponseSchema,
+				options,
+				{
+					method: "POST",
+					body,
+					headers: triggerToken ? { "X-UI-Token": triggerToken } : {},
+				},
+			);
 		},
 		stopBenchmark(
 			body: unknown,
 			triggerToken?: string,
 		): Promise<BenchmarkStopResponse> {
-			return request("/benchmark/stop", BenchmarkStopResponseSchema, {
-				method: "POST",
-				body,
-				headers: triggerToken
-					? { Authorization: `Bearer ${triggerToken}` }
-					: {},
-			});
+			return request(
+				"/benchmark/stop",
+				BenchmarkStopResponseSchema,
+				options,
+				{
+					method: "POST",
+					body,
+					headers: triggerToken ? { "X-UI-Token": triggerToken } : {},
+				},
+			);
 		},
 		createBillingPortalSession(
 			body: unknown,
@@ -75,6 +90,7 @@ export function createApiClient() {
 			return request(
 				"/billing/create-portal-session",
 				BillingPortalResponseSchema,
+				options,
 				{
 					method: "POST",
 					body,

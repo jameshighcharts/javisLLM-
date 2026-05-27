@@ -44,7 +44,6 @@ const TRIGGER_TOKEN_STORAGE_KEY = "benchmark_trigger_token";
 const SUPABASE_PAGE_SIZE = 1000;
 const SUPABASE_IN_CLAUSE_CHUNK_SIZE = 500;
 const DASHBOARD_RECENT_RUN_SCAN_LIMIT = 25;
-const bffClient = createApiClient();
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const SUPABASE_ANON_KEY =
@@ -61,6 +60,26 @@ export const supabase =
 				},
 			})
 		: null;
+
+async function getApiAuthHeaders(): Promise<Record<string, string>> {
+	if (!supabase) {
+		return {};
+	}
+
+	try {
+		const {
+			data: { session },
+		} = await supabase.auth.getSession();
+		const accessToken = session?.access_token?.trim();
+		return accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+	} catch {
+		return {};
+	}
+}
+
+const bffClient = createApiClient({
+	getHeaders: getApiAuthHeaders,
+});
 
 type PromptQueryRow = {
 	id: string;
@@ -1460,7 +1479,11 @@ function emptyDashboard(config: BenchmarkConfig): DashboardResponse {
 }
 
 async function json<T>(path: string, init?: RequestInit): Promise<T> {
-	const headers = new Headers(init?.headers ?? {});
+	const headers = new Headers(await getApiAuthHeaders());
+	const initHeaders = new Headers(init?.headers ?? {});
+	for (const [key, value] of initHeaders.entries()) {
+		headers.set(key, value);
+	}
 	if (!headers.has("Content-Type")) {
 		headers.set("Content-Type", "application/json");
 	}
@@ -1531,7 +1554,7 @@ function withOptionalTriggerToken(
 	if (!trimmed) {
 		return undefined;
 	}
-	return { Authorization: `Bearer ${trimmed}` };
+	return { "X-UI-Token": trimmed };
 }
 
 async function fetchSupabaseConfigRows(): Promise<{
