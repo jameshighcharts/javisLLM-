@@ -94,6 +94,15 @@ To run a one-off prompt test in Query Lab, open `/prompts`:
 - Displays mention detection across tracked entities
 - No trigger token required
 
+Stored outputs API:
+- `GET /api/outputs` or `GET /api/benchmark/outputs`
+- Filters: `runId`, `query`, `model`, `provider`, `limit`, `offset`, `includeText`
+- Returns raw stored model outputs from Supabase when available, with fallback to the local `artifacts/llm_outputs.jsonl` snapshot
+- Example:
+```bash
+curl "http://localhost:8787/api/outputs?query=javascript%20charting%20libraries&limit=20"
+```
+
 Local-only ChatGPT web scraper setup (not available on Vercel):
 - `ENABLE_CHATGPT_WEB_SCRAPER=true`
 - `CHATGPT_SESSION_COOKIE=...` (semicolon-separated cookie header copied from a logged-in `chatgpt.com` browser session)

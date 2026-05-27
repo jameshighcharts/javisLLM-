@@ -6488,6 +6488,421 @@ app.post("/api/prompt-lab/chatgpt-web", async (req, res) => {
 	}
 });
 
+app.get(["/api/outputs", "/api/benchmark/outputs"], async (req, res) => {
+	try {
+		const runId = String(req.query.runId ?? "").trim();
+		const queryText = String(req.query.query ?? "").trim();
+		const model = String(req.query.model ?? "").trim();
+		const provider = String(req.query.provider ?? "").trim().toLowerCase();
+		const includeText =
+			String(req.query.includeText ?? "true").trim().toLowerCase() !== "false";
+		const parsedLimit = Number(req.query.limit);
+		const limit = Number.isFinite(parsedLimit)
+			? Math.max(1, Math.min(500, Math.round(parsedLimit)))
+			: 100;
+		const parsedOffset = Number(req.query.offset);
+		const offset = Number.isFinite(parsedOffset)
+			? Math.max(0, Math.round(parsedOffset))
+			: 0;
+
+		try {
+			const client = requireSupabaseClient();
+			let queryIdFilter: string | null = null;
+			if (queryText) {
+				const promptResult = await client
+					.from("prompt_queries")
+					.select("id")
+					.eq("query_text", queryText)
+					.limit(1);
+				if (promptResult.error) {
+					throw asError(
+						promptResult.error,
+						"Failed to resolve prompt query for outputs",
+					);
+				}
+
+				const prompt = ((promptResult.data ?? [])[0] ?? null) as Record<
+					string,
+					unknown
+				> | null;
+				if (!prompt?.id) {
+					res.json({
+						generatedAt: new Date().toISOString(),
+						source: "supabase",
+						filters: {
+							runId: runId || null,
+							query: queryText,
+							model: model || null,
+							provider: provider || null,
+							includeText,
+							limit,
+							offset,
+						},
+						page: {
+							limit,
+							offset,
+							returned: 0,
+							total: 0,
+							hasMore: false,
+						},
+						items: [],
+					});
+					return;
+				}
+				queryIdFilter = String(prompt.id);
+			}
+
+			const responseSelect =
+				"id,run_id,query_id,run_iteration,model,provider,model_owner,web_search_enabled,response_text,citations,error,created_at,duration_ms,prompt_tokens,completion_tokens,total_tokens";
+			const responseFallbackSelect =
+				"id,run_id,query_id,run_iteration,model,web_search_enabled,response_text,citations,error,created_at";
+
+			let responseQuery = client
+				.from("benchmark_responses")
+				.select(responseSelect, { count: "exact" })
+				.order("created_at", { ascending: false });
+			if (runId) {
+				responseQuery = responseQuery.eq("run_id", runId);
+			}
+			if (queryIdFilter) {
+				responseQuery = responseQuery.eq("query_id", queryIdFilter);
+			}
+			if (model) {
+				responseQuery = responseQuery.eq("model", model);
+			}
+			if (provider) {
+				responseQuery = responseQuery.eq("provider", provider);
+			}
+
+			let responseResult = await responseQuery.range(offset, offset + limit - 1);
+			let responseRowsError = responseResult.error;
+			let responseRows = (responseResult.data ?? []) as Array<
+				Record<string, unknown>
+			>;
+			let totalCount = responseResult.count ?? responseRows.length;
+			if (responseRowsError && isMissingColumn(responseRowsError)) {
+				let fallbackQuery = client
+					.from("benchmark_responses")
+					.select(responseFallbackSelect, { count: "exact" })
+					.order("created_at", { ascending: false });
+				if (runId) {
+					fallbackQuery = fallbackQuery.eq("run_id", runId);
+				}
+				if (queryIdFilter) {
+					fallbackQuery = fallbackQuery.eq("query_id", queryIdFilter);
+				}
+				if (model) {
+					fallbackQuery = fallbackQuery.eq("model", model);
+				}
+				responseResult = await fallbackQuery.range(offset, offset + limit - 1);
+				responseRowsError = responseResult.error;
+				responseRows = (
+					(responseResult.data ?? []) as Array<Record<string, unknown>>
+				).map((row) => ({
+					...row,
+					provider: null,
+					model_owner: null,
+					duration_ms: 0,
+					prompt_tokens: 0,
+					completion_tokens: 0,
+					total_tokens: 0,
+				}));
+				totalCount = responseResult.count ?? responseRows.length;
+			}
+
+			if (responseRowsError) {
+				throw asError(responseRowsError, "Failed to load stored outputs");
+			}
+
+			const queryIds = [
+				...new Set(
+					responseRows
+						.map((row) => String(row.query_id ?? ""))
+						.filter(Boolean),
+				),
+			];
+			const runIds = [
+				...new Set(
+					responseRows
+						.map((row) => String(row.run_id ?? ""))
+						.filter(Boolean),
+				),
+			];
+
+			const queryById = new Map<string, string>();
+			if (queryIds.length > 0) {
+				const promptDetailsResult = await client
+					.from("prompt_queries")
+					.select("id,query_text")
+					.in("id", queryIds);
+				if (promptDetailsResult.error) {
+					if (!isMissingRelation(promptDetailsResult.error)) {
+						throw asError(
+							promptDetailsResult.error,
+							"Failed to load prompt details for outputs",
+						);
+					}
+				} else {
+					for (const row of (promptDetailsResult.data ?? []) as Array<
+						Record<string, unknown>
+					>) {
+						queryById.set(
+							String(row.id ?? ""),
+							String(row.query_text ?? "") || String(row.id ?? ""),
+						);
+					}
+				}
+			}
+
+			const runById = new Map<string, Record<string, unknown>>();
+			if (runIds.length > 0) {
+				const runResult = await client
+					.from("benchmark_runs")
+					.select("id,run_month,created_at,started_at")
+					.in("id", runIds);
+				if (runResult.error) {
+					if (!isMissingRelation(runResult.error)) {
+						throw asError(
+							runResult.error,
+							"Failed to load run metadata for outputs",
+						);
+					}
+				} else {
+					for (const row of (runResult.data ?? []) as Array<
+						Record<string, unknown>
+					>) {
+						runById.set(String(row.id ?? ""), row);
+					}
+				}
+			}
+
+			const items = responseRows.map((row) => {
+				const rowProvider = String(row.provider ?? "") || null;
+				const rowModel = String(row.model ?? "");
+				const rowRunId = String(row.run_id ?? "");
+				const run = runById.get(rowRunId);
+				const citationProvider = normalizeCitationProvider(
+					rowProvider ?? row.model_owner ?? rowModel,
+					"openai",
+				);
+				const citationRefs = normalizeCitationRefs(
+					row.citations,
+					citationProvider,
+				);
+				return {
+					id: String(row.id ?? "") || null,
+					runId: rowRunId || null,
+					runMonth: String(run?.run_month ?? "") || null,
+					queryId: String(row.query_id ?? "") || null,
+					query:
+						queryById.get(String(row.query_id ?? "")) ??
+						(queryIdFilter ? queryText : null),
+					createdAt: String(row.created_at ?? "") || null,
+					runCreatedAt: pickTimestamp(
+						String(run?.created_at ?? ""),
+						String(run?.started_at ?? ""),
+					),
+					runIteration: Number(row.run_iteration ?? 0) || 0,
+					model: rowModel,
+					provider: rowProvider,
+					modelOwner:
+						String(row.model_owner ?? "") ||
+						inferModelOwnerFromModel(rowModel),
+					webSearchEnabled: Boolean(row.web_search_enabled),
+					error: String(row.error ?? "") || null,
+					durationMs: Math.max(0, Math.round(Number(row.duration_ms ?? 0))),
+					promptTokens: Math.max(
+						0,
+						Math.round(Number(row.prompt_tokens ?? 0)),
+					),
+					completionTokens: Math.max(
+						0,
+						Math.round(Number(row.completion_tokens ?? 0)),
+					),
+					totalTokens:
+						Math.max(0, Math.round(Number(row.total_tokens ?? 0))) ||
+						Math.max(
+							0,
+							Math.round(
+								Number(row.prompt_tokens ?? 0) +
+									Number(row.completion_tokens ?? 0),
+							),
+						),
+					responseText: includeText ? String(row.response_text ?? "") : null,
+					citationRefs,
+					citations: normalizeCitations(citationRefs, citationProvider),
+				};
+			});
+
+			res.json({
+				generatedAt: new Date().toISOString(),
+				source: "supabase",
+				filters: {
+					runId: runId || null,
+					query: queryText || null,
+					model: model || null,
+					provider: provider || null,
+					includeText,
+					limit,
+					offset,
+				},
+				page: {
+					limit,
+					offset,
+					returned: items.length,
+					total: totalCount,
+					hasMore: offset + items.length < totalCount,
+				},
+				items,
+			});
+			return;
+		} catch (error) {
+			const message = String(
+				error instanceof Error ? error.message : (error ?? ""),
+			).toLowerCase();
+			if (
+				!message.includes("fetch failed") &&
+				!message.includes("failed to fetch") &&
+				!message.includes("supabase is not configured") &&
+				!message.includes("missing supabase env config") &&
+				!message.includes("enotfound") &&
+				!message.includes("econnrefused")
+			) {
+				throw error;
+			}
+		}
+
+		const rows = await readJsonl(dashboardFiles.jsonl);
+		const filtered = rows
+			.filter((row) => {
+				if (runId && String(row.run_id ?? row.runId ?? "") !== runId) {
+					return false;
+				}
+				if (
+					queryText &&
+					normalizeQueryLookupKey(String(row.query ?? row.query_text ?? "")) !==
+						normalizeQueryLookupKey(queryText)
+				) {
+					return false;
+				}
+				if (model && String(row.model ?? "") !== model) {
+					return false;
+				}
+				if (
+					provider &&
+					String(row.provider ?? "").trim().toLowerCase() !== provider
+				) {
+					return false;
+				}
+				return true;
+			})
+			.sort((left, right) => {
+				const leftTs = Date.parse(
+					String(left.timestamp ?? left.created_at ?? "") || "1970-01-01",
+				);
+				const rightTs = Date.parse(
+					String(right.timestamp ?? right.created_at ?? "") || "1970-01-01",
+				);
+				return rightTs - leftTs;
+			});
+		const items = filtered.slice(offset, offset + limit).map((row, index) => {
+			const rowProvider = String(row.provider ?? "") || null;
+			const rowModel = String(row.model ?? "");
+			const citationProvider = normalizeCitationProvider(
+				rowProvider ?? row.model_owner ?? rowModel,
+				"openai",
+			);
+			const citationRefs = normalizeCitationRefs(row.citations, citationProvider);
+			return {
+				id: String(row.id ?? `${offset + index + 1}`),
+				runId: String(row.run_id ?? row.runId ?? "") || null,
+				runMonth: String(row.run_month ?? "") || null,
+				queryId: String(row.query_id ?? "") || null,
+				query:
+					String(row.query ?? row.query_text ?? row.prompt ?? row.prompt_text ?? "") ||
+					null,
+				createdAt:
+					String(row.timestamp ?? row.created_at ?? row.createdAt ?? "") || null,
+				runCreatedAt:
+					String(row.timestamp ?? row.created_at ?? row.createdAt ?? "") || null,
+				runIteration: Number(row.run_iteration ?? 0) || 0,
+				model: rowModel,
+				provider: rowProvider,
+				modelOwner:
+					String(row.model_owner ?? "") ||
+					inferModelOwnerFromModel(rowModel),
+				webSearchEnabled: Boolean(row.web_search_enabled),
+				error: String(row.error ?? "") || null,
+				durationMs: Math.max(0, Math.round(Number(row.duration_ms ?? 0))),
+				promptTokens: Math.max(
+					0,
+					Math.round(
+						Number(row.prompt_tokens ?? row.input_tokens ?? row.usage?.prompt_tokens ?? 0),
+					),
+				),
+				completionTokens: Math.max(
+					0,
+					Math.round(
+						Number(
+							row.completion_tokens ??
+								row.output_tokens ??
+								row.usage?.completion_tokens ??
+								0,
+						),
+					),
+				),
+				totalTokens:
+					Math.max(
+						0,
+						Math.round(Number(row.total_tokens ?? row.usage?.total_tokens ?? 0)),
+					) ||
+					Math.max(
+						0,
+						Math.round(
+							Number(row.prompt_tokens ?? row.input_tokens ?? 0) +
+								Number(
+									row.completion_tokens ?? row.output_tokens ?? 0,
+								),
+						),
+					),
+				responseText: includeText
+					? String(row.response_text ?? row.responseText ?? "")
+					: null,
+				citationRefs,
+				citations: normalizeCitations(citationRefs, citationProvider),
+				mentions:
+					typeof row.mentions === "object" && row.mentions !== null
+						? row.mentions
+						: null,
+			};
+		});
+
+		res.json({
+			generatedAt: new Date().toISOString(),
+			source: "jsonl",
+			filters: {
+				runId: runId || null,
+				query: queryText || null,
+				model: model || null,
+				provider: provider || null,
+				includeText,
+				limit,
+				offset,
+			},
+			page: {
+				limit,
+				offset,
+				returned: items.length,
+				total: filtered.length,
+				hasMore: offset + items.length < filtered.length,
+			},
+			items,
+		});
+	} catch (error) {
+		sendApiError(res, 500, "Failed to load stored outputs.", error);
+	}
+});
+
 app.get(
 	["/api/under-the-hood", "/api/analytics/under-the-hood"],
 	async (req, res) => {
