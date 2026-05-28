@@ -14,6 +14,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@easy-llm-benchmarker/contracts':
+        specifier: workspace:*
+        version: link:../../packages/ts/contracts
       '@supabase/supabase-js':
         specifier: ^2.97.0
         version: 2.99.1

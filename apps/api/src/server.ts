@@ -4,6 +4,12 @@ import { existsSync, promises as fs, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+	computeAiVisibilityScore,
+	computeAiVisibilityScoreFromCounts,
+	computeMentionRatePct,
+	computeShareOfVoicePct,
+} from "@easy-llm-benchmarker/contracts";
 import { createClient } from "@supabase/supabase-js";
 import cors from "cors";
 import { parse } from "csv-parse/sync";
@@ -323,6 +329,7 @@ const allowedCorsOrigins =
 const writeToken = String(
 	process.env.UI_API_WRITE_TOKEN ?? process.env.BENCHMARK_TRIGGER_TOKEN ?? "",
 ).trim();
+const readToken = String(process.env.UI_API_READ_TOKEN ?? "").trim();
 const cjsRequire = createRequire(import.meta.url);
 const benchmarkTriggerHandler = cjsRequire("./handlers/benchmark/trigger.js");
 const benchmarkModelsHandler = cjsRequire("./handlers/benchmark/models.js");
@@ -401,6 +408,14 @@ function hasWriteTokenAccess(req: express.Request): boolean {
 	return Boolean(provided) && provided === writeToken;
 }
 
+function hasReadTokenAccess(req: express.Request): boolean {
+	if (!readToken) {
+		return false;
+	}
+	const provided = getRequestToken(req);
+	return Boolean(provided) && provided === readToken;
+}
+
 function allowsMachineTokenAccess(req: express.Request): boolean {
 	const routePath = `${req.baseUrl}${req.path}`;
 	const method = req.method.toUpperCase();
@@ -424,6 +439,20 @@ function allowsMachineTokenAccess(req: express.Request): boolean {
 	return false;
 }
 
+function allowsReadTokenAccess(req: express.Request): boolean {
+	const routePath = `${req.baseUrl}${req.path}`;
+	const method = req.method.toUpperCase();
+
+	if (method !== "GET") {
+		return false;
+	}
+
+	return [
+		"/api/outputs",
+		"/api/benchmark/outputs",
+	].includes(routePath);
+}
+
 function isLocalhostRequest(req: express.Request): boolean {
 	const remote = req.socket.remoteAddress;
 	return (
@@ -445,6 +474,11 @@ async function requireApiAccess(
 	}
 
 	if (hasWriteTokenAccess(req) && allowsMachineTokenAccess(req)) {
+		next();
+		return;
+	}
+
+	if (hasReadTokenAccess(req) && allowsReadTokenAccess(req)) {
 		next();
 		return;
 	}
@@ -3546,6 +3580,7 @@ function aggregateCitationSources(
 			urls: Set<string>;
 			responseIds: Set<string>;
 			providers: Set<string>;
+			providerCitationCounts: Map<string, number>;
 		}
 	>();
 
@@ -3583,6 +3618,7 @@ function aggregateCitationSources(
 					urls: new Set<string>(),
 					responseIds: new Set<string>(),
 					providers: new Set<string>(),
+					providerCitationCounts: new Map<string, number>(),
 				};
 				buckets.set(key, bucket);
 			}
@@ -3595,6 +3631,10 @@ function aggregateCitationSources(
 				.toLowerCase();
 			if (provider) {
 				bucket.providers.add(provider);
+				bucket.providerCitationCounts.set(
+					provider,
+					(bucket.providerCitationCounts.get(provider) ?? 0) + 1,
+				);
 			}
 			if (!seenForResponse.has(key)) {
 				seenForResponse.add(key);
@@ -3627,6 +3667,11 @@ function aggregateCitationSources(
 			uniqueUrlCount: bucket.urls.size,
 			providers: [...bucket.providers.values()].sort((left, right) =>
 				left.localeCompare(right),
+			),
+			providerCitationCounts: Object.fromEntries(
+				[...bucket.providerCitationCounts.entries()].sort(([left], [right]) =>
+					left.localeCompare(right),
+				),
 			),
 		}))
 		.sort((left, right) => {
@@ -4508,19 +4553,16 @@ async function fetchDashboardFromSupabaseTablesForServer(
 
 	const competitorSeries = competitorRows.map((competitor) => {
 		const mentionsCount = mentionsByCompetitorId.get(competitor.id) ?? 0;
-		const mentionRatePct =
-			totalResponses > 0 ? (mentionsCount / totalResponses) * 100 : 0;
-		const shareOfVoicePct =
-			totalMentionsAcrossEntities > 0
-				? (mentionsCount / totalMentionsAcrossEntities) * 100
-				: 0;
 
 		return {
 			entity: competitor.name,
 			entityKey: competitor.slug,
 			isHighcharts: competitor.is_primary || competitor.slug === "highcharts",
-			mentionRatePct: roundTo(mentionRatePct, 2),
-			shareOfVoicePct: roundTo(shareOfVoicePct, 2),
+			mentionRatePct: computeMentionRatePct(mentionsCount, totalResponses),
+			shareOfVoicePct: computeShareOfVoicePct(
+				mentionsCount,
+				totalMentionsAcrossEntities,
+			),
 		};
 	});
 
@@ -4528,6 +4570,9 @@ async function fetchDashboardFromSupabaseTablesForServer(
 		competitorRows.find((row) => row.is_primary) ??
 		competitorRows.find((row) => row.slug === "highcharts") ??
 		null;
+	const highchartsMentionsCount = highchartsCompetitor
+		? (mentionsByCompetitorId.get(highchartsCompetitor.id) ?? 0)
+		: 0;
 	const nonHighchartsCompetitors = competitorRows.filter(
 		(row) => row.id !== highchartsCompetitor?.id,
 	);
@@ -4581,7 +4626,6 @@ async function fetchDashboardFromSupabaseTablesForServer(
 			const mentions =
 				mentionsByQueryAndCompetitor.get(`${queryRow.id}:${competitor.id}`) ??
 				0;
-			const ratePct = responseCount > 0 ? (mentions / responseCount) * 100 : 0;
 			const isHighcharts = highchartsCompetitor
 				? competitor.id === highchartsCompetitor.id
 				: competitor.slug === "highcharts";
@@ -4590,7 +4634,7 @@ async function fetchDashboardFromSupabaseTablesForServer(
 				entity: competitor.name,
 				entityKey: competitor.slug,
 				isHighcharts,
-				ratePct,
+				ratePct: computeMentionRatePct(mentions, responseCount),
 				mentions,
 			};
 		});
@@ -4705,12 +4749,10 @@ async function fetchDashboardFromSupabaseTablesForServer(
 		selectedModels.size > 0
 			? [...selectedModels].sort((left, right) => left.localeCompare(right))
 			: [];
-	const highchartsSeries =
-		competitorSeries.find((series) => series.isHighcharts) ?? null;
-	const overallScore = roundTo(
-		0.7 * (highchartsSeries?.mentionRatePct ?? 0) +
-			0.3 * (highchartsSeries?.shareOfVoicePct ?? 0),
-		2,
+	const overallScore = computeAiVisibilityScoreFromCounts(
+		highchartsMentionsCount,
+		totalResponses,
+		totalMentionsAcrossEntities,
 	);
 	const latestSelectedRun = selectedRuns[0] ?? latestRun;
 	const modelOwnerMapString = Object.entries(ownerSummary.modelOwnerMap)
@@ -5045,10 +5087,10 @@ async function fetchDashboardFromSupabaseViewsForServer(
 			entity: competitor.name,
 			entityKey: competitor.slug,
 			isHighcharts: competitor.is_primary || competitor.slug === "highcharts",
-			mentionRatePct:
-				totalsFromRuns.responses > 0
-					? roundTo((mentionsCount / totalsFromRuns.responses) * 100, 2)
-					: 0,
+			mentionRatePct: computeMentionRatePct(
+				mentionsCount,
+				totalsFromRuns.responses,
+			),
 			shareOfVoicePct: 0,
 			mentionsCount,
 		};
@@ -5058,10 +5100,10 @@ async function fetchDashboardFromSupabaseViewsForServer(
 		0,
 	);
 	for (const series of competitorSeries) {
-		series.shareOfVoicePct =
-			totalMentionsAcrossEntities > 0
-				? roundTo((series.mentionsCount / totalMentionsAcrossEntities) * 100, 2)
-				: 0;
+		series.shareOfVoicePct = computeShareOfVoicePct(
+			series.mentionsCount,
+			totalMentionsAcrossEntities,
+		);
 	}
 
 	const promptStatus = promptRows.map((queryRow) => {
@@ -5090,10 +5132,6 @@ async function fetchDashboardFromSupabaseViewsForServer(
 			const mentions =
 				mentionsByQueryAndCompetitor.get(`${queryRow.id}:${competitor.id}`) ??
 				0;
-			const ratePct =
-				latestRunResponseCount > 0
-					? roundTo((mentions / latestRunResponseCount) * 100, 2)
-					: 0;
 			const isHighcharts = highchartsCompetitor
 				? competitor.id === highchartsCompetitor.id
 				: competitor.slug === "highcharts";
@@ -5101,7 +5139,7 @@ async function fetchDashboardFromSupabaseViewsForServer(
 				entity: competitor.name,
 				entityKey: competitor.slug,
 				isHighcharts,
-				ratePct,
+				ratePct: computeMentionRatePct(mentions, latestRunResponseCount),
 				mentions,
 			};
 		});
@@ -5198,10 +5236,10 @@ async function fetchDashboardFromSupabaseViewsForServer(
 	const totalResponses = totalsFromRuns.responses;
 	const highchartsSeries =
 		competitorSeries.find((series) => series.isHighcharts) ?? null;
-	const overallScore = roundTo(
-		0.7 * (highchartsSeries?.mentionRatePct ?? 0) +
-			0.3 * (highchartsSeries?.shareOfVoicePct ?? 0),
-		2,
+	const overallScore = computeAiVisibilityScoreFromCounts(
+		highchartsSeries?.mentionsCount ?? 0,
+		totalResponses,
+		totalMentionsAcrossEntities,
 	);
 	const modelOwnerMapString = Object.entries(modelOwnerMap)
 		.sort(([left], [right]) => left.localeCompare(right))
@@ -5978,12 +6016,14 @@ async function fetchTimeseriesFromSupabaseTablesForServer(options = {}) {
 				(sum, competitor) => sum + (runMentions?.get(competitor.id) ?? 0),
 				0,
 			);
-			const highchartsSovPct =
-				totalMentionsAcrossEntities > 0
-					? (highchartsMentions / totalMentionsAcrossEntities) * 100
-					: 0;
-			const derivedAiVisibility =
-				0.7 * highchartsRatePct + 0.3 * highchartsSovPct;
+			const highchartsSovPct = computeShareOfVoicePct(
+				highchartsMentions,
+				totalMentionsAcrossEntities,
+			);
+			const derivedAiVisibility = computeAiVisibilityScore(
+				highchartsRatePct / 100,
+				highchartsSovPct / 100,
+			);
 			const storedAiVisibility =
 				selectedTagSet.size === 0 &&
 				selectedProviderSet.size === 0 &&
@@ -6013,8 +6053,7 @@ async function fetchTimeseriesFromSupabaseTablesForServer(options = {}) {
 				rates: Object.fromEntries(
 					competitorRows.map((competitor) => {
 						const mentions = runMentions?.get(competitor.id) ?? 0;
-						const mentionRatePct = total > 0 ? (mentions / total) * 100 : 0;
-						return [competitor.name, roundTo(mentionRatePct, 2)];
+						return [competitor.name, computeMentionRatePct(mentions, total)];
 					}),
 				),
 			};
@@ -6204,12 +6243,14 @@ async function fetchTimeseriesFromSupabaseViewsForServer(options = {}) {
 					sum + (bucket.mentionsByCompetitor.get(competitor.id) ?? 0),
 				0,
 			);
-			const highchartsSovPct =
-				totalMentionsAcrossEntities > 0
-					? (highchartsMentions / totalMentionsAcrossEntities) * 100
-					: 0;
-			const derivedAiVisibility =
-				0.7 * highchartsRatePct + 0.3 * highchartsSovPct;
+			const highchartsSovPct = computeShareOfVoicePct(
+				highchartsMentions,
+				totalMentionsAcrossEntities,
+			);
+			const derivedAiVisibility = computeAiVisibilityScore(
+				highchartsRatePct / 100,
+				highchartsSovPct / 100,
+			);
 			const rivalMentionCount = rivals.reduce(
 				(sum, competitor) =>
 					sum + (bucket.mentionsByCompetitor.get(competitor.id) ?? 0),
@@ -7973,6 +8014,7 @@ app.get("/api/research/competitor-blogs", async (req, res) => {
 			message.includes("fetch failed") ||
 			message.includes("failed to fetch") ||
 			message.includes("supabase is not configured") ||
+			message.includes("requires supabase") ||
 			message.includes("missing supabase env config") ||
 			message.includes("enotfound") ||
 			message.includes("econnrefused")
@@ -8677,6 +8719,7 @@ app.get("/api/analytics/citation-links", async (req, res) => {
 			message.includes("fetch failed") ||
 			message.includes("failed to fetch") ||
 			message.includes("supabase is not configured") ||
+			message.includes("requires supabase") ||
 			message.includes("missing supabase env config") ||
 			message.includes("enotfound") ||
 			message.includes("econnrefused")

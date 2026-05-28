@@ -403,6 +403,12 @@ export interface BenchmarkQueueRun {
 		deadLetterJobs?: number;
 		completionPct: number;
 	} | null;
+	failedModels: Array<{
+		model: string;
+		status: "failed" | "dead_letter";
+		failedJobs: number;
+		reasons: string[];
+	}>;
 	status: "pending" | "running" | "completed" | "failed";
 }
 
@@ -637,6 +643,7 @@ export interface CitationLinksSourceStat {
 	responseCount: number;
 	uniqueUrlCount: number;
 	providers: string[];
+	providerCitationCounts?: Record<string, number>;
 }
 
 export interface CitationLinksResponse {

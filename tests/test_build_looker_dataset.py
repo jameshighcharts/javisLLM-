@@ -21,6 +21,22 @@ builder = _load_builder_module()
 
 
 class DynamicEntityTests(unittest.TestCase):
+    def test_visibility_metric_helpers(self):
+        self.assertAlmostEqual(builder.compute_mention_rate(1, 2), 0.5)
+        self.assertAlmostEqual(builder.compute_mention_rate_pct(1, 2), 50.0)
+        self.assertAlmostEqual(
+            builder.compute_share_of_voice_rate(2, 3), 0.666667, places=6
+        )
+        self.assertAlmostEqual(builder.compute_share_of_voice_pct(2, 3), 66.67, places=2)
+        self.assertAlmostEqual(
+            builder.compute_ai_visibility_score(0.5, 0.666667), 55.0, places=2
+        )
+        self.assertAlmostEqual(
+            builder.compute_ai_visibility_score_100_from_counts(1, 2, 3),
+            45.0,
+            places=2,
+        )
+
     def test_infer_entity_keys_excludes_our_brand_and_special_counts(self):
         rows = [
             {

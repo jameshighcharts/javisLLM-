@@ -204,6 +204,105 @@ function buildBenchmarkRunsPath(includeRunMetadata) {
 	return `/rest/v1/benchmark_runs?select=${columns}&order=created_at.desc&limit=30`;
 }
 
+function buildFailedJobsPath(runIds) {
+	if (!Array.isArray(runIds) || runIds.length === 0) {
+		return "";
+	}
+	const encodedIds = runIds
+		.map((value) => String(value || "").trim())
+		.filter(Boolean)
+		.map((value) => encodeURIComponent(value))
+		.join(",");
+	if (!encodedIds) {
+		return "";
+	}
+	return `/rest/v1/benchmark_jobs?select=run_id,model,status,last_error&run_id=in.(${encodedIds})&status=in.(failed,dead_letter)&order=updated_at.desc`;
+}
+
+function normalizeFailureReason(value) {
+	const normalized = String(value || "")
+		.replace(/\s+/g, " ")
+		.trim();
+	if (!normalized) {
+		return "";
+	}
+	if (normalized.length <= 180) {
+		return normalized;
+	}
+	return `${normalized.slice(0, 177).trimEnd()}...`;
+}
+
+function buildFailedModelSummaries(failedJobRows) {
+	const failedModelsByRunId = new Map();
+
+	for (const row of failedJobRows) {
+		if (!row || typeof row !== "object") {
+			continue;
+		}
+
+		const runId = String(row.run_id || "").trim();
+		if (!runId) {
+			continue;
+		}
+
+		const model = String(row.model || "").trim() || "Unknown model";
+		const status =
+			String(row.status || "").trim() === "dead_letter"
+				? "dead_letter"
+				: "failed";
+		const reason = normalizeFailureReason(row.last_error);
+		const runBucket = failedModelsByRunId.get(runId) ?? new Map();
+		const existing =
+			runBucket.get(model) ?? {
+				model,
+				status,
+				failedJobs: 0,
+				reasons: new Map(),
+			};
+
+		existing.failedJobs += 1;
+		if (status === "dead_letter") {
+			existing.status = "dead_letter";
+		}
+		if (reason) {
+			existing.reasons.set(reason, (existing.reasons.get(reason) || 0) + 1);
+		}
+
+		runBucket.set(model, existing);
+		failedModelsByRunId.set(runId, runBucket);
+	}
+
+	return new Map(
+		[...failedModelsByRunId.entries()].map(([runId, modelMap]) => [
+			runId,
+			[...modelMap.values()]
+				.map((entry) => ({
+					model: entry.model,
+					status: entry.status,
+					failedJobs: entry.failedJobs,
+					reasons: [...entry.reasons.entries()]
+						.sort((left, right) => {
+							if (right[1] !== left[1]) {
+								return right[1] - left[1];
+							}
+							return left[0].localeCompare(right[0]);
+						})
+						.slice(0, 3)
+						.map(([reason]) => reason),
+				}))
+				.sort((left, right) => {
+					if (left.status !== right.status) {
+						return left.status === "dead_letter" ? -1 : 1;
+					}
+					if (right.failedJobs !== left.failedJobs) {
+						return right.failedJobs - left.failedJobs;
+					}
+					return left.model.localeCompare(right.model);
+				}),
+		]),
+	);
+}
+
 function deriveQueueRunStatus(progress) {
 	const totalJobs = Number(progress?.total_jobs || 0);
 	const completedJobs = Number(progress?.completed_jobs || 0);
@@ -261,6 +360,10 @@ async function listQueueRuns(providerGroup = "all") {
 			return { runs: [] };
 		}
 
+		const runIds = runs
+			.map((run) => String(run?.id || "").trim())
+			.filter(Boolean);
+
 		const progressRows = await supabaseRestRequest(
 			restConfig,
 			"/rest/v1/vw_job_progress?select=run_id,total_jobs,completed_jobs,processing_jobs,pending_jobs,failed_jobs,dead_letter_jobs,completion_pct,status&order=created_at.desc&limit=200",
@@ -277,6 +380,16 @@ async function listQueueRuns(providerGroup = "all") {
 			}
 			progressByRunId.set(runId, row);
 		}
+
+		const failedJobsPath = buildFailedJobsPath(runIds);
+		const failedJobRows = failedJobsPath
+			? await supabaseRestRequest(
+					restConfig,
+					failedJobsPath,
+					"Fetch failed benchmark jobs",
+				)
+			: [];
+		const failedModelsByRunId = buildFailedModelSummaries(failedJobRows);
 
 		return {
 			runs: runs
@@ -317,6 +430,7 @@ async function listQueueRuns(providerGroup = "all") {
 							deadLetterJobs,
 							completionPct,
 						},
+						failedModels: failedModelsByRunId.get(runId) ?? [],
 						status: deriveQueueRunStatus(progress),
 					};
 				}),

@@ -349,6 +349,10 @@ function formatGeneratedAt(value?: string): string {
 	}).format(new Date(parsed));
 }
 
+function isHighchartsHost(host: string): boolean {
+	return host === "highcharts.com" || host.endsWith(".highcharts.com");
+}
+
 function frameworkLabel(framework: FrameworkTag): string {
 	if (framework === "javascript") return "JavaScript";
 	if (framework === "react") return "React";
@@ -686,7 +690,12 @@ function QueryCard({ item }: { item: ClassifiedPrompt }) {
 						className="text-base font-semibold tracking-tight"
 						style={{ color: "#253325" }}
 					>
-						{item.prompt.query}
+						<Link
+							to={`/prompts/drilldown?query=${encodeURIComponent(item.prompt.query)}`}
+							className="hover:underline"
+						>
+							{item.prompt.query}
+						</Link>
 					</div>
 				</div>
 
@@ -917,17 +926,27 @@ export default function ProductMentions() {
 		staleTime: 5 * 60 * 1000,
 	});
 
-	const isInternal = (host: string) =>
-		host === "highcharts.com" || host.endsWith(".highcharts.com");
-
 	const citationDomainSplit = useMemo(() => {
-		const sources: CitationLinksSourceStat[] = citationQuery.data?.sources ?? [];
-		const internal = sources.filter((s) => isInternal(s.host));
-		const external = sources.filter((s) => !isInternal(s.host));
+		const sources: CitationLinksSourceStat[] =
+			citationQuery.data?.sources ?? [];
+		const internal = sources.filter((s) => isHighchartsHost(s.host));
+		const external = sources.filter((s) => !isHighchartsHost(s.host));
 		const totalCitations = sources.reduce((sum, s) => sum + s.citationCount, 0);
-		const internalCitations = internal.reduce((sum, s) => sum + s.citationCount, 0);
-		const externalCitations = external.reduce((sum, s) => sum + s.citationCount, 0);
-		return { internal, external, totalCitations, internalCitations, externalCitations };
+		const internalCitations = internal.reduce(
+			(sum, s) => sum + s.citationCount,
+			0,
+		);
+		const externalCitations = external.reduce(
+			(sum, s) => sum + s.citationCount,
+			0,
+		);
+		return {
+			internal,
+			external,
+			totalCitations,
+			internalCitations,
+			externalCitations,
+		};
 	}, [citationQuery.data]);
 
 	useEffect(() => {
@@ -1169,6 +1188,7 @@ export default function ProductMentions() {
 				spacing: [8, 8, 8, 8],
 				style: { fontFamily: "'Inter', system-ui, sans-serif" },
 			},
+			accessibility: { enabled: false },
 			title: { text: undefined },
 			credits: { enabled: false },
 			legend: {
@@ -1247,7 +1267,6 @@ export default function ProductMentions() {
 		[visibleCoverage],
 	);
 
-
 	const hcRateChartOptions: Highcharts.Options = useMemo(
 		() => ({
 			chart: {
@@ -1257,11 +1276,14 @@ export default function ProductMentions() {
 				spacing: [8, 8, 8, 8],
 				style: { fontFamily: "'Inter', system-ui, sans-serif" },
 			},
+			accessibility: { enabled: false },
 			title: { text: undefined },
 			credits: { enabled: false },
 			legend: { enabled: false },
 			xAxis: {
-				categories: productCoverage.map((row) => PRODUCT_META[row.product].shortName),
+				categories: productCoverage.map(
+					(row) => PRODUCT_META[row.product].shortName,
+				),
 				lineColor: "#DDD0BC",
 				tickColor: "#DDD0BC",
 				labels: { style: { color: "#5C6E5D", fontSize: "11px" } },
@@ -1273,7 +1295,9 @@ export default function ProductMentions() {
 				gridLineColor: "#EEE5D8",
 				labels: {
 					style: { color: "#8C9B8D", fontSize: "10px" },
-					formatter() { return `${this.value}%` },
+					formatter() {
+						return `${this.value}%`;
+					},
 				},
 			},
 			tooltip: {
@@ -1287,7 +1311,20 @@ export default function ProductMentions() {
 				},
 			},
 			plotOptions: {
-				bar: { borderWidth: 0, borderRadius: 4, dataLabels: { enabled: true, format: "{y:.0f}%", style: { color: "#3D5C40", fontSize: "11px", fontWeight: "600", textOutline: "none" } } },
+				bar: {
+					borderWidth: 0,
+					borderRadius: 4,
+					dataLabels: {
+						enabled: true,
+						format: "{y:.0f}%",
+						style: {
+							color: "#3D5C40",
+							fontSize: "11px",
+							fontWeight: "600",
+							textOutline: "none",
+						},
+					},
+				},
 			},
 			series: [
 				{
@@ -1301,27 +1338,52 @@ export default function ProductMentions() {
 		[productCoverage],
 	);
 
-	const formatGeneratedAt = (ts: string | undefined) =>
-		ts ? new Date(ts).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—";
-
 	async function copyVisibleQueries() {
 		const lines = filteredPrompts.map((item) => item.prompt.query);
 		const uniqueLines = unique(lines);
-		if (uniqueLines.length === 0) { setCopyMessage("Nothing to copy"); return; }
+		if (uniqueLines.length === 0) {
+			setCopyMessage("Nothing to copy");
+			return;
+		}
 		try {
 			await navigator.clipboard.writeText(uniqueLines.join("\n"));
 			setCopyMessage(`Copied ${uniqueLines.length} queries`);
-		} catch { setCopyMessage("Copy failed"); }
+		} catch {
+			setCopyMessage("Copy failed");
+		}
+	}
+
+	async function copySuggestionQuery(query: string) {
+		try {
+			await navigator.clipboard.writeText(query);
+			setSuggestionCopyMessage("Copied suggestion");
+		} catch {
+			setSuggestionCopyMessage("Copy failed");
+		}
 	}
 
 	if (dashboardQuery.isLoading) {
-		return <div className="max-w-5xl space-y-4"><LoadingCard /></div>;
+		return (
+			<div className="max-w-5xl space-y-4">
+				<LoadingCard />
+			</div>
+		);
 	}
 
 	if (dashboardQuery.isError) {
 		return (
-			<div className="rounded-2xl border p-5" style={{ background: "#FFF7F6", borderColor: "#F4CACA", color: "#8F2D2D" }}>
-				<div className="flex items-center gap-2 font-semibold"><AlertTriangle size={18} />Failed to load</div>
+			<div
+				className="rounded-2xl border p-5"
+				style={{
+					background: "#FFF7F6",
+					borderColor: "#F4CACA",
+					color: "#8F2D2D",
+				}}
+			>
+				<div className="flex items-center gap-2 font-semibold">
+					<AlertTriangle size={18} />
+					Failed to load
+				</div>
 			</div>
 		);
 	}
@@ -1331,14 +1393,27 @@ export default function ProductMentions() {
 			{/* Header */}
 			<div className="flex items-center justify-between">
 				<div>
-					<h2 className="text-xl font-semibold tracking-tight" style={{ color: "#223124" }}>Product Mentions</h2>
-					<p className="text-xs mt-0.5" style={{ color: "#8A9B8C" }}>Last updated {formatGeneratedAt(dashboardQuery.data?.generatedAt)}</p>
+					<h2
+						className="text-xl font-semibold tracking-tight"
+						style={{ color: "#223124" }}
+					>
+						Product Mentions
+					</h2>
+					<p className="text-xs mt-0.5" style={{ color: "#8A9B8C" }}>
+						Last updated {formatGeneratedAt(dashboardQuery.data?.generatedAt)}
+					</p>
 				</div>
 				<button
 					type="button"
-					onClick={() => { void copyVisibleQueries(); }}
+					onClick={() => {
+						void copyVisibleQueries();
+					}}
 					className="inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold"
-					style={{ background: "#2F4F34", color: "#FDFCF8", border: "1px solid #2F4F34" }}
+					style={{
+						background: "#2F4F34",
+						color: "#FDFCF8",
+						border: "1px solid #2F4F34",
+					}}
 				>
 					<Copy size={14} />
 					{copyMessage || "Copy queries"}
@@ -1348,104 +1423,344 @@ export default function ProductMentions() {
 			{/* Stat cards */}
 			<div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
 				{[
-					{ label: "Live Queries", value: String(totalLiveQueries) },
-					{ label: "Tracked", value: String(activeTrackedPrompts.length) },
-					{ label: "Avg HC Mention", value: formatPct(avgHighchartsRate) },
-					{ label: "Bundle Opportunities", value: String(bundleOpportunities) },
-				].map(({ label, value }) => (
-					<div key={label} className="rounded-2xl border p-4" style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}>
-						<div className="text-[10px] uppercase tracking-[0.12em] font-semibold mb-1" style={{ color: "#8A9B8C" }}>{label}</div>
-						<div className="text-2xl font-semibold tracking-tight" style={{ color: "#223124" }}>{value}</div>
-					</div>
+					{
+						label: "Live Queries",
+						value: String(totalLiveQueries),
+						sub: "configured prompts",
+					},
+					{
+						label: "Tracked",
+						value: String(activeTrackedPrompts.length),
+						sub: "with benchmark runs",
+					},
+					{
+						label: "Avg HC Mention",
+						value: formatPct(avgHighchartsRate),
+						sub: "tracked prompts",
+					},
+					{
+						label: "Bundle Opportunities",
+						value: String(bundleOpportunities),
+						sub: "multi-product prompts",
+					},
+				].map(({ label, value, sub }) => (
+					<StatCard key={label} label={label} value={value} sub={sub} />
 				))}
+			</div>
+
+			{/* Filters */}
+			<div
+				className="rounded-2xl border p-4 space-y-4"
+				style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}
+			>
+				<div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+					<div
+						className="flex items-center gap-2 rounded-xl border px-3 py-2 lg:min-w-[320px]"
+						style={{ background: "#FDFCF9", borderColor: "#DDD0BC" }}
+					>
+						<Search size={15} color="#8A9B8C" />
+						<input
+							value={search}
+							onChange={(event) => {
+								const nextValue = event.target.value;
+								startTransition(() => setSearch(nextValue));
+							}}
+							placeholder="Search queries, products, tags"
+							className="w-full bg-transparent text-sm outline-none"
+							style={{ color: "#223124" }}
+						/>
+					</div>
+					<div className="text-xs" style={{ color: "#708272" }}>
+						{filteredPrompts.length.toLocaleString()} visible queries ·{" "}
+						{visibleTrackedCount.toLocaleString()} tracked
+					</div>
+				</div>
+
+				<div className="space-y-3">
+					<div className="flex flex-wrap items-center gap-2">
+						<span
+							className="text-[11px] font-semibold uppercase tracking-[0.12em]"
+							style={{ color: "#8A9B8C" }}
+						>
+							Framework
+						</span>
+						{(["all", ...FRAMEWORK_ORDER] as FrameworkFilter[]).map((value) => (
+							<FilterPill
+								key={value}
+								active={frameworkFilter === value}
+								label={value === "all" ? "All" : frameworkLabel(value)}
+								onClick={() => setFrameworkFilter(value)}
+							/>
+						))}
+					</div>
+					<div className="flex flex-wrap items-center gap-2">
+						<span
+							className="text-[11px] font-semibold uppercase tracking-[0.12em]"
+							style={{ color: "#8A9B8C" }}
+						>
+							Product
+						</span>
+						<FilterPill
+							active={productFilter === "all"}
+							label="All"
+							onClick={() => setProductFilter("all")}
+						/>
+						{PRODUCT_ORDER.map((product) => (
+							<FilterPill
+								key={product}
+								active={productFilter === product}
+								label={PRODUCT_META[product].shortName}
+								onClick={() => setProductFilter(product)}
+							/>
+						))}
+					</div>
+					<div className="flex flex-wrap items-center gap-2">
+						<span
+							className="text-[11px] font-semibold uppercase tracking-[0.12em]"
+							style={{ color: "#8A9B8C" }}
+						>
+							Status
+						</span>
+						{(
+							[
+								"all",
+								"tracked",
+								"awaiting_run",
+								"paused",
+								"deleted",
+							] as StatusFilter[]
+						).map((value) => (
+							<FilterPill
+								key={value}
+								active={statusFilter === value}
+								label={value === "all" ? "All" : visibilityLabel(value)}
+								onClick={() => setStatusFilter(value)}
+							/>
+						))}
+					</div>
+				</div>
 			</div>
 
 			{/* Charts */}
 			<div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-				<div className="rounded-2xl border p-4" style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}>
-					<div className="text-sm font-semibold mb-3" style={{ color: "#3A4D3C" }}>Queries per product</div>
+				<div
+					className="rounded-2xl border p-4"
+					style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}
+				>
+					<div
+						className="text-sm font-semibold mb-3"
+						style={{ color: "#3A4D3C" }}
+					>
+						Queries per product
+					</div>
 					<HighchartsReact highcharts={Highcharts} options={chartOptions} />
 				</div>
-				<div className="rounded-2xl border p-4" style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}>
-					<div className="text-sm font-semibold mb-3" style={{ color: "#3A4D3C" }}>Avg HC mention rate</div>
-					<HighchartsReact highcharts={Highcharts} options={hcRateChartOptions} />
+				<div
+					className="rounded-2xl border p-4"
+					style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}
+				>
+					<div
+						className="text-sm font-semibold mb-3"
+						style={{ color: "#3A4D3C" }}
+					>
+						Avg HC mention rate
+					</div>
+					<HighchartsReact
+						highcharts={Highcharts}
+						options={hcRateChartOptions}
+					/>
 				</div>
 			</div>
 
 			{/* Citation domain split */}
-		<div className="rounded-2xl border overflow-hidden" style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}>
-			<div className="px-4 py-3 border-b" style={{ borderColor: "#EDE7DC", background: "#FDFCF9" }}>
-				<div className="text-sm font-semibold" style={{ color: "#3A4D3C" }}>Citation sources — internal vs external</div>
-				<div className="text-xs mt-0.5" style={{ color: "#9AAE9C" }}>
-					{citationQuery.isLoading ? "Loading…" : `${citationDomainSplit.totalCitations.toLocaleString()} total citations`}
+			<div
+				className="rounded-2xl border overflow-hidden"
+				style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}
+			>
+				<div
+					className="px-4 py-3 border-b"
+					style={{ borderColor: "#EDE7DC", background: "#FDFCF9" }}
+				>
+					<div className="text-sm font-semibold" style={{ color: "#3A4D3C" }}>
+						Citation sources — internal vs external
+					</div>
+					<div className="text-xs mt-0.5" style={{ color: "#9AAE9C" }}>
+						{citationQuery.isLoading
+							? "Loading…"
+							: `${citationDomainSplit.totalCitations.toLocaleString()} total citations`}
+					</div>
+				</div>
+				<div
+					className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x"
+					style={{ borderColor: "#EDE7DC" }}
+				>
+					{/* Internal */}
+					<div className="p-4">
+						<div className="flex items-center gap-2 mb-3">
+							<span
+								className="w-2 h-2 rounded-full flex-shrink-0"
+								style={{ background: "#4A8C50" }}
+							/>
+							<span
+								className="text-xs font-semibold uppercase tracking-wide"
+								style={{ color: "#4A8C50" }}
+							>
+								Highcharts.com (internal)
+							</span>
+							<span
+								className="ml-auto text-xs font-semibold tabular-nums"
+								style={{ color: "#4A5E4C" }}
+							>
+								{citationDomainSplit.internalCitations.toLocaleString()}{" "}
+								citations
+							</span>
+						</div>
+						{citationDomainSplit.internal.slice(0, 8).map((s) => (
+							<div
+								key={s.key}
+								className="flex items-center gap-2 py-1.5 border-t"
+								style={{ borderColor: "#F0EBE2" }}
+							>
+								<span
+									className="flex-1 text-[12px] truncate"
+									style={{ color: "#3A4D3C" }}
+								>
+									{s.host}
+									{s.title && s.title !== s.host ? ` · ${s.title}` : ""}
+								</span>
+								<span
+									className="text-[11px] tabular-nums font-medium flex-shrink-0"
+									style={{ color: "#8A9B8C" }}
+								>
+									{s.citationCount}
+								</span>
+							</div>
+						))}
+						{citationDomainSplit.internal.length === 0 &&
+							!citationQuery.isLoading && (
+								<p className="text-xs" style={{ color: "#B5C4B7" }}>
+									No internal citations found
+								</p>
+							)}
+					</div>
+					{/* External */}
+					<div className="p-4">
+						<div className="flex items-center gap-2 mb-3">
+							<span
+								className="w-2 h-2 rounded-full flex-shrink-0"
+								style={{ background: "#C7A456" }}
+							/>
+							<span
+								className="text-xs font-semibold uppercase tracking-wide"
+								style={{ color: "#9A7A30" }}
+							>
+								External domains
+							</span>
+							<span
+								className="ml-auto text-xs font-semibold tabular-nums"
+								style={{ color: "#4A5E4C" }}
+							>
+								{citationDomainSplit.externalCitations.toLocaleString()}{" "}
+								citations
+							</span>
+						</div>
+						{citationDomainSplit.external.slice(0, 8).map((s) => (
+							<div
+								key={s.key}
+								className="flex items-center gap-2 py-1.5 border-t"
+								style={{ borderColor: "#F0EBE2" }}
+							>
+								<span
+									className="flex-1 text-[12px] truncate"
+									style={{ color: "#3A4D3C" }}
+								>
+									{s.host}
+								</span>
+								<span
+									className="text-[11px] tabular-nums font-medium flex-shrink-0"
+									style={{ color: "#8A9B8C" }}
+								>
+									{s.citationCount}
+								</span>
+							</div>
+						))}
+						{citationDomainSplit.external.length === 0 &&
+							!citationQuery.isLoading && (
+								<p className="text-xs" style={{ color: "#B5C4B7" }}>
+									No external citations found
+								</p>
+							)}
+					</div>
 				</div>
 			</div>
-			<div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x" style={{ borderColor: "#EDE7DC" }}>
-				{/* Internal */}
-				<div className="p-4">
-					<div className="flex items-center gap-2 mb-3">
-						<span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: "#4A8C50" }} />
-						<span className="text-xs font-semibold uppercase tracking-wide" style={{ color: "#4A8C50" }}>Highcharts.com (internal)</span>
-						<span className="ml-auto text-xs font-semibold tabular-nums" style={{ color: "#4A5E4C" }}>
-							{citationDomainSplit.internalCitations.toLocaleString()} citations
-						</span>
-					</div>
-					{citationDomainSplit.internal.slice(0, 8).map((s) => (
-						<div key={s.key} className="flex items-center gap-2 py-1.5 border-t" style={{ borderColor: "#F0EBE2" }}>
-							<span className="flex-1 text-[12px] truncate" style={{ color: "#3A4D3C" }}>{s.host}{s.title && s.title !== s.host ? ` · ${s.title}` : ""}</span>
-							<span className="text-[11px] tabular-nums font-medium flex-shrink-0" style={{ color: "#8A9B8C" }}>{s.citationCount}</span>
-						</div>
-					))}
-					{citationDomainSplit.internal.length === 0 && !citationQuery.isLoading && (
-						<p className="text-xs" style={{ color: "#B5C4B7" }}>No internal citations found</p>
-					)}
-				</div>
-				{/* External */}
-				<div className="p-4">
-					<div className="flex items-center gap-2 mb-3">
-						<span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: "#C7A456" }} />
-						<span className="text-xs font-semibold uppercase tracking-wide" style={{ color: "#9A7A30" }}>External domains</span>
-						<span className="ml-auto text-xs font-semibold tabular-nums" style={{ color: "#4A5E4C" }}>
-							{citationDomainSplit.externalCitations.toLocaleString()} citations
-						</span>
-					</div>
-					{citationDomainSplit.external.slice(0, 8).map((s) => (
-						<div key={s.key} className="flex items-center gap-2 py-1.5 border-t" style={{ borderColor: "#F0EBE2" }}>
-							<span className="flex-1 text-[12px] truncate" style={{ color: "#3A4D3C" }}>{s.host}</span>
-							<span className="text-[11px] tabular-nums font-medium flex-shrink-0" style={{ color: "#8A9B8C" }}>{s.citationCount}</span>
-						</div>
-					))}
-					{citationDomainSplit.external.length === 0 && !citationQuery.isLoading && (
-						<p className="text-xs" style={{ color: "#B5C4B7" }}>No external citations found</p>
-					)}
-				</div>
-			</div>
-		</div>
 
-		{/* Per-product table */}
-			<div className="rounded-2xl border overflow-hidden" style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}>
+			{/* Per-product table */}
+			<div
+				className="rounded-2xl border overflow-hidden"
+				style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}
+			>
 				<table className="w-full text-sm">
 					<thead>
-						<tr style={{ borderBottom: "1px solid #EDE7DC", background: "#FDFCF9" }}>
+						<tr
+							style={{
+								borderBottom: "1px solid #EDE7DC",
+								background: "#FDFCF9",
+							}}
+						>
 							{["Product", "Queries", "Tracked", "Avg HC%"].map((h) => (
-								<th key={h} className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide" style={{ color: "#8A9B8C" }}>{h}</th>
+								<th
+									key={h}
+									className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide"
+									style={{ color: "#8A9B8C" }}
+								>
+									{h}
+								</th>
 							))}
 						</tr>
 					</thead>
 					<tbody>
-						{productCoverage.map((row, i) => {
+						{visibleCoverage.map((row, i) => {
 							const meta = PRODUCT_META[row.product];
 							return (
-								<tr key={row.product} style={{ borderTop: i === 0 ? "none" : "1px solid #F0EBE2" }}>
-									<td className="px-4 py-3 font-medium" style={{ color: "#223124" }}>
+								<tr
+									key={row.product}
+									style={{ borderTop: i === 0 ? "none" : "1px solid #F0EBE2" }}
+								>
+									<td
+										className="px-4 py-3 font-medium"
+										style={{ color: "#223124" }}
+									>
 										<span className="inline-flex items-center gap-2">
-											<span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: meta.accent }} />
+											<span
+												className="w-2 h-2 rounded-full flex-shrink-0"
+												style={{ background: meta.accent }}
+											/>
 											{meta.name}
 										</span>
 									</td>
-									<td className="px-4 py-3 tabular-nums" style={{ color: "#4A5E4C" }}>{row.totalQueries}</td>
-									<td className="px-4 py-3 tabular-nums" style={{ color: "#4A5E4C" }}>{row.trackedQueries}</td>
-									<td className="px-4 py-3 tabular-nums font-semibold" style={{ color: row.avgHighchartsRate >= 50 ? "#2F7A3B" : row.avgHighchartsRate >= 20 ? "#7A6E2A" : "#9A3A3A" }}>
+									<td
+										className="px-4 py-3 tabular-nums"
+										style={{ color: "#4A5E4C" }}
+									>
+										{row.totalQueries}
+									</td>
+									<td
+										className="px-4 py-3 tabular-nums"
+										style={{ color: "#4A5E4C" }}
+									>
+										{row.trackedQueries}
+									</td>
+									<td
+										className="px-4 py-3 tabular-nums font-semibold"
+										style={{
+											color:
+												row.avgHighchartsRate >= 50
+													? "#2F7A3B"
+													: row.avgHighchartsRate >= 20
+														? "#7A6E2A"
+														: "#9A3A3A",
+										}}
+									>
 										{formatPct(row.avgHighchartsRate)}
 									</td>
 								</tr>
@@ -1453,6 +1768,143 @@ export default function ProductMentions() {
 						})}
 					</tbody>
 				</table>
+			</div>
+
+			{/* Query cards */}
+			<div
+				className="rounded-2xl border overflow-hidden"
+				style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}
+			>
+				<div
+					className="flex items-center justify-between gap-3 px-4 py-3 border-b"
+					style={{ borderColor: "#EDE7DC", background: "#FDFCF9" }}
+				>
+					<div className="flex items-center gap-2">
+						<Layers size={16} color="#486F4D" />
+						<div className="text-sm font-semibold" style={{ color: "#3A4D3C" }}>
+							Prompt-level product mapping
+						</div>
+					</div>
+					<div className="text-xs" style={{ color: "#8A9B8C" }}>
+						{groupedPrompts.length.toLocaleString()} product groups
+					</div>
+				</div>
+				{groupedPrompts.length === 0 ? (
+					<div className="p-6 text-sm text-center" style={{ color: "#8A9B8C" }}>
+						No prompts match the current filters.
+					</div>
+				) : (
+					<div className="space-y-5 p-4">
+						{groupedPrompts.map((group) => {
+							const meta = PRODUCT_META[group.product];
+							return (
+								<section key={group.product} className="space-y-3">
+									<div className="flex flex-wrap items-center justify-between gap-2">
+										<div className="flex items-center gap-2">
+											<span
+												className="w-2 h-2 rounded-full flex-shrink-0"
+												style={{ background: meta.accent }}
+											/>
+											<h3
+												className="text-sm font-semibold"
+												style={{ color: "#223124" }}
+											>
+												{meta.name}
+											</h3>
+										</div>
+										<span
+											className="text-xs tabular-nums"
+											style={{ color: "#8A9B8C" }}
+										>
+											{group.items.length} queries
+										</span>
+									</div>
+									<div className="grid grid-cols-1 gap-3">
+										{group.items.map((item) => (
+											<QueryCard key={item.prompt.query} item={item} />
+										))}
+									</div>
+								</section>
+							);
+						})}
+					</div>
+				)}
+			</div>
+
+			{/* Suggestions */}
+			<div
+				className="rounded-2xl border overflow-hidden"
+				style={{ background: "#FFFFFF", borderColor: "#DDD0BC" }}
+			>
+				<div
+					className="flex items-center justify-between gap-3 px-4 py-3 border-b"
+					style={{ borderColor: "#EDE7DC", background: "#FDFCF9" }}
+				>
+					<div className="flex items-center gap-2">
+						<Sparkles size={16} color="#8C6B17" />
+						<div className="text-sm font-semibold" style={{ color: "#3A4D3C" }}>
+							Coverage suggestions
+						</div>
+					</div>
+					<div className="text-xs" style={{ color: "#8A9B8C" }}>
+						{suggestionCopyMessage ||
+							`${visibleSuggestions.length} suggestions`}
+					</div>
+				</div>
+				{visibleSuggestions.length === 0 ? (
+					<div className="p-6 text-sm text-center" style={{ color: "#8A9B8C" }}>
+						No coverage gaps match the current filters.
+					</div>
+				) : (
+					<div className="divide-y" style={{ borderColor: "#F0EBE2" }}>
+						{visibleSuggestions.map((suggestion) => (
+							<div
+								key={suggestion.id}
+								className="flex flex-col gap-3 p-4 md:flex-row md:items-start md:justify-between"
+							>
+								<div className="min-w-0 space-y-2">
+									<div className="flex flex-wrap items-center gap-2">
+										<SuggestionBadge state={suggestion.state} />
+										<ProductChip product={suggestion.product} />
+										<FrameworkChip framework={suggestion.framework} />
+									</div>
+									<div
+										className="text-sm font-semibold"
+										style={{ color: "#223124" }}
+									>
+										{suggestion.query}
+									</div>
+									<p
+										className="text-xs leading-relaxed"
+										style={{ color: "#708272" }}
+									>
+										{suggestion.rationale}
+									</p>
+									<div className="text-[11px]" style={{ color: "#8A9B8C" }}>
+										{suggestion.existingCount} existing ·{" "}
+										{suggestion.trackedCount} tracked ·{" "}
+										{formatPct(suggestion.avgHighchartsRate)} avg HC mention
+									</div>
+								</div>
+								<button
+									type="button"
+									onClick={() => {
+										void copySuggestionQuery(suggestion.query);
+									}}
+									className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold md:flex-shrink-0"
+									style={{
+										background: "#FDFCF9",
+										color: "#3A4D3C",
+										border: "1px solid #DDD0BC",
+									}}
+								>
+									<Copy size={13} />
+									Copy
+								</button>
+							</div>
+						))}
+					</div>
+				)}
 			</div>
 		</div>
 	);

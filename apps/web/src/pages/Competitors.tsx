@@ -649,6 +649,7 @@ function MentionRateChart({ data }: { data: CompetitorSeries[] }) {
 	const hcIndex = sorted.findIndex((s) => s.isHighcharts);
 
 	const options: Highcharts.Options = {
+		accessibility: { enabled: false },
 		chart: {
 			type: "bar",
 			height: Math.max(200, sorted.length * 38 + 30),
@@ -746,6 +747,7 @@ function ShareOfVoiceChart({ data }: { data: CompetitorSeries[] }) {
 	}
 
 	const options: Highcharts.Options = {
+		accessibility: { enabled: false },
 		chart: {
 			type: "pie",
 			height: 290,
@@ -859,8 +861,13 @@ export default function Competitors() {
 	const sorted = [...series].sort(
 		(a, b) => b.mentionRatePct - a.mentionRatePct,
 	);
+	const hasSeriesData = series.some(
+		(s) => s.mentionRatePct > 0 || s.shareOfVoicePct > 0,
+	);
 	const hc = series.find((s) => s.isHighcharts);
-	const hcRank = sorted.findIndex((s) => s.isHighcharts) + 1;
+	const hcRank = hasSeriesData
+		? sorted.findIndex((s) => s.isHighcharts) + 1
+		: 0;
 	const entitiesBeaten = sorted.filter(
 		(s) => !s.isHighcharts && s.mentionRatePct < (hc?.mentionRatePct ?? 0),
 	).length;
@@ -943,14 +950,14 @@ export default function Competitors() {
 					<>
 						<StatCard
 							label="Rank"
-							value={hc ? `#${hcRank}` : "–"}
+							value={hc && hcRank > 0 ? `#${hcRank}` : "–"}
 							sub={`of ${sorted.length} entities`}
 							highlight
 						/>
 						<StatCard
 							label="Mention Rate"
 							value={hc ? `${hc.mentionRatePct.toFixed(1)}%` : "–"}
-							sub="queries mentioning Highcharts"
+							sub="responses mentioning Highcharts"
 							highlight
 						/>
 						<StatCard
@@ -980,7 +987,7 @@ export default function Competitors() {
 					sub={
 						normalizedSelectedTags.length > 0
 							? "% of selected prompts each entity was mentioned in"
-							: "% of queries each entity was mentioned in"
+							: "% of responses each entity was mentioned in"
 					}
 				>
 					{isLoading ? (

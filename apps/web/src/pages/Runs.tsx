@@ -161,6 +161,247 @@ function shortRunId(value: string) {
 	return `${value.slice(0, 8)}…`;
 }
 
+type QueueProgressSummary = {
+	totalJobs: number;
+	completedJobs: number;
+	failedTerminalJobs: number;
+	completionPct: number;
+};
+
+function QueueFailureTooltip({
+	failedModels,
+	failedTerminalJobs,
+}: {
+	failedModels: BenchmarkQueueRun["failedModels"];
+	failedTerminalJobs: number;
+}) {
+	const visibleModels = failedModels.slice(0, 6);
+	const remainingModels = Math.max(0, failedModels.length - visibleModels.length);
+
+	return (
+		<div
+			className="absolute right-0 z-50 w-[320px] max-w-[min(320px,calc(100vw-48px))] rounded-2xl border p-3 opacity-0 invisible translate-y-1 transition-all duration-150 group-hover:visible group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:visible group-focus-within:opacity-100 group-focus-within:translate-y-0"
+			style={{
+				top: "calc(100% + 10px)",
+				background:
+					"linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(250,247,242,0.98) 100%)",
+				borderColor: "#DDD0BC",
+				boxShadow: "0 18px 48px rgba(42, 58, 44, 0.16)",
+				backdropFilter: "blur(10px)",
+			}}
+		>
+			<div className="flex items-start justify-between gap-3">
+				<div>
+					<div
+						className="text-[11px] font-semibold uppercase tracking-[0.18em]"
+						style={{ color: "#8C5A5A" }}
+					>
+						Failure Log
+					</div>
+					<div
+						className="mt-1 text-sm font-semibold tracking-tight"
+						style={{ color: "#2A3A2C" }}
+					>
+						{failedModels.length > 0
+							? `${formatCount(failedModels.length)} model${
+									failedModels.length === 1 ? "" : "s"
+								} need attention`
+							: "Failed jobs detected"}
+					</div>
+				</div>
+				<div
+					className="rounded-full px-2 py-1 text-[10px] font-semibold"
+					style={{
+						background: "#FEF2F2",
+						color: "#991B1B",
+						border: "1px solid #FECACA",
+					}}
+				>
+					{formatCount(failedTerminalJobs)} failed
+				</div>
+			</div>
+
+			<div className="mt-3 space-y-2">
+				{visibleModels.length > 0 ? (
+					visibleModels.map((item) => {
+						const statusTone =
+							item.status === "dead_letter"
+								? {
+										bg: "#FFF7ED",
+										border: "#FED7AA",
+										text: "#9A3412",
+										label: "Dead letter",
+									}
+								: {
+										bg: "#FEF2F2",
+										border: "#FECACA",
+										text: "#991B1B",
+										label: "Failed",
+									};
+						return (
+							<div
+								key={item.model}
+								className="rounded-xl border px-3 py-2.5 text-left"
+								style={{
+									background: statusTone.bg,
+									borderColor: statusTone.border,
+								}}
+							>
+								<div className="flex items-start justify-between gap-3">
+									<div className="min-w-0">
+										<div
+											className="truncate text-[12px] font-semibold"
+											style={{ color: "#2A3A2C" }}
+										>
+											{item.model}
+										</div>
+										<div
+											className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.14em]"
+											style={{ color: statusTone.text }}
+										>
+											{statusTone.label}
+										</div>
+									</div>
+									<div
+										className="shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold"
+										style={{
+											background: "#FFFFFF",
+											color: "#536654",
+											border: "1px solid rgba(83, 102, 84, 0.16)",
+										}}
+									>
+										{formatCount(item.failedJobs)} job
+										{item.failedJobs === 1 ? "" : "s"}
+									</div>
+								</div>
+								<div className="mt-2 space-y-1.5">
+									{item.reasons.length > 0 ? (
+										item.reasons.slice(0, 2).map((reason) => (
+											<div
+												key={reason}
+												className="rounded-lg px-2.5 py-2 text-[11px] leading-relaxed"
+												style={{
+													background: "rgba(255,255,255,0.8)",
+													color: "#536654",
+												}}
+											>
+												{reason}
+											</div>
+										))
+									) : (
+										<div
+											className="rounded-lg px-2.5 py-2 text-[11px] leading-relaxed"
+											style={{
+												background: "rgba(255,255,255,0.8)",
+												color: "#7A8E7C",
+											}}
+										>
+											No provider error text was stored for this model.
+										</div>
+									)}
+								</div>
+							</div>
+						);
+					})
+				) : (
+					<div
+						className="rounded-xl border px-3 py-2.5 text-[11px] leading-relaxed"
+						style={{
+							background: "#FEF2F2",
+							borderColor: "#FECACA",
+							color: "#7A8E7C",
+						}}
+					>
+						Queue jobs failed, but no model-specific error text was returned by the
+						worker.
+					</div>
+				)}
+			</div>
+
+			{remainingModels > 0 && (
+				<div className="mt-2 text-[11px]" style={{ color: "#7A8E7C" }}>
+					+{formatCount(remainingModels)} more failed model
+					{remainingModels === 1 ? "" : "s"}
+				</div>
+			)}
+		</div>
+	);
+}
+
+function QueueProgressCell({
+	run,
+	queueProgress,
+}: {
+	run: BenchmarkQueueRun;
+	queueProgress: QueueProgressSummary;
+}) {
+	const hasFailures = queueProgress.failedTerminalJobs > 0;
+	const progressLabel = hasFailures
+		? `${formatCount(queueProgress.completedJobs)} ok · ${formatCount(
+				queueProgress.failedTerminalJobs,
+			)} failed`
+		: `${formatCount(queueProgress.completedJobs)}/${formatCount(
+				queueProgress.totalJobs,
+			)}`;
+
+	const content = (
+		<div className="flex min-w-[180px] items-center justify-end gap-2">
+			<div className="h-2 w-28 overflow-hidden rounded-full" style={{ background: "#E8E0D2" }}>
+				<div
+					className="h-full rounded-full"
+					style={{
+						width: `${queueProgress.completionPct}%`,
+						background:
+							run.status === "failed"
+								? "#dc2626"
+								: run.status === "completed"
+									? "#15803d"
+									: "#8FBB93",
+					}}
+				/>
+			</div>
+			<span className="text-xs tabular-nums" style={{ color: "#607860" }}>
+				{progressLabel}
+			</span>
+			{hasFailures ? (
+				<span
+					className="inline-flex h-5 items-center rounded-full px-1.5 text-[10px] font-semibold"
+					style={{
+						background: "#FEF2F2",
+						border: "1px solid #FECACA",
+						color: "#991B1B",
+					}}
+				>
+					logs
+				</span>
+			) : null}
+		</div>
+	);
+
+	if (!hasFailures) {
+		return content;
+	}
+
+	return (
+		<div className="group relative inline-flex justify-end">
+			<button
+				type="button"
+				className="inline-flex justify-end rounded-xl px-2 py-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C8DEC9] focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+				style={{
+					cursor: "help",
+				}}
+				aria-label="Show failed models and queue error details"
+			>
+				{content}
+			</button>
+			<QueueFailureTooltip
+				failedModels={run.failedModels}
+				failedTerminalJobs={queueProgress.failedTerminalJobs}
+			/>
+		</div>
+	);
+}
+
 // ── Web Search Toggle ─────────────────────────────────────────────────────────
 
 function WebSearchToggle({
@@ -1389,33 +1630,10 @@ export default function Runs() {
 														Open
 													</a>
 												) : queueProgress ? (
-													<div className="flex min-w-[180px] items-center justify-end gap-2">
-														<div
-															className="h-2 w-28 overflow-hidden rounded-full"
-															style={{ background: "#E8E0D2" }}
-														>
-															<div
-																className="h-full rounded-full"
-																style={{
-																	width: `${queueProgress.completionPct}%`,
-																	background:
-																		run.status === "failed"
-																			? "#dc2626"
-																			: run.status === "completed"
-																				? "#15803d"
-																				: "#8FBB93",
-																}}
-															/>
-														</div>
-														<span
-															className="text-xs tabular-nums"
-															style={{ color: "#607860" }}
-														>
-															{queueProgress.failedTerminalJobs > 0
-																? `${queueProgress.completedJobs} ok · ${queueProgress.failedTerminalJobs} failed`
-																: `${queueProgress.completedJobs}/${queueProgress.totalJobs}`}
-														</span>
-													</div>
+													<QueueProgressCell
+														run={run}
+														queueProgress={queueProgress}
+													/>
 												) : (
 													<span
 														className="text-xs"

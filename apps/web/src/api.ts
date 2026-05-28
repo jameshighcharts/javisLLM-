@@ -1,4 +1,9 @@
 import { createApiClient } from "@easy-llm-benchmarker/api-client";
+import {
+	computeAiVisibilityScore,
+	computeMentionRatePct,
+	computeShareOfVoicePct,
+} from "@easy-llm-benchmarker/contracts";
 import { createClient } from "@supabase/supabase-js";
 import type {
 	AskillResponse,
@@ -45,10 +50,17 @@ const SUPABASE_PAGE_SIZE = 1000;
 const SUPABASE_IN_CLAUSE_CHUNK_SIZE = 500;
 const DASHBOARD_RECENT_RUN_SCAN_LIMIT = 25;
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const SUPABASE_URL =
+	((import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? "").trim() ||
+	undefined;
 const SUPABASE_ANON_KEY =
-	(import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ||
-	(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined);
+	(
+		(import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ?? ""
+	).trim() ||
+	(
+		(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined) ?? ""
+	).trim() ||
+	undefined;
 
 export const supabase =
 	SUPABASE_URL && SUPABASE_ANON_KEY
@@ -2311,19 +2323,15 @@ async function fetchDashboardFromSupabase(
 			return count + (mentionMap?.get(competitor.id) ? 1 : 0);
 		}, 0);
 
-		const mentionRatePct =
-			totalResponses > 0 ? (mentionsCount / totalResponses) * 100 : 0;
-		const shareOfVoicePct =
-			totalMentionsAcrossEntities > 0
-				? (mentionsCount / totalMentionsAcrossEntities) * 100
-				: 0;
-
 		return {
 			entity: competitor.name,
 			entityKey: competitor.slug,
 			isHighcharts: competitor.is_primary || competitor.slug === "highcharts",
-			mentionRatePct: Number(mentionRatePct.toFixed(2)),
-			shareOfVoicePct: Number(shareOfVoicePct.toFixed(2)),
+			mentionRatePct: computeMentionRatePct(mentionsCount, totalResponses),
+			shareOfVoicePct: computeShareOfVoicePct(
+				mentionsCount,
+				totalMentionsAcrossEntities,
+			),
 		};
 	});
 
@@ -2387,10 +2395,6 @@ async function fetchDashboardFromSupabase(
 				const mentionMap = mentionsByResponse.get(response.id);
 				return count + (mentionMap?.get(competitor.id) ? 1 : 0);
 			}, 0);
-			const ratePct =
-				latestRunResponseCount > 0
-					? (mentions / latestRunResponseCount) * 100
-					: 0;
 			const isHighcharts = highchartsCompetitor
 				? competitor.id === highchartsCompetitor.id
 				: competitor.slug === "highcharts";
@@ -2398,7 +2402,7 @@ async function fetchDashboardFromSupabase(
 				entity: competitor.name,
 				entityKey: competitor.slug,
 				isHighcharts,
-				ratePct,
+				ratePct: computeMentionRatePct(mentions, latestRunResponseCount),
 				mentions,
 			};
 		});
@@ -2506,9 +2510,10 @@ async function fetchDashboardFromSupabase(
 	const modelStatsSummary = buildModelStatsFromResponses(responses);
 	const highchartsSeries =
 		competitorSeries.find((series) => series.isHighcharts) ?? null;
-	const derivedOverallScore =
-		0.7 * (highchartsSeries?.mentionRatePct ?? 0) +
-		0.3 * (highchartsSeries?.shareOfVoicePct ?? 0);
+	const derivedOverallScore = computeAiVisibilityScore(
+		(highchartsSeries?.mentionRatePct ?? 0) / 100,
+		(highchartsSeries?.shareOfVoicePct ?? 0) / 100,
+	);
 	const overallScore =
 		selectedProviderSet.size > 0
 			? Number(derivedOverallScore.toFixed(2))
@@ -3305,13 +3310,15 @@ async function fetchTimeseriesFromSupabase(
 				(sum, competitor) => sum + (runMentions?.get(competitor.id) ?? 0),
 				0,
 			);
-			const highchartsSovPct =
-				totalMentionsAcrossEntities > 0
-					? (highchartsMentions / totalMentionsAcrossEntities) * 100
-					: 0;
+			const highchartsSovPct = computeShareOfVoicePct(
+				highchartsMentions,
+				totalMentionsAcrossEntities,
+			);
 
-			const derivedAiVisibility =
-				0.7 * highchartsRatePct + 0.3 * highchartsSovPct;
+			const derivedAiVisibility = computeAiVisibilityScore(
+				highchartsRatePct / 100,
+				highchartsSovPct / 100,
+			);
 			// `overall_score` is global per run, not tag- or provider-scoped. When segmentation
 			// is active we must use the derived value from filtered mentions.
 			const storedAiVisibility =
@@ -3343,8 +3350,7 @@ async function fetchTimeseriesFromSupabase(
 				rates: Object.fromEntries(
 					competitorRows.map((competitor) => {
 						const mentions = runMentions?.get(competitor.id) ?? 0;
-						const mentionRatePct = total > 0 ? (mentions / total) * 100 : 0;
-						return [competitor.name, Number(mentionRatePct.toFixed(2))];
+						return [competitor.name, computeMentionRatePct(mentions, total)];
 					}),
 				),
 			};
@@ -4058,8 +4064,6 @@ async function fetchPromptDrilldownFromSupabase(
 	const totalResponses = responses.length;
 	const competitorStats = visibleCompetitors.map((competitor) => {
 		const mentionCount = mentionCountByCompetitor.get(competitor.id) ?? 0;
-		const mentionRatePct =
-			totalResponses > 0 ? (mentionCount / totalResponses) * 100 : 0;
 		const isHighcharts = primaryCompetitor
 			? competitor.id === primaryCompetitor.id
 			: competitor.slug === "highcharts";
@@ -4071,7 +4075,7 @@ async function fetchPromptDrilldownFromSupabase(
 			isHighcharts,
 			isActive: competitor.is_active,
 			mentionCount,
-			mentionRatePct: Number(mentionRatePct.toFixed(2)),
+			mentionRatePct: computeMentionRatePct(mentionCount, totalResponses),
 		};
 	});
 
@@ -4128,16 +4132,17 @@ async function fetchPromptDrilldownFromSupabase(
 				competitorStats.map((competitor) => {
 					const mentions =
 						mentionCountByCompetitorForRun.get(competitor.id) ?? 0;
-					const pct = runTotal > 0 ? (mentions / runTotal) * 100 : 0;
-					return [competitor.entity, Number(pct.toFixed(2))];
+					return [competitor.entity, computeMentionRatePct(mentions, runTotal)];
 				}),
 			);
 
 			const runHighchartsCount = primaryCompetitor
 				? (mentionCountByCompetitorForRun.get(primaryCompetitor.id) ?? 0)
 				: 0;
-			const runHighchartsRate =
-				runTotal > 0 ? (runHighchartsCount / runTotal) * 100 : 0;
+			const runHighchartsRate = computeMentionRatePct(
+				runHighchartsCount,
+				runTotal,
+			);
 
 			const runRivals = competitorStats.filter(
 				(competitor) => !competitor.isHighcharts,
@@ -4158,10 +4163,9 @@ async function fetchPromptDrilldownFromSupabase(
 					.map((competitor) => {
 						const mentions =
 							mentionCountByCompetitorForRun.get(competitor.id) ?? 0;
-						const ratePct = runTotal > 0 ? (mentions / runTotal) * 100 : 0;
 						return {
 							entity: competitor.entity,
-							ratePct: Number(ratePct.toFixed(2)),
+							ratePct: computeMentionRatePct(mentions, runTotal),
 						};
 					})
 					.sort((left, right) => right.ratePct - left.ratePct)
@@ -4629,10 +4633,6 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
 			const mentions =
 				mentionsByQueryAndCompetitor.get(`${queryRow.id}:${competitor.id}`) ??
 				0;
-			const ratePct =
-				latestRunResponseCount > 0
-					? roundTo((mentions / latestRunResponseCount) * 100, 2)
-					: 0;
 			const isHighcharts = highchartsCompetitor
 				? competitor.id === highchartsCompetitor.id
 				: competitor.slug === "highcharts";
@@ -4640,7 +4640,7 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
 				entity: competitor.name,
 				entityKey: competitor.slug,
 				isHighcharts,
-				ratePct,
+				ratePct: computeMentionRatePct(mentions, latestRunResponseCount),
 				mentions,
 			};
 		});
@@ -4737,10 +4737,9 @@ async function fetchDashboardFromSupabaseViews(): Promise<DashboardResponse> {
 	const totalResponses = totalsFromRuns.responses;
 	const highchartsSeries =
 		competitorSeries.find((series) => series.isHighcharts) ?? null;
-	const overallScore = roundTo(
-		0.7 * (highchartsSeries?.mentionRatePct ?? 0) +
-			0.3 * (highchartsSeries?.shareOfVoicePct ?? 0),
-		2,
+	const overallScore = computeAiVisibilityScore(
+		(highchartsSeries?.mentionRatePct ?? 0) / 100,
+		(highchartsSeries?.shareOfVoicePct ?? 0) / 100,
 	);
 	const modelOwnerMapString = Object.entries(modelOwnerMap)
 		.sort(([left], [right]) => left.localeCompare(right))
@@ -5345,27 +5344,30 @@ async function fetchTimeseriesFromSupabaseViews(
 			const rates = Object.fromEntries(
 				competitorRows.map((competitor) => {
 					const mentions = bucket.mentionsByCompetitor.get(competitor.id) ?? 0;
-					const mentionRatePct = total > 0 ? (mentions / total) * 100 : 0;
-					return [competitor.name, roundTo(mentionRatePct, 2)];
+					return [competitor.name, computeMentionRatePct(mentions, total)];
 				}),
 			);
 
 			const highchartsMentions = highchartsCompetitor
 				? (bucket.mentionsByCompetitor.get(highchartsCompetitor.id) ?? 0)
 				: 0;
-			const highchartsRatePct =
-				total > 0 ? (highchartsMentions / total) * 100 : 0;
+			const highchartsRatePct = computeMentionRatePct(
+				highchartsMentions,
+				total,
+			);
 			const totalMentionsAcrossEntities = competitorRows.reduce(
 				(sum, competitor) =>
 					sum + (bucket.mentionsByCompetitor.get(competitor.id) ?? 0),
 				0,
 			);
-			const highchartsSovPct =
-				totalMentionsAcrossEntities > 0
-					? (highchartsMentions / totalMentionsAcrossEntities) * 100
-					: 0;
-			const derivedAiVisibility =
-				0.7 * highchartsRatePct + 0.3 * highchartsSovPct;
+			const highchartsSovPct = computeShareOfVoicePct(
+				highchartsMentions,
+				totalMentionsAcrossEntities,
+			);
+			const derivedAiVisibility = computeAiVisibilityScore(
+				highchartsRatePct / 100,
+				highchartsSovPct / 100,
+			);
 
 			const rivalMentionCount = rivals.reduce(
 				(sum, competitor) =>

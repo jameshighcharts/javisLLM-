@@ -60,6 +60,7 @@ In Vercel Project Settings -> Environment Variables, set:
 - `GITHUB_REPO` (e.g. `javisLLM-`)
 - `BENCHMARK_TRIGGER_TOKEN` (required; bearer token for `/api/benchmark/*`)
 - Optional `UI_API_WRITE_TOKEN` (separate write token for the UI/API wrapper; defaults to `BENCHMARK_TRIGGER_TOKEN` when unset)
+- Optional `UI_API_READ_TOKEN` (read-only bearer token for `GET /api/outputs` and `GET /api/benchmark/outputs`)
 - Optional: `GITHUB_WORKFLOW_FILE` (default: `run-benchmark.yml`)
 - Optional: `GITHUB_WORKFLOW_REF` (default: `main`)
 - Optional hardening:
@@ -99,9 +100,12 @@ Stored outputs API:
 - `GET /api/outputs` or `GET /api/benchmark/outputs`
 - Filters: `runId`, `query`, `model`, `provider`, `limit`, `offset`, `includeText`
 - Returns raw stored model outputs from Supabase when available, with fallback to the local `artifacts/llm_outputs.jsonl` snapshot
+- Accepts either a Supabase user session bearer token or `UI_API_READ_TOKEN`
 - Example:
 ```bash
-curl "http://localhost:8787/api/outputs?query=javascript%20charting%20libraries&limit=20"
+curl \
+  -H "Authorization: Bearer $UI_API_READ_TOKEN" \
+  "http://localhost:8787/api/outputs?query=javascript%20charting%20libraries&limit=20"
 ```
 
 Local-only ChatGPT web scraper setup (not available on Vercel):

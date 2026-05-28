@@ -48,6 +48,7 @@ type AggregationBucket = {
 	urls: Set<string>;
 	responseIds: Set<string>;
 	providers: Set<string>;
+	providerCitationCounts: Map<string, number>;
 };
 
 function normalizeRefUrl(value: unknown): string {
@@ -116,6 +117,7 @@ export function aggregateCitationSources(
 					urls: new Set<string>(),
 					responseIds: new Set<string>(),
 					providers: new Set<string>(),
+					providerCitationCounts: new Map<string, number>(),
 				};
 				buckets.set(key, bucket);
 			}
@@ -125,6 +127,10 @@ export function aggregateCitationSources(
 			const provider = normalizeProvider(ref.provider);
 			if (provider) {
 				bucket.providers.add(provider);
+				bucket.providerCitationCounts.set(
+					provider,
+					(bucket.providerCitationCounts.get(provider) ?? 0) + 1,
+				);
 			}
 			if (!seenForResponse.has(key)) {
 				seenForResponse.add(key);
@@ -156,6 +162,11 @@ export function aggregateCitationSources(
 			uniqueUrlCount: bucket.urls.size,
 			providers: [...bucket.providers.values()].sort((left, right) =>
 				left.localeCompare(right),
+			),
+			providerCitationCounts: Object.fromEntries(
+				[...bucket.providerCitationCounts.entries()].sort(([left], [right]) =>
+					left.localeCompare(right),
+				),
 			),
 		}))
 		.sort((left, right) => {

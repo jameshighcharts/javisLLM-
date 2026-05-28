@@ -206,6 +206,61 @@ def to_int(value: Any) -> int:
     return int(round(to_float(value)))
 
 
+def compute_rate(numerator: Any, denominator: Any) -> float:
+    denom = to_float(denominator)
+    if denom <= 0:
+        return 0.0
+    return round(to_float(numerator) / denom, 6)
+
+
+def compute_percent_from_rate(rate: Any) -> float:
+    return round(to_float(rate) * 100.0, 2)
+
+
+def compute_mention_rate(mentions_count: Any, response_count: Any) -> float:
+    return compute_rate(mentions_count, response_count)
+
+
+def compute_mention_rate_pct(mentions_count: Any, response_count: Any) -> float:
+    return compute_percent_from_rate(
+        compute_mention_rate(mentions_count, response_count)
+    )
+
+
+def compute_share_of_voice_rate(mentions_count: Any, total_mentions: Any) -> float:
+    return compute_rate(mentions_count, total_mentions)
+
+
+def compute_share_of_voice_pct(mentions_count: Any, total_mentions: Any) -> float:
+    return compute_percent_from_rate(
+        compute_share_of_voice_rate(mentions_count, total_mentions)
+    )
+
+
+def compute_ai_visibility_score(
+    presence_rate: Any,
+    share_of_voice_rate: Any,
+) -> float:
+    return round(
+        (
+            (0.7 * to_float(presence_rate)) + (0.3 * to_float(share_of_voice_rate))
+        )
+        * 100.0,
+        2,
+    )
+
+
+def compute_ai_visibility_score_100_from_counts(
+    mentions_count: Any,
+    response_count: Any,
+    total_mentions: Any,
+) -> float:
+    return compute_ai_visibility_score(
+        compute_mention_rate(mentions_count, response_count),
+        compute_share_of_voice_rate(mentions_count, total_mentions),
+    )
+
+
 def normalize_yes_no(value: Any) -> str:
     raw = str(value or "").strip().lower()
     return "yes" if raw in {"yes", "true", "1"} else "no"
@@ -483,16 +538,15 @@ def compute_ai_visibility_score_100(
     highcharts_key: str,
     competitor_keys: Sequence[str],
 ) -> float:
-    runs = to_float(query_row.get("runs"))
     highcharts_count = to_float(query_row.get(f"{highcharts_key}_count"))
-    presence = (highcharts_count / runs) if runs else 0.0
-
     competitor_sum = sum(
         to_float(query_row.get(f"{key}_count")) for key in competitor_keys
     )
-    denom = highcharts_count + competitor_sum
-    share_of_voice = (highcharts_count / denom) if denom else 0.0
-    return round((0.7 * presence + 0.3 * share_of_voice) * 100, 2)
+    return compute_ai_visibility_score_100_from_counts(
+        highcharts_count,
+        query_row.get("runs"),
+        highcharts_count + competitor_sum,
+    )
 
 
 def compute_excl_viability(
@@ -565,17 +619,20 @@ def build_rows(
 
     overall_entity: Dict[str, Dict[str, Any]] = {}
     for item in entity_meta:
-        rate = to_float(overall_row.get(f"{item.key}_rate"))
         count = to_int(overall_row.get(f"{item.key}_count"))
+        overall_runs = overall_row.get("runs")
+        overall_rate = compute_mention_rate(count, overall_runs)
         overall_entity[item.key] = {
             "entity": item.label,
             "entity_key": item.key,
             "entity_chart_sort": item.sort_order,
             "entity_color_hex": item.color_hex,
             "overall_entity_mentions_count": count,
-            "overall_entity_mention_rate": round(rate, 6),
-            "overall_entity_mention_rate_pct": round(rate * 100.0, 2),
-            "overall_entity_mention_rate_label": f"{round(rate * 100.0):.0f}%",
+            "overall_entity_mention_rate": overall_rate,
+            "overall_entity_mention_rate_pct": compute_percent_from_rate(overall_rate),
+            "overall_entity_mention_rate_label": (
+                f"{round(compute_percent_from_rate(overall_rate)):.0f}%"
+            ),
         }
 
     query_scores = {
@@ -605,7 +662,7 @@ def build_rows(
         for item in entity_meta:
             entity_info = overall_entity[item.key]
             entity_count = to_int(query_row.get(f"{item.key}_count"))
-            entity_rate = to_float(query_row.get(f"{item.key}_rate"))
+            entity_rate = compute_mention_rate(entity_count, query_row.get("runs"))
             mentioned_yes_value = query_row.get(f"{item.key}_yes")
             if mentioned_yes_value in (None, ""):
                 mentioned_yes = "yes" if entity_count > 0 else "no"
@@ -686,7 +743,10 @@ def build_rows(
     # Add one OVERALL row per entity for simple chart filtering in Looker.
     overall_runs = to_int(overall_row.get("runs"))
     overall_highcharts_count = to_int(overall_row.get(f"{HIGHCHARTS_KEY}_count"))
-    overall_highcharts_rate = to_float(overall_row.get(f"{HIGHCHARTS_KEY}_rate"))
+    overall_highcharts_rate = compute_mention_rate(
+        overall_highcharts_count,
+        overall_row.get("runs"),
+    )
     excl_count, excl_rate = compute_excl_viability(
         query_row=overall_row,
         competitor_keys=competitor_keys,
@@ -801,7 +861,7 @@ def add_entity_snapshot_fields(
     for item in entity_meta:
         key = item.key
         count = to_int(source_row.get(f"{key}_count"))
-        rate = round(to_float(source_row.get(f"{key}_rate")), 6)
+        rate = compute_mention_rate(count, source_row.get("runs"))
         yes_value = source_row.get(f"{key}_yes")
         if yes_value in (None, ""):
             yes = "yes" if count > 0 else "no"
@@ -877,9 +937,10 @@ def build_competitor_metric_rows(
 
         for item in entity_meta:
             mentions_count = to_int(query_row.get(f"{item.key}_count"))
-            mentions_rate = round(to_float(query_row.get(f"{item.key}_rate")), 6)
-            share_of_voice_rate = (
-                round((mentions_count / total_mentions), 6) if total_mentions else 0.0
+            mentions_rate = compute_mention_rate(mentions_count, query_row.get("runs"))
+            share_of_voice_rate = compute_share_of_voice_rate(
+                mentions_count,
+                total_mentions,
             )
             row = {
                 "query": query,

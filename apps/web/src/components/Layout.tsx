@@ -2,6 +2,7 @@
 /* biome-ignore-all lint/a11y/noStaticElementInteractions: custom modal backdrops in the shell are intentional */
 /* biome-ignore-all lint/a11y/noSvgWithoutTitle: decorative inline icons */
 import { useQuery } from "@tanstack/react-query";
+import { Wallet } from "lucide-react";
 import type { ReactNode } from "react";
 import {
 	createContext,
@@ -11,7 +12,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { Wallet } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "./AuthProvider";
@@ -140,7 +140,7 @@ const NAV: NavItem[] = [
 				/>
 				<path strokeLinecap="round" strokeLinejoin="round" d="M3 12H21" />
 			</svg>
-			),
+		),
 	},
 	{
 		to: "/costs",
@@ -150,6 +150,11 @@ const NAV: NavItem[] = [
 ];
 
 const MOBILE_NAV = NAV.filter((item) => !item.soon).slice(0, 6);
+const ANALYTICS_PATHS = new Set([
+	"/competitors",
+	"/citation-links",
+	"/product-mentions",
+]);
 
 const PAGE_TITLES: Record<string, string> = {
 	"/dashboard": "Dashboard",
@@ -202,8 +207,7 @@ function ApiStatus() {
 export default function Layout({ children }: { children: ReactNode }) {
 	const { pathname } = useLocation();
 	const title = PAGE_TITLES[pathname] ?? "Javis";
-	const onCompetitorsPath =
-		pathname === "/competitors" || pathname === "/citation-links";
+	const onCompetitorsPath = ANALYTICS_PATHS.has(pathname);
 	const [iconOpen, setIconOpen] = useState(false);
 	const [clickCount, setClickCount] = useState(0);
 	const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -422,8 +426,7 @@ export default function Layout({ children }: { children: ReactNode }) {
 							{NAV.map((item) => {
 								const parentActive =
 									item.to === "/competitors"
-										? pathname === "/competitors" ||
-											pathname === "/citation-links"
+										? ANALYTICS_PATHS.has(pathname)
 										: pathname === item.to;
 
 								if (item.children) {
@@ -634,8 +637,7 @@ export default function Layout({ children }: { children: ReactNode }) {
 						{NAV.map((item) => {
 							const parentActive =
 								item.to === "/competitors"
-									? pathname === "/competitors" ||
-										pathname === "/citation-links"
+									? ANALYTICS_PATHS.has(pathname)
 									: pathname === item.to;
 
 							if (item.children) {
