@@ -510,10 +510,10 @@ function ensureServerlessTriggerToken(req: express.Request) {
 		process.env.BENCHMARK_TRIGGER_TOKEN = configured;
 	}
 
-	const existingAuth = req.headers.authorization ?? req.headers.Authorization;
-	if (typeof existingAuth !== "string" || !existingAuth.trim()) {
-		req.headers.authorization = `Bearer ${configured}`;
-	}
+	// The trigger handler must see the benchmark secret, not the user session
+	// token that authenticated the outer /api request.
+	req.headers.authorization = `Bearer ${configured}`;
+	req.headers.Authorization = `Bearer ${configured}`;
 }
 
 app.use("/api", requireApiAccess);

@@ -59,6 +59,7 @@ In Vercel Project Settings -> Environment Variables, set:
 - `GITHUB_OWNER` (e.g. `jameshighcharts`)
 - `GITHUB_REPO` (e.g. `javisLLM-`)
 - `BENCHMARK_TRIGGER_TOKEN` (required; bearer token for `/api/benchmark/*`)
+- Optional `UI_API_WRITE_TOKEN` (separate write token for the UI/API wrapper; defaults to `BENCHMARK_TRIGGER_TOKEN` when unset)
 - Optional: `GITHUB_WORKFLOW_FILE` (default: `run-benchmark.yml`)
 - Optional: `GITHUB_WORKFLOW_REF` (default: `main`)
 - Optional hardening:
@@ -86,7 +87,7 @@ To run real prompt/scoring runs from the app, open `/runs`:
 - Monitor run state (queued/running/success/failure)
 - Open GitHub Actions logs directly
 - Dashboard updates after workflow syncs to Supabase
-- Paste `BENCHMARK_TRIGGER_TOKEN` into the token field (stored in browser session storage only)
+- Paste the UI write token into the token field. If `UI_API_WRITE_TOKEN` is unset, that is `BENCHMARK_TRIGGER_TOKEN`. Stored in browser session storage only.
 
 To run a one-off prompt test in Query Lab, open `/prompts`:
 - Uses `/api/prompt-lab/run` (OpenAI Responses API, Anthropic Messages API, Gemini GenerateContent API, or local ChatGPT web scraper)
