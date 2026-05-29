@@ -20,6 +20,7 @@ import type {
 	PromptStatusSummary,
 	TimeSeriesPoint,
 } from "../types";
+import { BENCHMARK_EVENT_PLOT_LINES } from "../utils/chartEvents";
 
 // ── Palette ─────────────────────────────────────────────────────────────────
 
@@ -1951,6 +1952,7 @@ function VisibilityChart({
 		xAxis: {
 			type: "datetime",
 			min: xAxisMin,
+			plotLines: BENCHMARK_EVENT_PLOT_LINES,
 			lineWidth: 0,
 			tickWidth: 0,
 			gridLineWidth: 0,

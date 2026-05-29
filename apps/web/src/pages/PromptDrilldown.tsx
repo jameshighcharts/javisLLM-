@@ -13,6 +13,7 @@ import type {
 	PromptDrilldownRunPoint,
 } from "../types";
 import { aggregateCitationSources } from "../utils/citationSources";
+import { BENCHMARK_EVENT_PLOT_LINES } from "../utils/chartEvents";
 import {
 	calculateTokenCostUsd,
 	formatUsd,
@@ -449,6 +450,7 @@ function PromptTrendChart({
 		title: { text: undefined },
 		xAxis: {
 			type: "datetime",
+			plotLines: BENCHMARK_EVENT_PLOT_LINES,
 			lineWidth: 0,
 			tickWidth: 0,
 			crosshair: { color: "#DDD0BC", width: 1, dashStyle: "Dash" },
