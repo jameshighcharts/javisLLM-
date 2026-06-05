@@ -453,6 +453,13 @@ function allowsReadTokenAccess(req: express.Request): boolean {
 	].includes(routePath);
 }
 
+function allowsPublicApiAccess(req: express.Request): boolean {
+	const routePath = `${req.baseUrl}${req.path}`;
+	const method = req.method.toUpperCase();
+
+	return method === "GET" && routePath === "/api/outputs";
+}
+
 function isLocalhostRequest(req: express.Request): boolean {
 	const remote = req.socket.remoteAddress;
 	return (
@@ -469,6 +476,11 @@ async function requireApiAccess(
 	next: express.NextFunction,
 ) {
 	if (req.method === "OPTIONS") {
+		next();
+		return;
+	}
+
+	if (allowsPublicApiAccess(req)) {
 		next();
 		return;
 	}

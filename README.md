@@ -97,14 +97,15 @@ To run a one-off prompt test in Query Lab, open `/prompts`:
 - No trigger token required
 
 Stored outputs API:
-- `GET /api/outputs` or `GET /api/benchmark/outputs`
+- `GET /api/outputs` is public and intended for Compass or other read-only consumers
+- `GET /api/benchmark/outputs` remains authenticated
 - Filters: `runId`, `query`, `model`, `provider`, `limit`, `offset`, `includeText`
 - Returns raw stored model outputs from Supabase when available, with fallback to the local `artifacts/llm_outputs.jsonl` snapshot
-- Accepts either a Supabase user session bearer token or `UI_API_READ_TOKEN`
+- `GET /api/outputs` needs no auth header
+- `GET /api/benchmark/outputs` accepts either a Supabase user session bearer token or `UI_API_READ_TOKEN`
 - Example:
 ```bash
 curl \
-  -H "Authorization: Bearer $UI_API_READ_TOKEN" \
   "http://localhost:8787/api/outputs?query=javascript%20charting%20libraries&limit=20"
 ```
 
