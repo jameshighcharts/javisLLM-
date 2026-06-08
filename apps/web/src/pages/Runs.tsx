@@ -546,9 +546,11 @@ export default function Runs() {
 	}, [defaultModelValues, modelValues]);
 
 	const runsQuery = useQuery({
-		queryKey: ["benchmark-runs", runProviderGroup],
+		queryKey: ["benchmark-runs", runProviderGroup, normalizedTriggerToken],
 		queryFn: () =>
-			api.benchmarkRuns(undefined, { providerGroup: runProviderGroup }),
+			api.benchmarkRuns(normalizedTriggerToken || undefined, {
+				providerGroup: runProviderGroup,
+			}),
 		refetchInterval: (query) => {
 			const data = query.state.data as
 				| { runs?: Array<BenchmarkWorkflowRun | BenchmarkQueueRun> }

@@ -6405,6 +6405,7 @@ export const api = {
 		triggerToken?: string,
 		options: { providerGroup?: "all" | "china" } = {},
 	) {
+		const effectiveTriggerToken = triggerToken ?? readStoredTriggerToken();
 		const params = new URLSearchParams();
 		if (options.providerGroup && options.providerGroup !== "all") {
 			params.set("providerGroup", options.providerGroup);
@@ -6412,7 +6413,7 @@ export const api = {
 		const suffix = params.toString() ? `?${params.toString()}` : "";
 		return json<BenchmarkRunsResponse>(`/benchmark/runs${suffix}`, {
 			method: "GET",
-			headers: withOptionalTriggerToken(triggerToken),
+			headers: withOptionalTriggerToken(effectiveTriggerToken),
 		});
 	},
 
