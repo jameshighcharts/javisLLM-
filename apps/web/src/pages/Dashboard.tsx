@@ -3094,7 +3094,7 @@ export default function Dashboard() {
 	const [selectedProviders, setSelectedProviders] = useState<
 		ProviderFilterValue[]
 	>([]);
-	const [hidden, setHidden] = useState<Set<string>>(new Set<string>());
+	const [hidden, setHidden] = useState<Set<string> | null>(null);
 
 	const normalizedSelectedTags = useMemo(
 		() => normalizeTagList(selectedTags),
@@ -3178,13 +3178,6 @@ export default function Dashboard() {
 		? derivedOverallScore
 		: (s?.overallScore ?? derivedOverallScore);
 
-	const visible = useMemo(
-		() =>
-			new Set(
-				competitorSeries.map((s) => s.entity).filter((n) => !hidden.has(n)),
-			),
-		[hidden, competitorSeries],
-	);
 	const highchartsEntity =
 		competitorSeries.find((series) => series.isHighcharts)?.entity ?? null;
 	const nonHighchartsEntities = useMemo(
@@ -3194,6 +3187,19 @@ export default function Dashboard() {
 				.map((series) => series.entity),
 		[competitorSeries],
 	);
+	const effectiveHidden = useMemo(
+		() => hidden ?? new Set(nonHighchartsEntities),
+		[hidden, nonHighchartsEntities],
+	);
+	const visible = useMemo(
+		() =>
+			new Set(
+				competitorSeries
+					.map((series) => series.entity)
+					.filter((entity) => !effectiveHidden.has(entity)),
+			),
+		[effectiveHidden, competitorSeries],
+	);
 	const isHighchartsOnly = useMemo(() => {
 		if (!highchartsEntity) return false;
 		return (
@@ -3202,14 +3208,14 @@ export default function Dashboard() {
 		);
 	}, [highchartsEntity, nonHighchartsEntities, visible]);
 	const hasHidden = useMemo(
-		() => competitorSeries.some((series) => hidden.has(series.entity)),
-		[hidden, competitorSeries],
+		() => competitorSeries.some((series) => effectiveHidden.has(series.entity)),
+		[effectiveHidden, competitorSeries],
 	);
 
 	function toggleTag(tag: string) {
 		const normalized = tag.trim().toLowerCase();
 		startTransition(() => {
-			setHidden(new Set());
+			setHidden(null);
 			setSelectedTags((prev) => {
 				const next = new Set(normalizeTagList(prev));
 				if (next.has(normalized)) next.delete(normalized);
@@ -3221,14 +3227,14 @@ export default function Dashboard() {
 
 	function clearTagFilter() {
 		startTransition(() => {
-			setHidden(new Set());
+			setHidden(null);
 			setSelectedTags([]);
 		});
 	}
 
 	function toggleProvider(provider: ProviderFilterValue) {
 		startTransition(() => {
-			setHidden(new Set());
+			setHidden(null);
 			setSelectedProviders((prev) => {
 				const next = new Set(normalizeProviderList(prev));
 				if (next.has(provider)) next.delete(provider);
@@ -3242,14 +3248,14 @@ export default function Dashboard() {
 
 	function clearProviderFilter() {
 		startTransition(() => {
-			setHidden(new Set());
+			setHidden(null);
 			setSelectedProviders([]);
 		});
 	}
 
 	function changeTagFilterMode(nextMode: TagFilterMode) {
 		startTransition(() => {
-			setHidden(new Set());
+			setHidden(null);
 			setTagFilterMode(nextMode);
 		});
 	}
@@ -3257,7 +3263,7 @@ export default function Dashboard() {
 	function toggleCompetitor(name: string) {
 		startTransition(() => {
 			setHidden((prev) => {
-				const next = new Set(prev);
+				const next = new Set(prev ?? nonHighchartsEntities);
 				if (next.has(name)) {
 					next.delete(name);
 				} else {
