@@ -457,7 +457,14 @@ function allowsPublicApiAccess(req: express.Request): boolean {
 	const routePath = `${req.baseUrl}${req.path}`;
 	const method = req.method.toUpperCase();
 
-	return method === "GET" && routePath === "/api/outputs";
+	return (
+		method === "GET" &&
+		[
+			"/api/outputs",
+			"/api/config",
+			"/api/config/benchmark",
+		].includes(routePath)
+	);
 }
 
 function isLocalhostRequest(req: express.Request): boolean {

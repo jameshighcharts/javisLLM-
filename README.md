@@ -60,7 +60,7 @@ In Vercel Project Settings -> Environment Variables, set:
 - `GITHUB_REPO` (e.g. `javisLLM-`)
 - `BENCHMARK_TRIGGER_TOKEN` (required; bearer token for `/api/benchmark/*`)
 - Optional `UI_API_WRITE_TOKEN` (separate write token for the UI/API wrapper; defaults to `BENCHMARK_TRIGGER_TOKEN` when unset)
-- Optional `UI_API_READ_TOKEN` (read-only bearer token for `GET /api/outputs` and `GET /api/benchmark/outputs`)
+- Optional `UI_API_READ_TOKEN` (read-only bearer token for `GET /api/benchmark/outputs`; public routes do not need it)
 - Optional: `GITHUB_WORKFLOW_FILE` (default: `run-benchmark.yml`)
 - Optional: `GITHUB_WORKFLOW_REF` (default: `main`)
 - Optional hardening:
@@ -98,10 +98,12 @@ To run a one-off prompt test in Query Lab, open `/prompts`:
 
 Stored outputs API:
 - `GET /api/outputs` is public and intended for Compass or other read-only consumers
+- `GET /api/config` and `GET /api/config/benchmark` are public for read-only consumers that need benchmark metadata
 - `GET /api/benchmark/outputs` remains authenticated
 - Filters: `runId`, `query`, `model`, `provider`, `limit`, `offset`, `includeText`
 - Returns raw stored model outputs from Supabase when available, with fallback to the local `artifacts/llm_outputs.jsonl` snapshot
 - `GET /api/outputs` needs no auth header
+- `GET /api/config/benchmark` needs no auth header
 - `GET /api/benchmark/outputs` accepts either a Supabase user session bearer token or `UI_API_READ_TOKEN`
 - Example:
 ```bash
