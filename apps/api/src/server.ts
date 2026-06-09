@@ -6812,6 +6812,128 @@ app.get(["/api/outputs", "/api/benchmark/outputs"], async (req, res) => {
 				}
 			}
 
+			const responseIds = [
+				...new Set(
+					responseRows
+						.map((row) => Number(row.id ?? 0))
+						.filter((id) => Number.isFinite(id) && id > 0),
+				),
+			];
+			let mentionsAvailable = true;
+			const mentionRows: Array<{
+				response_id: number;
+				competitor_id: string;
+				mentioned: boolean;
+			}> = [];
+			if (responseIds.length > 0) {
+				for (
+					let index = 0;
+					index < responseIds.length;
+					index += SUPABASE_IN_CLAUSE_CHUNK_SIZE
+				) {
+					const responseChunk = responseIds.slice(
+						index,
+						index + SUPABASE_IN_CLAUSE_CHUNK_SIZE,
+					);
+					let mentionOffset = 0;
+
+					while (true) {
+						const mentionResult = await client
+							.from("response_mentions")
+							.select("response_id,competitor_id,mentioned")
+							.in("response_id", responseChunk)
+							.order("response_id", { ascending: true })
+							.order("competitor_id", { ascending: true })
+							.range(mentionOffset, mentionOffset + SUPABASE_PAGE_SIZE - 1);
+
+						if (mentionResult.error) {
+							if (isMissingRelation(mentionResult.error)) {
+								mentionsAvailable = false;
+								break;
+							}
+							throw asError(
+								mentionResult.error,
+								"Failed to load response mentions for outputs",
+							);
+						}
+
+						const pageRows = (mentionResult.data ?? []) as Array<{
+							response_id: number;
+							competitor_id: string;
+							mentioned: boolean;
+						}>;
+						if (pageRows.length === 0) {
+							break;
+						}
+
+						mentionRows.push(...pageRows);
+						mentionOffset += pageRows.length;
+						if (pageRows.length < SUPABASE_PAGE_SIZE) {
+							break;
+						}
+					}
+
+					if (!mentionsAvailable) {
+						break;
+					}
+				}
+			}
+
+			const competitorKeyById = new Map<string, string>();
+			if (mentionsAvailable) {
+				const competitorIds = [
+					...new Set(
+						mentionRows
+							.filter((row) => row.mentioned)
+							.map((row) => row.competitor_id)
+							.filter(Boolean),
+					),
+				];
+				if (competitorIds.length > 0) {
+					const competitorResult = await client
+						.from("competitors")
+						.select("id,name")
+						.in("id", competitorIds);
+					if (competitorResult.error) {
+						if (!isMissingRelation(competitorResult.error)) {
+							throw asError(
+								competitorResult.error,
+								"Failed to load competitors for output mentions",
+							);
+						}
+						mentionsAvailable = false;
+					} else {
+						for (const row of (competitorResult.data ?? []) as Array<
+							Record<string, unknown>
+						>) {
+							const competitorId = String(row.id ?? "");
+							const entityKey = slugifyEntity(String(row.name ?? ""));
+							if (!competitorId || !entityKey) {
+								continue;
+							}
+							competitorKeyById.set(competitorId, entityKey);
+						}
+					}
+				}
+			}
+
+			const mentionsByResponse = new Map<string, Record<string, boolean>>();
+			if (mentionsAvailable) {
+				for (const mention of mentionRows) {
+					if (!mention.mentioned) {
+						continue;
+					}
+					const entityKey = competitorKeyById.get(mention.competitor_id);
+					if (!entityKey) {
+						continue;
+					}
+					const responseId = String(mention.response_id);
+					const bucket = mentionsByResponse.get(responseId) ?? {};
+					bucket[entityKey] = true;
+					mentionsByResponse.set(responseId, bucket);
+				}
+			}
+
 			const items = responseRows.map((row) => {
 				const rowProvider = String(row.provider ?? "") || null;
 				const rowModel = String(row.model ?? "");
@@ -6863,10 +6985,13 @@ app.get(["/api/outputs", "/api/benchmark/outputs"], async (req, res) => {
 								Number(row.prompt_tokens ?? 0) +
 									Number(row.completion_tokens ?? 0),
 							),
-						),
+					),
 					responseText: includeText ? String(row.response_text ?? "") : null,
 					citationRefs,
 					citations: normalizeCitations(citationRefs, citationProvider),
+					mentions: mentionsAvailable
+						? (mentionsByResponse.get(String(row.id ?? "")) ?? {})
+						: null,
 				};
 			});
 

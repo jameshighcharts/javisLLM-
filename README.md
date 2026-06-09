@@ -102,6 +102,7 @@ Stored outputs API:
 - `GET /api/benchmark/outputs` remains authenticated
 - Filters: `runId`, `query`, `model`, `provider`, `limit`, `offset`, `includeText`
 - Returns raw stored model outputs from Supabase when available, with fallback to the local `artifacts/llm_outputs.jsonl` snapshot
+- Output items include `mentions` when mention metadata is available, so downstream dashboards can compute brand presence without direct database access
 - `GET /api/outputs` needs no auth header
 - `GET /api/config/benchmark` needs no auth header
 - `GET /api/benchmark/outputs` accepts either a Supabase user session bearer token or `UI_API_READ_TOKEN`
