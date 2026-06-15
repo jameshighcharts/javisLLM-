@@ -206,6 +206,8 @@ type ProviderFilterValue =
 	| "kimi"
 	| "minimax";
 
+type ProviderFilterChipValue = ProviderFilterValue | "china";
+
 const PROVIDER_FILTER_OPTIONS: Array<{
 	value: ProviderFilterValue;
 	label: string;
@@ -213,9 +215,24 @@ const PROVIDER_FILTER_OPTIONS: Array<{
 	{ value: "chatgpt", label: "ChatGPT" },
 	{ value: "claude", label: "Claude" },
 	{ value: "gemini", label: "Gemini" },
-	{ value: "deepseek", label: "DeepSeek" },
-	{ value: "kimi", label: "Kimi" },
-	{ value: "minimax", label: "MiniMax" },
+];
+
+const CHINESE_PROVIDER_FILTERS: ProviderFilterValue[] = [
+	"deepseek",
+	"kimi",
+	"minimax",
+];
+
+const DEFAULT_DASHBOARD_PROVIDER_FILTERS: ProviderFilterValue[] = [
+	...PROVIDER_FILTER_OPTIONS.map((provider) => provider.value),
+];
+
+const PROVIDER_FILTER_CHIP_OPTIONS: Array<{
+	value: ProviderFilterChipValue;
+	label: string;
+}> = [
+	...PROVIDER_FILTER_OPTIONS,
+	{ value: "china", label: "Chinese models" },
 ];
 
 const PREVIOUS_DASHBOARD_TIME_SERIES: TimeSeriesPoint[] = [
@@ -291,11 +308,10 @@ function normalizeProviderList(
 		.sort((left, right) => left.localeCompare(right));
 }
 
-function providerLabel(provider: ProviderFilterValue): string {
-	return (
-		PROVIDER_FILTER_OPTIONS.find((option) => option.value === provider)
-			?.label ?? provider
-	);
+function providerLabel(provider: ProviderFilterChipValue): string {
+	if (provider === "china") return "Chinese models";
+	return PROVIDER_FILTER_CHIP_OPTIONS.find((option) => option.value === provider)
+		?.label ?? provider;
 }
 
 function normalizeTagList(tags: string[]): string[] {
@@ -562,10 +578,10 @@ function Card({
 function DashboardTagFilterBar({
 	tags,
 	selectedTags,
-	selectedProviders,
+	selectedProviderChips,
 	mode,
 	onToggleTag,
-	onToggleProvider,
+	onToggleProviderChip,
 	onModeChange,
 	onClear,
 	onClearProviders,
@@ -576,10 +592,10 @@ function DashboardTagFilterBar({
 }: {
 	tags: TagSummary[];
 	selectedTags: string[];
-	selectedProviders: ProviderFilterValue[];
+	selectedProviderChips: ProviderFilterChipValue[];
 	mode: TagFilterMode;
 	onToggleTag: (tag: string) => void;
-	onToggleProvider: (provider: ProviderFilterValue) => void;
+	onToggleProviderChip: (provider: ProviderFilterChipValue) => void;
 	onModeChange: (mode: TagFilterMode) => void;
 	onClear: () => void;
 	onClearProviders: () => void;
@@ -599,7 +615,7 @@ function DashboardTagFilterBar({
 	}, [tags, deferredSearch]);
 
 	const hasActiveFilter = selectedTags.length > 0;
-	const hasActiveProviderFilter = selectedProviders.length > 0;
+	const hasActiveProviderFilter = selectedProviderChips.length > 0;
 	const hasAnyFilter = hasActiveFilter || hasActiveProviderFilter;
 	const allSelected = selectedTags.length === 0;
 	const promptCountLabel = hasAnyFilter ? matchedCount : totalCount;
@@ -689,7 +705,7 @@ function DashboardTagFilterBar({
 				</span>
 				{hasActiveProviderFilter ? (
 					<div className="flex items-center gap-1.5">
-						{selectedProviders.slice(0, 3).map((provider) => (
+						{selectedProviderChips.slice(0, 3).map((provider) => (
 							<span
 								key={provider}
 								className="px-2 py-0.5 rounded-full text-[11px] font-medium"
@@ -702,15 +718,15 @@ function DashboardTagFilterBar({
 								{providerLabel(provider)}
 							</span>
 						))}
-						{selectedProviders.length > 3 && (
+						{selectedProviderChips.length > 3 && (
 							<span className="text-[11px]" style={{ color: "#9AAE9C" }}>
-								+{selectedProviders.length - 3}
+								+{selectedProviderChips.length - 3}
 							</span>
 						)}
 					</div>
 				) : (
 					<span className="text-xs" style={{ color: "#B0A898" }}>
-						all providers
+						default providers
 					</span>
 				)}
 			</button>
@@ -916,13 +932,13 @@ function DashboardTagFilterBar({
 									>
 										All
 									</button>
-									{PROVIDER_FILTER_OPTIONS.map((provider) => {
-										const active = selectedProviders.includes(provider.value);
+									{PROVIDER_FILTER_CHIP_OPTIONS.map((provider) => {
+										const active = selectedProviderChips.includes(provider.value);
 										return (
 											<button
 												key={provider.value}
 												type="button"
-												onClick={() => onToggleProvider(provider.value)}
+												onClick={() => onToggleProviderChip(provider.value)}
 												className="px-2.5 py-1 rounded-full text-xs font-medium transition-all"
 												style={{
 													background: active ? "#3D5C40" : "#F2EDE6",
@@ -3094,6 +3110,8 @@ export default function Dashboard() {
 	const [selectedProviders, setSelectedProviders] = useState<
 		ProviderFilterValue[]
 	>([]);
+	const [isChineseModelGroupSelected, setIsChineseModelGroupSelected] =
+		useState(false);
 	const [hidden, setHidden] = useState<Set<string> | null>(null);
 
 	const normalizedSelectedTags = useMemo(
@@ -3104,15 +3122,37 @@ export default function Dashboard() {
 		() => normalizeProviderList(selectedProviders),
 		[selectedProviders],
 	);
+	const effectiveSelectedProviders = useMemo(
+		() =>
+			normalizedSelectedProviders.length === 0 && !isChineseModelGroupSelected
+				? DEFAULT_DASHBOARD_PROVIDER_FILTERS
+				: normalizeProviderList([
+						...normalizedSelectedProviders,
+						...(isChineseModelGroupSelected
+							? CHINESE_PROVIDER_FILTERS
+							: []),
+					]),
+		[normalizedSelectedProviders, isChineseModelGroupSelected],
+	);
+	const selectedProviderChips = useMemo(
+		() =>
+			[
+				...normalizedSelectedProviders,
+				...(isChineseModelGroupSelected
+					? (["china"] as ProviderFilterChipValue[])
+					: []),
+			] as ProviderFilterChipValue[],
+		[normalizedSelectedProviders, isChineseModelGroupSelected],
+	);
 	const selectedTagSet = useMemo(
 		() => new Set(normalizedSelectedTags),
 		[normalizedSelectedTags],
 	);
 
 	const { data, isLoading, isError, error } = useQuery({
-		queryKey: ["dashboard", "overview", normalizedSelectedProviders.join(",")],
+		queryKey: ["dashboard", "overview", effectiveSelectedProviders.join(",")],
 		queryFn: () =>
-			api.dashboardOverview({ providers: normalizedSelectedProviders }),
+			api.dashboardOverview({ providers: effectiveSelectedProviders }),
 		placeholderData: (previousData) => previousData,
 		refetchInterval: 60_000,
 	});
@@ -3122,13 +3162,13 @@ export default function Dashboard() {
 			"timeseries",
 			normalizedSelectedTags.join(","),
 			tagFilterMode,
-			normalizedSelectedProviders.join(","),
+			effectiveSelectedProviders.join(","),
 		],
 		queryFn: () =>
 			api.timeseries({
 				tags: normalizedSelectedTags,
 				mode: tagFilterMode,
-				providers: normalizedSelectedProviders,
+				providers: effectiveSelectedProviders,
 			}),
 		placeholderData: (previousData) => previousData,
 		retry: false,
@@ -3173,7 +3213,7 @@ export default function Dashboard() {
 	const hcSov = hcEntry?.shareOfVoicePct ?? 0;
 	const derivedOverallScore = 0.7 * hcRate + 0.3 * hcSov;
 	const hasSegmentFilters =
-		normalizedSelectedTags.length > 0 || normalizedSelectedProviders.length > 0;
+		normalizedSelectedTags.length > 0 || selectedProviderChips.length > 0;
 	const overallScore = hasSegmentFilters
 		? derivedOverallScore
 		: (s?.overallScore ?? derivedOverallScore);
@@ -3232,7 +3272,14 @@ export default function Dashboard() {
 		});
 	}
 
-	function toggleProvider(provider: ProviderFilterValue) {
+	function toggleProviderChip(provider: ProviderFilterChipValue) {
+		if (provider === "china") {
+			startTransition(() => {
+				setHidden(null);
+				setIsChineseModelGroupSelected((prev) => !prev);
+			});
+			return;
+		}
 		startTransition(() => {
 			setHidden(null);
 			setSelectedProviders((prev) => {
@@ -3250,6 +3297,7 @@ export default function Dashboard() {
 		startTransition(() => {
 			setHidden(null);
 			setSelectedProviders([]);
+			setIsChineseModelGroupSelected(false);
 		});
 	}
 
@@ -3290,7 +3338,7 @@ export default function Dashboard() {
 		const livePoints = sortTimeSeriesPoints(tsData?.points ?? []);
 		if (
 			normalizedSelectedTags.length > 0 ||
-			normalizedSelectedProviders.length > 0
+			selectedProviderChips.length > 0
 		) {
 			return livePoints;
 		}
@@ -3298,7 +3346,7 @@ export default function Dashboard() {
 	}, [
 		tsData,
 		normalizedSelectedTags.length,
-		normalizedSelectedProviders.length,
+		selectedProviderChips.length,
 	]);
 
 	if (isError) {
@@ -3322,10 +3370,10 @@ export default function Dashboard() {
 			<DashboardTagFilterBar
 				tags={tagSummary}
 				selectedTags={normalizedSelectedTags}
-				selectedProviders={normalizedSelectedProviders}
+				selectedProviderChips={selectedProviderChips}
 				mode={tagFilterMode}
 				onToggleTag={toggleTag}
-				onToggleProvider={toggleProvider}
+				onToggleProviderChip={toggleProviderChip}
 				onModeChange={changeTagFilterMode}
 				onClear={clearTagFilter}
 				onClearProviders={clearProviderFilter}
@@ -3361,13 +3409,13 @@ export default function Dashboard() {
 					sub={
 						hasSegmentFilters
 							? `% of responses mentioning each brand (${[
-									normalizedSelectedTags.length > 0
-										? `tags ${tagFilterMode}`
-										: null,
-									normalizedSelectedProviders.length > 0
-										? `providers: ${normalizedSelectedProviders.map((provider) => providerLabel(provider)).join(", ")}`
-										: null,
-								]
+								normalizedSelectedTags.length > 0
+									? `tags ${tagFilterMode}`
+									: null,
+								selectedProviderChips.length > 0
+									? `providers: ${selectedProviderChips.map((provider) => providerLabel(provider)).join(", ")}`
+									: null,
+							]
 									.filter(Boolean)
 									.join(" · ")})`
 							: "% of responses that mention each brand across runs"
