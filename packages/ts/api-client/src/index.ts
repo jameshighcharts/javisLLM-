@@ -72,16 +72,11 @@ export function createApiClient(options: ApiClientOptions = {}) {
 			body: unknown,
 			triggerToken?: string,
 		): Promise<BenchmarkStopResponse> {
-			return request(
-				"/benchmark/stop",
-				BenchmarkStopResponseSchema,
-				options,
-				{
-					method: "POST",
-					body,
-					headers: triggerToken ? { "X-UI-Token": triggerToken } : {},
-				},
-			);
+			return request("/benchmark/stop", BenchmarkStopResponseSchema, options, {
+				method: "POST",
+				body,
+				headers: triggerToken ? { "X-UI-Token": triggerToken } : {},
+			});
 		},
 		createBillingPortalSession(
 			body: unknown,

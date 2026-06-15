@@ -406,6 +406,16 @@ class BenchmarkWorker:
                 return {}
         return {}
 
+    @staticmethod
+    def _resolve_job_provider(job: Dict[str, Any], model: str) -> str:
+        stored_provider = str(job.get("provider") or "").strip().lower()
+        inferred_provider = infer_provider_from_model(model)
+        if stored_provider and stored_provider != "openai":
+            return stored_provider
+        if inferred_provider != "openai":
+            return inferred_provider
+        return stored_provider or inferred_provider
+
     def _process_job_execution(self, job_id: int, job: Dict[str, Any]) -> int:
         if self._is_job_cancelled(job_id):
             raise JobCancelledError(f"job {job_id} was cancelled before execution started")
@@ -418,7 +428,7 @@ class BenchmarkWorker:
         if not query_text:
             raise RuntimeError("benchmark_jobs row is missing query_text")
 
-        provider = str(job.get("provider") or "").strip().lower() or infer_provider_from_model(model)
+        provider = self._resolve_job_provider(job, model)
         model_owner = infer_model_owner(provider)
         web_search_enabled = bool(job.get("web_search_enabled")) if provider == "openai" else False
         temperature = float(job.get("temperature") or 0.7)
@@ -545,9 +555,8 @@ class BenchmarkWorker:
 
             if terminal:
                 # Persist final failure as a benchmark response row so analytics stay consistent.
-                provider = str(job.get("provider") or "").strip().lower() or infer_provider_from_model(
-                    str(job.get("model") or "")
-                )
+                model = str(job.get("model") or "")
+                provider = self._resolve_job_provider(job, model)
                 model_owner = infer_model_owner(provider)
                 response_id = self._upsert_response(
                     job=job,
