@@ -2299,7 +2299,7 @@ function ModelMentionRateChart({
 		chart: {
 			height: 260,
 			backgroundColor: "transparent",
-			margin: [54, 10, 58, 54],
+			margin: [36, 10, 58, 54],
 			style: { fontFamily: CHART_FONT },
 			animation: { duration: 300 },
 		},
@@ -2323,6 +2323,10 @@ function ModelMentionRateChart({
 		yAxis: {
 			min: 0,
 			max: 100,
+			startOnTick: false,
+			endOnTick: false,
+			floor: 0,
+			ceiling: 100,
 			tickPositions: [0, 50, 100],
 			gridLineColor: "#EDE8E0",
 			gridLineDashStyle: "Dash",
@@ -2385,7 +2389,7 @@ function ModelMentionRateChart({
 					allowOverlap: true,
 					crop: false,
 					overflow: "allow",
-					y: -42,
+					y: -24,
 					formatter: function () {
 						const point = this.point as Highcharts.Point & {
 							custom?: { logo: string; label: string };
