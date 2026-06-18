@@ -2297,9 +2297,9 @@ function ModelMentionRateChart({
 
 	const options: Highcharts.Options = {
 		chart: {
-			height: 288,
+			height: 260,
 			backgroundColor: "transparent",
-			margin: [18, 10, 70, 54],
+			margin: [54, 10, 58, 54],
 			style: { fontFamily: CHART_FONT },
 			animation: { duration: 300 },
 		},
@@ -2311,7 +2311,7 @@ function ModelMentionRateChart({
 			lineWidth: 1,
 			tickWidth: 0,
 			labels: {
-				rotation: -35,
+				rotation: 0,
 				style: {
 					color: "#7A8E7C",
 					fontSize: "11px",
@@ -2376,27 +2376,23 @@ function ModelMentionRateChart({
 			column: {
 				borderWidth: 0,
 				borderRadius: 5,
-				pointPadding: 0.18,
-				groupPadding: 0.22,
-				maxPointWidth: 54,
-			},
-			scatter: {
-				enableMouseTracking: false,
-				marker: { enabled: false },
+				pointPadding: 0.24,
+				groupPadding: 0.3,
+				maxPointWidth: 46,
 				dataLabels: {
 					enabled: true,
 					useHTML: true,
 					allowOverlap: true,
 					crop: false,
 					overflow: "allow",
-					y: -19,
+					y: -42,
 					formatter: function () {
 						const point = this.point as Highcharts.Point & {
 							custom?: { logo: string; label: string };
 						};
 						const logo = point.custom?.logo ?? "";
 						const label = point.custom?.label ?? "";
-						return `<span style="display:flex;width:42px;height:42px;align-items:center;justify-content:center;border-radius:999px;background:#FDFCF8;border:1px solid #DDD0BC;box-shadow:0 4px 12px rgba(42,58,44,.10)"><img src="${logo}" alt="${label}" style="max-width:28px;max-height:28px;object-fit:contain"/></span>`;
+						return `<span style="display:flex;width:38px;height:38px;align-items:center;justify-content:center;border-radius:999px;background:#FDFCF8;border:1px solid #DDD0BC;box-shadow:0 4px 12px rgba(42,58,44,.10)"><img src="${logo}" alt="${label}" style="max-width:25px;max-height:25px;object-fit:contain"/></span>`;
 					},
 				},
 			},
@@ -2413,53 +2409,47 @@ function ModelMentionRateChart({
 						mentions: row.highchartsMentions,
 						responses: row.responseCount,
 						label: row.label,
+						logo: row.logo,
 					},
-				})),
-			},
-			{
-				type: "scatter",
-				name: "Model logo",
-				data: rows.map((row, index) => ({
-					x: index,
-					y: Math.min(96, Math.max(8, row.highchartsMentionRatePct + 8)),
-					custom: { logo: row.logo, label: row.label },
 				})),
 			},
 		],
 	};
 
 	return (
-		<Card
-			title="Highcharts Mention Rate By Model"
-			sub="OpenAI GPT 5.5, Claude Sonnet 4.6, and Claude Opus across all time"
-			action={
-				<div className="flex items-baseline gap-2">
-					<span
-						className="text-3xl font-bold tracking-tight"
-						style={{ color: "#2A3A2C" }}
+		<div className="w-full max-w-[760px]">
+			<Card
+				title="Highcharts Mention Rate By Model"
+				sub="OpenAI GPT 5.5, Claude Sonnet 4.6, and Claude Opus across all time"
+				action={
+					<div className="flex items-baseline gap-2">
+						<span
+							className="text-3xl font-bold tracking-tight"
+							style={{ color: "#2A3A2C" }}
+						>
+							{allTimeRate.toFixed(1)}%
+						</span>
+						<span className="text-xs" style={{ color: "#9AAE9C" }}>
+							vs {goal}% goal
+						</span>
+					</div>
+				}
+			>
+				{totalResponses === 0 && (
+					<div
+						className="mb-3 rounded-lg border px-3 py-2 text-xs"
+						style={{
+							background: "#FEFCF9",
+							borderColor: "#DDD0BC",
+							color: "#9AAE9C",
+						}}
 					>
-						{allTimeRate.toFixed(1)}%
-					</span>
-					<span className="text-xs" style={{ color: "#9AAE9C" }}>
-						vs {goal}% goal
-					</span>
-				</div>
-			}
-		>
-			{totalResponses === 0 && (
-				<div
-					className="mb-3 rounded-lg border px-3 py-2 text-xs"
-					style={{
-						background: "#FEFCF9",
-						borderColor: "#DDD0BC",
-						color: "#9AAE9C",
-					}}
-				>
-					No responses found for these three models yet.
-				</div>
-			)}
-			<HighchartsReact highcharts={Highcharts} options={options} />
-		</Card>
+						No responses found for these three models yet.
+					</div>
+				)}
+				<HighchartsReact highcharts={Highcharts} options={options} />
+			</Card>
+		</div>
 	);
 }
 
