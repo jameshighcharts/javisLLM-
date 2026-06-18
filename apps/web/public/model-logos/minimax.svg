@@ -1,5 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="MiniMax">
-  <rect width="64" height="64" rx="18" fill="#06101e"/>
-  <path d="M14 45V19h8.1L32 35.5 41.9 19H50v26h-7V30.3L34.7 45h-5.4L21 30.3V45h-7Z" fill="#22d66b"/>
-  <path d="M17 16h30v5H17v-5Zm0 27h30v5H17v-5Z" fill="#87ffb5" opacity=".4"/>
-</svg>

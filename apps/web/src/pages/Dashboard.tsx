@@ -155,67 +155,48 @@ function EntityLogo({ entity, size = 16 }: { entity: string; size?: number }) {
 	);
 }
 
-const MODEL_LOGOS: Record<string, string> = {
-	openai: "/model-logos/openai.svg",
-	anthropic: "/model-logos/anthropic.svg",
-	google: "/model-logos/gemini.svg",
-	deepseek: "/model-logos/deepseek.svg",
-	moonshot: "/model-logos/kimi.svg",
-	minimax: "/model-logos/minimax.svg",
+type ModelChartDefinition = {
+	id: string;
+	label: string;
+	owner: string;
+	logo: string;
+	color: string;
+	match: RegExp[];
 };
 
-function modelKey(
-	model: string,
-	owner?: string | null,
-): keyof typeof MODEL_LOGOS {
-	const source = `${model} ${owner ?? ""}`.toLowerCase();
-	if (
-		source.includes("openai") ||
-		source.includes("chatgpt") ||
-		/\bgpt[-\s]?\d/.test(source) ||
-		source.includes("gpt-") ||
-		source.includes("gpt ")
-	) {
-		return "openai";
-	}
-	if (source.includes("anthropic") || source.includes("claude")) {
-		return "anthropic";
-	}
-	if (source.includes("google") || source.includes("gemini")) {
-		return "google";
-	}
-	if (source.includes("deepseek")) {
-		return "deepseek";
-	}
-	if (source.includes("moonshot") || source.includes("kimi")) {
-		return "moonshot";
-	}
-	if (source.includes("minimax")) {
-		return "minimax";
-	}
-	return "openai";
-}
+const MODEL_CHART_DEFINITIONS: ModelChartDefinition[] = [
+	{
+		id: "openai-gpt-5-5",
+		label: "OpenAI GPT 5.5",
+		owner: "OpenAI",
+		logo: "/model-logos/openai_logo.webp",
+		color: "#3F7FE5",
+		match: [/openai:gpt:latest/i, /\bgpt[-\s]?5\.5\b/i],
+	},
+	{
+		id: "claude-sonnet-4-6",
+		label: "Claude Sonnet 4.6",
+		owner: "Anthropic",
+		logo: "/model-logos/claude.png",
+		color: "#D97855",
+		match: [/anthropic:sonnet:latest/i, /claude[-\s]?sonnet[-\s]?4[-\s]?6/i],
+	},
+	{
+		id: "claude-opus",
+		label: "Claude Opus",
+		owner: "Anthropic",
+		logo: "/model-logos/claude.png",
+		color: "#C96742",
+		match: [/anthropic:opus:latest/i, /claude[-\s]?opus/i],
+	},
+];
 
-function getModelLogo(model: string, owner?: string | null): string {
-	return MODEL_LOGOS[modelKey(model, owner)];
-}
-
-function modelAccent(model: string, owner?: string | null): string {
-	const key = modelKey(model, owner);
-	if (key === "anthropic") return "#ff791a";
-	if (key === "google") return "#22c55e";
-	if (key === "deepseek") return "#2f8cff";
-	if (key === "moonshot") return "#ffd84d";
-	if (key === "minimax") return "#22c55e";
-	return "#3b82f6";
-}
-
-function modelChartLabel(model: string): string {
-	return model
-		.replace(/^openai:gpt:latest$/i, "gpt-latest")
-		.replace(/^anthropic:/i, "")
-		.replace(/^google:/i, "")
-		.replace(/:/g, "-");
+function matchesModelDefinition(
+	model: DashboardModelStat,
+	definition: ModelChartDefinition,
+): boolean {
+	const source = `${model.model} ${model.owner}`.toLowerCase();
+	return definition.match.some((pattern) => pattern.test(source));
 }
 const RIVAL_COLORS = [
 	"#C8A87A",
@@ -2291,190 +2272,194 @@ function ModelMentionRateChart({
 	models: DashboardModelStat[];
 	goal?: number;
 }) {
-	const rows = models
-		.filter((model) => model.responseCount > 0)
-		.map((model) => ({
-			...model,
-			highchartsMentions: model.highchartsMentions ?? 0,
-			highchartsMentionRatePct: model.highchartsMentionRatePct ?? 0,
-		}))
-		.sort((left, right) => {
-			if (right.responseCount !== left.responseCount) {
-				return right.responseCount - left.responseCount;
-			}
-			return left.model.localeCompare(right.model);
-		});
+	const rows = MODEL_CHART_DEFINITIONS.map((definition) => {
+		const stat = models.find((model) =>
+			matchesModelDefinition(model, definition),
+		);
+		const responseCount = stat?.responseCount ?? 0;
+		const highchartsMentions = stat?.highchartsMentions ?? 0;
+		return {
+			...definition,
+			model: stat?.model ?? definition.label,
+			responseCount,
+			highchartsMentions,
+			highchartsMentionRatePct: stat?.highchartsMentionRatePct ?? 0,
+		};
+	});
 
 	const totalResponses = rows.reduce((sum, row) => sum + row.responseCount, 0);
 	const totalMentions = rows.reduce(
-		(sum, row) => sum + (row.highchartsMentions ?? 0),
+		(sum, row) => sum + row.highchartsMentions,
 		0,
 	);
 	const allTimeRate =
 		totalResponses > 0 ? (totalMentions / totalResponses) * 100 : 0;
 
-	if (rows.length === 0) {
-		return (
-			<div
-				className="rounded-xl border p-5"
-				style={{
-					background: "#08111f",
-					borderColor: "rgba(132, 204, 255, 0.18)",
-					color: "#d9e8ff",
-				}}
-			>
-				<div className="text-sm font-semibold">Model Mention Rate</div>
-				<div className="mt-2 text-xs" style={{ color: "#7890ac" }}>
-					No model-level mention data is available yet.
-				</div>
-			</div>
-		);
-	}
+	const options: Highcharts.Options = {
+		chart: {
+			height: 288,
+			backgroundColor: "transparent",
+			margin: [18, 10, 70, 54],
+			style: { fontFamily: CHART_FONT },
+			animation: { duration: 300 },
+		},
+		credits: CHART_CREDITS,
+		title: { text: undefined },
+		xAxis: {
+			categories: rows.map((row) => row.label),
+			lineColor: "#DDD0BC",
+			lineWidth: 1,
+			tickWidth: 0,
+			labels: {
+				rotation: -35,
+				style: {
+					color: "#7A8E7C",
+					fontSize: "11px",
+					fontFamily: CHART_FONT,
+					fontWeight: "600",
+				},
+			},
+		},
+		yAxis: {
+			min: 0,
+			max: 100,
+			tickPositions: [0, 50, 100],
+			gridLineColor: "#EDE8E0",
+			gridLineDashStyle: "Dash",
+			labels: {
+				format: "{value}%",
+				style: { color: "#9AAE9C", fontSize: "11px", fontFamily: CHART_FONT },
+			},
+			title: { text: null },
+			plotLines: [
+				{
+					value: goal,
+					color: HC_COLOR,
+					width: 3,
+					dashStyle: "ShortDot",
+					zIndex: 4,
+					label: {
+						text: "Goal",
+						align: "right",
+						x: -4,
+						y: -8,
+						style: {
+							color: "#3D7A42",
+							fontSize: "10px",
+							fontWeight: "700",
+							textTransform: "uppercase",
+						},
+					},
+				},
+			],
+		},
+		legend: { enabled: false },
+		tooltip: {
+			...TOOLTIP_BASE,
+			useHTML: true,
+			headerFormat: "",
+			pointFormatter: function () {
+				const point = this as Highcharts.Point & {
+					custom?: { mentions: number; responses: number; label: string };
+				};
+				const mentions = point.custom?.mentions ?? 0;
+				const responses = point.custom?.responses ?? 0;
+				const label = point.custom?.label ?? point.name;
+				return (
+					`<div style="font-weight:700;margin-bottom:4px">${label}</div>` +
+					`<div>Highcharts mention rate: <b>${Number(point.y ?? 0).toFixed(1)}%</b></div>` +
+					`<div style="color:#7A8E7C">${mentions}/${responses} responses</div>`
+				);
+			},
+		},
+		plotOptions: {
+			column: {
+				borderWidth: 0,
+				borderRadius: 5,
+				pointPadding: 0.18,
+				groupPadding: 0.22,
+				maxPointWidth: 54,
+			},
+			scatter: {
+				enableMouseTracking: false,
+				marker: { enabled: false },
+				dataLabels: {
+					enabled: true,
+					useHTML: true,
+					allowOverlap: true,
+					crop: false,
+					overflow: "allow",
+					y: -19,
+					formatter: function () {
+						const point = this.point as Highcharts.Point & {
+							custom?: { logo: string; label: string };
+						};
+						const logo = point.custom?.logo ?? "";
+						const label = point.custom?.label ?? "";
+						return `<span style="display:flex;width:42px;height:42px;align-items:center;justify-content:center;border-radius:999px;background:#FDFCF8;border:1px solid #DDD0BC;box-shadow:0 4px 12px rgba(42,58,44,.10)"><img src="${logo}" alt="${label}" style="max-width:28px;max-height:28px;object-fit:contain"/></span>`;
+					},
+				},
+			},
+		},
+		series: [
+			{
+				type: "column",
+				name: "Highcharts mention rate",
+				data: rows.map((row) => ({
+					name: row.label,
+					y: Number(row.highchartsMentionRatePct.toFixed(2)),
+					color: row.color,
+					custom: {
+						mentions: row.highchartsMentions,
+						responses: row.responseCount,
+						label: row.label,
+					},
+				})),
+			},
+			{
+				type: "scatter",
+				name: "Model logo",
+				data: rows.map((row, index) => ({
+					x: index,
+					y: Math.min(96, Math.max(8, row.highchartsMentionRatePct + 8)),
+					custom: { logo: row.logo, label: row.label },
+				})),
+			},
+		],
+	};
 
 	return (
-		<section
-			className="relative overflow-hidden rounded-xl border p-5"
-			style={{
-				background:
-					"radial-gradient(circle at 82% 0%, rgba(39, 178, 255, 0.18), transparent 32%), linear-gradient(180deg, #0b1423 0%, #07101d 100%)",
-				borderColor: "rgba(132, 204, 255, 0.18)",
-				boxShadow:
-					"0 18px 40px rgba(2, 8, 23, 0.22), inset 0 1px 0 rgba(255,255,255,0.04)",
-			}}
+		<Card
+			title="Highcharts Mention Rate By Model"
+			sub="OpenAI GPT 5.5, Claude Sonnet 4.6, and Claude Opus across all time"
+			action={
+				<div className="flex items-baseline gap-2">
+					<span
+						className="text-3xl font-bold tracking-tight"
+						style={{ color: "#2A3A2C" }}
+					>
+						{allTimeRate.toFixed(1)}%
+					</span>
+					<span className="text-xs" style={{ color: "#9AAE9C" }}>
+						vs {goal}% goal
+					</span>
+				</div>
+			}
 		>
-			<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-				<div>
-					<div
-						className="text-sm font-semibold tracking-[0.22em] uppercase"
-						style={{ color: "#9bd7ff" }}
-					>
-						Model Mention Rate
-					</div>
-					<div className="mt-1 text-xs" style={{ color: "#7890ac" }}>
-						Highcharts mentions across all-time responses by model
-					</div>
+			{totalResponses === 0 && (
+				<div
+					className="mb-3 rounded-lg border px-3 py-2 text-xs"
+					style={{
+						background: "#FEFCF9",
+						borderColor: "#DDD0BC",
+						color: "#9AAE9C",
+					}}
+				>
+					No responses found for these three models yet.
 				</div>
-				<div className="flex items-center gap-4">
-					<div className="text-right">
-						<div className="text-[10px] uppercase" style={{ color: "#7890ac" }}>
-							All-time
-						</div>
-						<div
-							className="text-2xl font-black tabular-nums"
-							style={{ color: "#dff7ff" }}
-						>
-							{allTimeRate.toFixed(1)}%
-						</div>
-					</div>
-					<div className="text-right">
-						<div className="text-[10px] uppercase" style={{ color: "#7890ac" }}>
-							Goal
-						</div>
-						<div
-							className="text-2xl font-black tabular-nums"
-							style={{ color: "#54f0c2" }}
-						>
-							{goal}%
-						</div>
-					</div>
-				</div>
-			</div>
-
-			<div className="relative mt-5 h-[320px] pl-14 pr-3 pt-9 pb-16">
-				<div className="absolute left-0 top-8 bottom-16 w-10">
-					{[100, 50, 0].map((tick) => (
-						<div
-							key={tick}
-							className="absolute right-2 text-xs font-semibold tabular-nums"
-							style={{
-								bottom: `${tick}%`,
-								transform: "translateY(50%)",
-								color: "#7890ac",
-							}}
-						>
-							{tick}%
-						</div>
-					))}
-				</div>
-				<div className="absolute left-14 right-3 top-9 bottom-16">
-					{[100, 50, 0].map((tick) => (
-						<div
-							key={tick}
-							className="absolute left-0 right-0"
-							style={{
-								bottom: `${tick}%`,
-								borderTop: "1px solid rgba(142, 167, 198, 0.15)",
-							}}
-						/>
-					))}
-					<div
-						className="absolute left-0 right-0 z-10"
-						style={{
-							bottom: `${Math.max(0, Math.min(100, goal))}%`,
-							borderTop: "4px dotted rgba(96, 236, 180, 0.72)",
-							filter: "drop-shadow(0 0 8px rgba(96, 236, 180, 0.35))",
-						}}
-					>
-						<span
-							className="absolute right-0 -top-7 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.16em]"
-							style={{
-								background: "rgba(84, 240, 194, 0.12)",
-								color: "#85ffd7",
-								border: "1px solid rgba(84, 240, 194, 0.24)",
-							}}
-						>
-							Goal
-						</span>
-					</div>
-					<div className="absolute inset-0 z-20 flex items-end justify-around gap-3">
-						{rows.map((row) => {
-							const rate = Math.max(
-								0,
-								Math.min(100, row.highchartsMentionRatePct ?? 0),
-							);
-							const accent = modelAccent(row.model, row.owner);
-							return (
-								<div
-									key={row.model}
-									className="relative flex h-full min-w-0 flex-1 items-end justify-center"
-									title={`${row.model}: ${rate.toFixed(1)}% (${row.highchartsMentions}/${row.responseCount})`}
-								>
-									<div
-										className="absolute z-30 flex h-11 w-11 items-center justify-center rounded-full"
-										style={{
-											bottom: `calc(${rate}% + 8px)`,
-											background: "#050b17",
-											border: "1px solid rgba(141, 174, 217, 0.16)",
-											boxShadow: `0 8px 24px rgba(0,0,0,0.32), 0 0 18px ${accent}44`,
-										}}
-									>
-										<img
-											src={getModelLogo(row.model, row.owner)}
-											alt={`${row.owner} logo`}
-											className="h-8 w-8 rounded-lg object-contain"
-										/>
-									</div>
-									<div
-										className="w-full max-w-[44px] rounded-t-md transition-all"
-										style={{
-											height: `${rate}%`,
-											background: `linear-gradient(180deg, ${accent} 0%, ${accent}cc 100%)`,
-											boxShadow: `0 0 22px ${accent}45`,
-										}}
-									/>
-									<div
-										className="absolute -bottom-12 left-1/2 w-24 origin-top-left -translate-x-2 rotate-[-45deg] truncate text-xs font-semibold"
-										style={{ color: "#8fa4c0" }}
-									>
-										{modelChartLabel(row.model)}
-									</div>
-								</div>
-							);
-						})}
-					</div>
-				</div>
-			</div>
-		</section>
+			)}
+			<HighchartsReact highcharts={Highcharts} options={options} />
+		</Card>
 	);
 }
 
@@ -3660,12 +3645,6 @@ export default function Dashboard() {
 				<PromptHcAvgCard />
 			</div>
 
-			{isLoading ? (
-				<Skeleton className="h-[390px]" style={{ background: "#101b2b" }} />
-			) : (
-				<ModelMentionRateChart models={modelStats} />
-			)}
-
 			{/* Main section — visibility chart + ranking */}
 			<div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
 				{/* Left: visibility over time + toggles */}
@@ -3743,6 +3722,12 @@ export default function Dashboard() {
 					)}
 				</Card>
 			</div>
+
+			{isLoading ? (
+				<Skeleton className="h-[370px]" />
+			) : (
+				<ModelMentionRateChart models={modelStats} />
+			)}
 
 			{/* Data file status */}
 			{!isLoading && data?.files && (
