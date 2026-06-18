@@ -8,6 +8,8 @@ export interface DashboardModelStat {
 	model: string;
 	owner: string;
 	responseCount: number;
+	highchartsMentions?: number;
+	highchartsMentionRatePct?: number;
 	successCount: number;
 	failureCount: number;
 	webSearchEnabledCount: number;

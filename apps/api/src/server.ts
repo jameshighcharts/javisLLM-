@@ -2325,6 +2325,8 @@ type DashboardModelStat = {
 	model: string;
 	owner: string;
 	responseCount: number;
+	highchartsMentions?: number;
+	highchartsMentionRatePct?: number;
 	successCount: number;
 	failureCount: number;
 	webSearchEnabledCount: number;
@@ -2337,6 +2339,12 @@ type DashboardModelStat = {
 	avgInputTokens: number;
 	avgOutputTokens: number;
 	avgTotalTokens: number;
+};
+
+type ModelMentionStats = {
+	responseCount: number;
+	highchartsMentions: number;
+	highchartsMentionRatePct: number;
 };
 
 function percentile(values: number[], target: number): number {
@@ -2492,6 +2500,65 @@ function buildModelStatsFromRows(rows: Array<Record<string, unknown>>): {
 					: 0,
 		},
 	};
+}
+
+function attachModelMentionStats(
+	modelStats: DashboardModelStat[],
+	statsByModel: Map<string, ModelMentionStats>,
+): DashboardModelStat[] {
+	return modelStats.map((stat) => {
+		const mentionStats = statsByModel.get(stat.model);
+		if (!mentionStats) {
+			return {
+				...stat,
+				highchartsMentions: stat.highchartsMentions ?? 0,
+				highchartsMentionRatePct: stat.highchartsMentionRatePct ?? 0,
+			};
+		}
+		return {
+			...stat,
+			responseCount: mentionStats.responseCount || stat.responseCount,
+			highchartsMentions: mentionStats.highchartsMentions,
+			highchartsMentionRatePct: mentionStats.highchartsMentionRatePct,
+		};
+	});
+}
+
+function buildModelMentionStatsFromResponses(
+	responses: Array<{ id: number; model: string }>,
+	mentionedResponseIds: Set<number>,
+): Map<string, ModelMentionStats> {
+	const buckets = new Map<
+		string,
+		{ responseCount: number; highchartsMentions: number }
+	>();
+
+	for (const response of responses) {
+		const model = String(response.model ?? "").trim();
+		if (!model) continue;
+		const bucket = buckets.get(model) ?? {
+			responseCount: 0,
+			highchartsMentions: 0,
+		};
+		bucket.responseCount += 1;
+		if (mentionedResponseIds.has(Number(response.id))) {
+			bucket.highchartsMentions += 1;
+		}
+		buckets.set(model, bucket);
+	}
+
+	const statsByModel = new Map<string, ModelMentionStats>();
+	for (const [model, bucket] of buckets.entries()) {
+		statsByModel.set(model, {
+			responseCount: bucket.responseCount,
+			highchartsMentions: bucket.highchartsMentions,
+			highchartsMentionRatePct: computeMentionRatePct(
+				bucket.highchartsMentions,
+				bucket.responseCount,
+			),
+		});
+	}
+	return statsByModel;
 }
 
 function inferWindowFromJsonl(rows: Array<Record<string, unknown>>): {
@@ -3893,6 +3960,21 @@ function buildModelSummaryFromViewRows(rows: MvModelPerformanceRow[]): {
 	const modelOwnerMap: Record<string, string> = {};
 	const ownerResponseCount = new Map<string, number>();
 	const ownerModels = new Map<string, Set<string>>();
+	const modelBuckets = new Map<
+		string,
+		{
+			owner: string;
+			responseCount: number;
+			successCount: number;
+			failureCount: number;
+			webSearchEnabledCount: number;
+			totalDurationMs: number;
+			p95DurationMs: number;
+			totalInputTokens: number;
+			totalOutputTokens: number;
+			totalTokens: number;
+		}
+	>();
 
 	let totalResponses = 0;
 	let totalInputTokens = 0;
@@ -3900,69 +3982,109 @@ function buildModelSummaryFromViewRows(rows: MvModelPerformanceRow[]): {
 	let totalTokens = 0;
 	let totalDurationMs = 0;
 
-	const modelStats = rows
-		.map((row) => {
-			const model = String(row.model ?? "").trim();
-			const owner =
-				String(row.owner ?? "").trim() || inferModelOwnerFromModel(model);
-			const responseCount = Math.max(
-				0,
-				Math.round(asNumber(row.response_count)),
-			);
-			const successCount = Math.max(0, Math.round(asNumber(row.success_count)));
-			const failureCount = Math.max(0, Math.round(asNumber(row.failure_count)));
-			const webSearchEnabledCount = Math.max(
-				0,
-				Math.round(asNumber(row.web_search_enabled_count)),
-			);
-			const modelTotalDurationMs = Math.max(
-				0,
-				Math.round(asNumber(row.total_duration_ms)),
-			);
-			const modelInputTokens = Math.max(
-				0,
-				Math.round(asNumber(row.total_input_tokens)),
-			);
-			const modelOutputTokens = Math.max(
-				0,
-				Math.round(asNumber(row.total_output_tokens)),
-			);
-			const modelTotalTokens = Math.max(
-				0,
-				Math.round(asNumber(row.total_tokens)),
-			);
+	for (const row of rows) {
+		const model = String(row.model ?? "").trim();
+		if (!model) continue;
+		const owner =
+			String(row.owner ?? "").trim() || inferModelOwnerFromModel(model);
+		const responseCount = Math.max(
+			0,
+			Math.round(asNumber(row.response_count)),
+		);
+		const successCount = Math.max(0, Math.round(asNumber(row.success_count)));
+		const failureCount = Math.max(0, Math.round(asNumber(row.failure_count)));
+		const webSearchEnabledCount = Math.max(
+			0,
+			Math.round(asNumber(row.web_search_enabled_count)),
+		);
+		const modelTotalDurationMs = Math.max(
+			0,
+			Math.round(asNumber(row.total_duration_ms)),
+		);
+		const modelInputTokens = Math.max(
+			0,
+			Math.round(asNumber(row.total_input_tokens)),
+		);
+		const modelOutputTokens = Math.max(
+			0,
+			Math.round(asNumber(row.total_output_tokens)),
+		);
+		const modelTotalTokens = Math.max(
+			0,
+			Math.round(asNumber(row.total_tokens)),
+		);
 
-			modelOwnerMap[model] = owner;
-			ownerResponseCount.set(
-				owner,
-				(ownerResponseCount.get(owner) ?? 0) + responseCount,
-			);
-			const ownerModelSet = ownerModels.get(owner) ?? new Set<string>();
-			ownerModelSet.add(model);
-			ownerModels.set(owner, ownerModelSet);
+		const bucket = modelBuckets.get(model) ?? {
+			owner,
+			responseCount: 0,
+			successCount: 0,
+			failureCount: 0,
+			webSearchEnabledCount: 0,
+			totalDurationMs: 0,
+			p95DurationMs: 0,
+			totalInputTokens: 0,
+			totalOutputTokens: 0,
+			totalTokens: 0,
+		};
+		bucket.responseCount += responseCount;
+		bucket.successCount += successCount;
+		bucket.failureCount += failureCount;
+		bucket.webSearchEnabledCount += webSearchEnabledCount;
+		bucket.totalDurationMs += modelTotalDurationMs;
+		bucket.p95DurationMs = Math.max(
+			bucket.p95DurationMs,
+			roundTo(asNumber(row.p95_duration_ms), 2),
+		);
+		bucket.totalInputTokens += modelInputTokens;
+		bucket.totalOutputTokens += modelOutputTokens;
+		bucket.totalTokens += modelTotalTokens;
+		modelBuckets.set(model, bucket);
 
-			totalResponses += responseCount;
-			totalInputTokens += modelInputTokens;
-			totalOutputTokens += modelOutputTokens;
-			totalTokens += modelTotalTokens;
-			totalDurationMs += modelTotalDurationMs;
+		modelOwnerMap[model] = owner;
+		ownerResponseCount.set(
+			owner,
+			(ownerResponseCount.get(owner) ?? 0) + responseCount,
+		);
+		const ownerModelSet = ownerModels.get(owner) ?? new Set<string>();
+		ownerModelSet.add(model);
+		ownerModels.set(owner, ownerModelSet);
 
+		totalResponses += responseCount;
+		totalInputTokens += modelInputTokens;
+		totalOutputTokens += modelOutputTokens;
+		totalTokens += modelTotalTokens;
+		totalDurationMs += modelTotalDurationMs;
+	}
+
+	const modelStats = [...modelBuckets.entries()]
+		.map(([model, bucket]) => {
+			const responseCount = bucket.responseCount;
 			return {
 				model,
-				owner,
+				owner: bucket.owner,
 				responseCount,
-				successCount,
-				failureCount,
-				webSearchEnabledCount,
-				totalDurationMs: modelTotalDurationMs,
-				avgDurationMs: roundTo(asNumber(row.avg_duration_ms), 2),
-				p95DurationMs: roundTo(asNumber(row.p95_duration_ms), 2),
-				totalInputTokens: modelInputTokens,
-				totalOutputTokens: modelOutputTokens,
-				totalTokens: modelTotalTokens,
-				avgInputTokens: roundTo(asNumber(row.avg_input_tokens), 2),
-				avgOutputTokens: roundTo(asNumber(row.avg_output_tokens), 2),
-				avgTotalTokens: roundTo(asNumber(row.avg_total_tokens), 2),
+				successCount: bucket.successCount,
+				failureCount: bucket.failureCount,
+				webSearchEnabledCount: bucket.webSearchEnabledCount,
+				totalDurationMs: bucket.totalDurationMs,
+				avgDurationMs:
+					responseCount > 0
+						? roundTo(bucket.totalDurationMs / responseCount, 2)
+						: 0,
+				p95DurationMs: bucket.p95DurationMs,
+				totalInputTokens: bucket.totalInputTokens,
+				totalOutputTokens: bucket.totalOutputTokens,
+				totalTokens: bucket.totalTokens,
+				avgInputTokens:
+					responseCount > 0
+						? roundTo(bucket.totalInputTokens / responseCount, 2)
+						: 0,
+				avgOutputTokens:
+					responseCount > 0
+						? roundTo(bucket.totalOutputTokens / responseCount, 2)
+						: 0,
+				avgTotalTokens:
+					responseCount > 0 ? roundTo(bucket.totalTokens / responseCount, 2) : 0,
 			} satisfies DashboardModelStat;
 		})
 		.sort((left, right) => {
@@ -4096,6 +4218,92 @@ async function fetchMentionRateRowsByRunIds(
 	}
 
 	return rows;
+}
+
+async function fetchHighchartsMentionStatsByModelForServer(
+	runIds: string[],
+	highchartsCompetitorId: string | null,
+): Promise<Map<string, ModelMentionStats>> {
+	const statsByModel = new Map<string, ModelMentionStats>();
+	if (runIds.length === 0 || !highchartsCompetitorId) {
+		return statsByModel;
+	}
+
+	const client = requireSupabaseClient();
+	const responses: Array<{ id: number; model: string }> = [];
+	const runChunkSize = 100;
+	for (let index = 0; index < runIds.length; index += runChunkSize) {
+		const runIdChunk = runIds.slice(index, index + runChunkSize);
+		let offset = 0;
+		while (true) {
+			const result = await client
+				.from("benchmark_responses")
+				.select("id,model")
+				.in("run_id", runIdChunk)
+				.order("id", { ascending: true })
+				.range(offset, offset + SUPABASE_PAGE_SIZE - 1);
+
+			if (result.error) {
+				if (isMissingRelation(result.error)) return statsByModel;
+				throw asError(
+					result.error,
+					"Failed to load benchmark_responses for model mention stats",
+				);
+			}
+
+			const pageRows = (result.data ?? []) as Array<{
+				id: number;
+				model: string;
+			}>;
+			if (pageRows.length === 0) break;
+			responses.push(
+				...pageRows
+					.map((row) => ({ id: Number(row.id), model: String(row.model ?? "") }))
+					.filter((row) => Number.isFinite(row.id) && row.model.trim()),
+			);
+			offset += pageRows.length;
+		}
+	}
+
+	const mentionedResponseIds = new Set<number>();
+	const responseIds = responses.map((response) => response.id);
+	for (
+		let index = 0;
+		index < responseIds.length;
+		index += SUPABASE_IN_CLAUSE_CHUNK_SIZE
+	) {
+		const responseChunk = responseIds.slice(
+			index,
+			index + SUPABASE_IN_CLAUSE_CHUNK_SIZE,
+		);
+		let offset = 0;
+		while (true) {
+			const result = await client
+				.from("response_mentions")
+				.select("response_id")
+				.in("response_id", responseChunk)
+				.eq("competitor_id", highchartsCompetitorId)
+				.eq("mentioned", true)
+				.range(offset, offset + SUPABASE_PAGE_SIZE - 1);
+
+			if (result.error) {
+				if (isMissingRelation(result.error)) return statsByModel;
+				throw asError(
+					result.error,
+					"Failed to load response_mentions for model mention stats",
+				);
+			}
+
+			const pageRows = (result.data ?? []) as Array<{ response_id: number }>;
+			if (pageRows.length === 0) break;
+			for (const row of pageRows) {
+				mentionedResponseIds.add(Number(row.response_id));
+			}
+			offset += pageRows.length;
+		}
+	}
+
+	return buildModelMentionStatsFromResponses(responses, mentionedResponseIds);
 }
 
 async function fetchHistoricalRunsByQueryIds(
@@ -4316,6 +4524,10 @@ async function fetchDashboardFromSupabaseTablesForServer(
 		is_primary: boolean;
 		sort_order: number;
 	}>;
+	const highchartsCompetitor =
+		competitorRows.find((row) => row.is_primary) ??
+		competitorRows.find((row) => row.slug === "highcharts") ??
+		null;
 
 	const runResult = await fetchAllSupabasePages<{
 		id: string;
@@ -4536,6 +4748,7 @@ async function fetchDashboardFromSupabaseTablesForServer(
 	}
 
 	const activeCompetitorIds = new Set(competitorRows.map((row) => row.id));
+	const highchartsMentionedResponseIds = new Set<number>();
 	const mentionsByResponse = new Map<number, Set<string>>();
 	const mentionsByCompetitorId = new Map<string, number>();
 	const mentionsByQueryAndCompetitor = new Map<string, number>();
@@ -4547,6 +4760,9 @@ async function fetchDashboardFromSupabaseTablesForServer(
 
 		const response = responseById.get(mention.response_id);
 		if (!response) continue;
+		if (mention.competitor_id === highchartsCompetitor?.id) {
+			highchartsMentionedResponseIds.add(mention.response_id);
+		}
 
 		const responseMentions =
 			mentionsByResponse.get(mention.response_id) ?? new Set<string>();
@@ -4585,10 +4801,6 @@ async function fetchDashboardFromSupabaseTablesForServer(
 		};
 	});
 
-	const highchartsCompetitor =
-		competitorRows.find((row) => row.is_primary) ??
-		competitorRows.find((row) => row.slug === "highcharts") ??
-		null;
 	const highchartsMentionsCount = highchartsCompetitor
 		? (mentionsByCompetitorId.get(highchartsCompetitor.id) ?? 0)
 		: 0;
@@ -4764,6 +4976,16 @@ async function fetchDashboardFromSupabaseTablesForServer(
 	const responseRows = responses as Array<Record<string, unknown>>;
 	const ownerSummary = buildModelOwnerSummaryFromRows(responseRows);
 	const modelStatsSummary = buildModelStatsFromRows(responseRows);
+	const modelStats = attachModelMentionStats(
+		modelStatsSummary.modelStats,
+		buildModelMentionStatsFromResponses(
+			responses.map((response) => ({
+				id: response.id,
+				model: response.model,
+			})),
+			highchartsMentionedResponseIds,
+		),
+	);
 	const models =
 		selectedModels.size > 0
 			? [...selectedModels].sort((left, right) => left.localeCompare(right))
@@ -4805,7 +5027,7 @@ async function fetchDashboardFromSupabaseTablesForServer(
 			modelOwners: ownerSummary.modelOwners,
 			modelOwnerMap: ownerSummary.modelOwnerMap,
 			modelOwnerStats: ownerSummary.modelOwnerStats,
-			modelStats: modelStatsSummary.modelStats,
+			modelStats,
 			tokenTotals: modelStatsSummary.tokenTotals,
 			durationTotals: modelStatsSummary.durationTotals,
 			runMonth: latestSelectedRun.run_month,
@@ -4911,13 +5133,22 @@ async function fetchDashboardFromSupabaseViewsForServer(
 	}
 
 	const runIds = selectedRuns.map((run) => run.run_id);
-	const [mentionRows, modelRows, historicalRunsByQuery] = await Promise.all([
-		fetchMentionRateRowsByRunIds(runIds),
-		fetchModelPerformanceRowsByRunIds(runIds),
-		fetchHistoricalRunsByQueryIds(promptRows.map((row) => row.id)),
-	]);
+	const [mentionRows, modelRows, historicalRunsByQuery, modelMentionStats] =
+		await Promise.all([
+			fetchMentionRateRowsByRunIds(runIds),
+			fetchModelPerformanceRowsByRunIds(runIds),
+			fetchHistoricalRunsByQueryIds(promptRows.map((row) => row.id)),
+			fetchHighchartsMentionStatsByModelForServer(
+				runIds,
+				highchartsCompetitor?.id ?? null,
+			),
+		]);
 
 	const modelSummary = buildModelSummaryFromViewRows(modelRows);
+	const modelStats = attachModelMentionStats(
+		modelSummary.modelStats,
+		modelMentionStats,
+	);
 	const aggregatedModels = new Set<string>();
 	for (const run of selectedRuns) {
 		for (const model of resolveRunModels(run)) {
@@ -4951,10 +5182,6 @@ async function fetchDashboardFromSupabaseViewsForServer(
 						a.localeCompare(b),
 					);
 
-	const highchartsCompetitor =
-		competitorRows.find((row) => row.is_primary) ??
-		competitorRows.find((row) => row.slug === "highcharts") ??
-		null;
 	const nonHighchartsCompetitors = competitorRows.filter(
 		(row) => row.id !== highchartsCompetitor?.id,
 	);
@@ -5312,7 +5539,7 @@ async function fetchDashboardFromSupabaseViewsForServer(
 			modelOwners,
 			modelOwnerMap,
 			modelOwnerStats: modelSummary.modelOwnerStats,
-			modelStats: modelSummary.modelStats,
+			modelStats,
 			tokenTotals: summaryTokenTotals,
 			durationTotals: summaryDurationTotals,
 			runMonth: latestRun.run_month,
